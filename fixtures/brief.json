@@ -1,0 +1,84 @@
+{
+  "_comment": "Demo AI brief. Same schema as data/brief/current.json, but with both modes present; the adapter picks by local hour (morning before BRIEF_EVENING_HOUR).",
+  "anchor_date": "2026-09-04",
+  "morning": {
+    "mode": "morning",
+    "generated_at": "2026-09-04T06:30:00",
+    "headline": "Two hard deadlines today, storms from 15:00",
+    "note": "Vendor quote is one day overdue. Answer it before the 11:00 design sync.",
+    "sections": [
+      {
+        "title": "Today's schedule",
+        "items": [
+          "09:30 standup, 11:00 design sync",
+          "14:00 1:1 with Nan",
+          "16:30 client demo - Siam Piwat"
+        ]
+      },
+      {
+        "title": "Key tasks",
+        "items": [
+          "Finish Q3 OKR review deck",
+          "Answer K. Somchai on the vendor quote",
+          "Review PR 482 auth refactor"
+        ]
+      },
+      {
+        "title": "Suggested focus",
+        "items": [
+          "09:45 to 11:00 deep work on the OKR deck",
+          "Keep the hour before the demo free for rehearsal"
+        ]
+      },
+      {
+        "title": "At risk",
+        "items": [
+          "Vendor quote overdue since yesterday",
+          "Demo rehearsal collides with the 15:00 storm commute window"
+        ]
+      },
+      {
+        "title": "Unfinished from yesterday",
+        "items": ["Sprint retro notes were drafted but not shared"]
+      }
+    ]
+  },
+  "evening": {
+    "mode": "evening",
+    "generated_at": "2026-09-04T18:45:00",
+    "headline": "Deck done, vendor quote still open",
+    "note": "Answer the vendor quote first thing tomorrow; it is now two days late.",
+    "sections": [
+      {
+        "title": "Completed",
+        "items": [
+          "Q3 OKR review deck finished and shared",
+          "Client demo delivered, follow-up notes sent",
+          "PR 482 reviewed and approved"
+        ]
+      },
+      {
+        "title": "Still open",
+        "items": [
+          "Vendor quote answer to K. Somchai",
+          "August expense claim"
+        ]
+      },
+      {
+        "title": "Changed today",
+        "items": [
+          "Sprint planning moved to Monday 09:30",
+          "Offsite flight confirmed, DMK Terminal 1"
+        ]
+      },
+      {
+        "title": "Tomorrow",
+        "items": [
+          "Answer the vendor quote before standup",
+          "Prepare work permit documents for HR",
+          "Condo fire drill at 18:00"
+        ]
+      }
+    ]
+  }
+}

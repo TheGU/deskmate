@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block style %}
+.agenda { flex: 1 1 auto; display: grid; grid-template-columns: 1fr 4px 1fr; grid-template-rows: repeat(4, 1fr); min-height: 0; }
+.vrule { grid-row: 1 / span 4; background: #000000; }
+.cell { padding: 6px 16px 4px 18px; border-bottom: 3px solid #000000; min-width: 0; overflow: hidden; }
+.cell-right { padding-left: 18px; }
+.cell-last { border-bottom: none; }
+
+.cell-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 3px; line-height: 1.1; }
+.cell-day { font-size: 19px; font-weight: 900; letter-spacing: 0.08em; }
+.cell-date { font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
+
+.line { display: flex; align-items: baseline; gap: 9px; margin-bottom: 1px; line-height: 1.15; }
+.line-when { flex: 0 0 78px; font-size: 18px; font-weight: 900; }
+.line-title { flex: 1 1 auto; font-size: 18px; font-weight: 700; min-width: 0; }
+.line-due { flex: 0 0 78px; font-size: 18px; font-weight: 900; letter-spacing: 0.04em; }
+.cell-empty { font-size: 18px; font-weight: 700; line-height: 1.15; }
+
+.overdue-title { font-size: 19px; font-weight: 900; letter-spacing: 0.08em; margin-bottom: 3px; }
+.overdue-line { font-size: 18px; font-weight: 700; margin-bottom: 1px; display: flex; gap: 8px; line-height: 1.15; }
+.overdue-line .mark { flex: 0 0 14px; font-weight: 900; }
+{% endblock %}
+
+{% block header_right %}
+  <div class="sub">UPDATED {{ updated_label }}</div>
+{% endblock %}
+
+{% block content %}
+<div class="agenda">
+  {% for day in days[:4] %}
+  <div class="cell {% if loop.last %}cell-last{% endif %}" style="grid-column: 1; grid-row: {{ loop.index }};">
+    <div class="cell-head">
+      <span class="cell-day">{{ day.label }}</span>
+      <span class="cell-date">{{ day.date_label }}</span>
+    </div>
+    {% for event in day.events[:2] %}
+    <div class="line">
+      <div class="line-when t-blue">{{ event.when }}</div>
+      <div class="line-title clip">{{ event.title }}</div>
+    </div>
+    {% endfor %}
+    {% for task in day.due[:1] %}
+    <div class="line">
+      <div class="line-due">DUE</div>
+      <div class="line-title clip">{{ task.title }}</div>
+    </div>
+    {% endfor %}
+    {% if day.empty %}
+    <div class="cell-empty">Nothing scheduled</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div class="vrule" style="grid-column: 2;"></div>
+
+  {% for day in days[4:7] %}
+  <div class="cell cell-right" style="grid-column: 3; grid-row: {{ loop.index }};">
+    <div class="cell-head">
+      <span class="cell-day">{{ day.label }}</span>
+      <span class="cell-date">{{ day.date_label }}</span>
+    </div>
+    {% for event in day.events[:2] %}
+    <div class="line">
+      <div class="line-when t-blue">{{ event.when }}</div>
+      <div class="line-title clip">{{ event.title }}</div>
+    </div>
+    {% endfor %}
+    {% for task in day.due[:1] %}
+    <div class="line">
+      <div class="line-due">DUE</div>
+      <div class="line-title clip">{{ task.title }}</div>
+    </div>
+    {% endfor %}
+    {% if day.empty %}
+    <div class="cell-empty">Nothing scheduled</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div class="cell cell-right cell-last" style="grid-column: 3; grid-row: 4;">
+    <div class="overdue-title">{% if overdue %}<span class="chip chip-red">OVERDUE</span>{% else %}<span class="chip chip-green">NOTHING OVERDUE</span>{% endif %}</div>
+    {% for task in overdue[:2] %}
+    <div class="overdue-line">
+      <div class="mark t-red">!</div>
+      <div class="line-title clip">{{ task.title }}</div>
+    </div>
+    {% endfor %}
+    {% if calendar_note or tasks_note %}
+    <div class="cell-empty">{{ calendar_note }} {{ tasks_note }}</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

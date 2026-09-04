@@ -1,0 +1,70 @@
+{
+  "_comment": "Demo tasks. Dates are shifted by (today - anchor_date) days when FIXTURE_RELATIVE_DATES is on, so the demo always looks current.",
+  "anchor_date": "2026-09-04",
+  "tasks": [
+    {
+      "id": "fix-task-1",
+      "title": "Finish Q3 OKR review deck for Monday",
+      "due": "2026-09-04",
+      "priority": "high",
+      "completed": false,
+      "tags": ["work", "deck"]
+    },
+    {
+      "id": "fix-task-2",
+      "title": "Send vendor quote answer to K. Somchai",
+      "due": "2026-09-03",
+      "priority": "high",
+      "completed": false,
+      "tags": ["work"]
+    },
+    {
+      "id": "fix-task-3",
+      "title": "Review PR 482 auth refactor",
+      "due": "2026-09-05",
+      "priority": "high",
+      "completed": false,
+      "tags": ["code"]
+    },
+    {
+      "id": "fix-task-4",
+      "title": "Submit August expense claim (BTS and Grab)",
+      "due": "2026-09-07",
+      "priority": "medium",
+      "completed": false,
+      "tags": ["admin"]
+    },
+    {
+      "id": "fix-task-5",
+      "title": "Renew work permit documents at HR",
+      "due": "2026-09-09",
+      "priority": "medium",
+      "completed": false,
+      "tags": ["admin"]
+    },
+    {
+      "id": "fix-task-6",
+      "title": "Back up NAS photo library to cold storage",
+      "due": "2026-09-10",
+      "priority": "low",
+      "completed": false,
+      "tags": ["home"]
+    },
+    {
+      "id": "fix-task-7",
+      "title": "Book dentist appointment near Asok",
+      "due": null,
+      "priority": "low",
+      "completed": false,
+      "tags": ["home"]
+    },
+    {
+      "id": "fix-task-8",
+      "title": "Draft sprint retro notes",
+      "due": "2026-09-03",
+      "priority": "medium",
+      "completed": true,
+      "tags": ["work"]
+    }
+  ]
+}

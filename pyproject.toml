@@ -1,0 +1,12 @@
+[project]
+name = "deskmate-tools"
+version = "0.1.0"
+description = "Hardware tooling (esptool) for the reTerminal E1002 desk dashboard. The server lives in dashboard/, ESPHome in firmware/."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "esptool>=5.4.0",
+]
+
+[tool.uv]
+package = false

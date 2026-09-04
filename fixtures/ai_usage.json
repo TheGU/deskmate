@@ -1,0 +1,24 @@
+{
+  "_comment": "Demo AI quota. Same schema as data/ai-usage.json (see docs/DATA-SOURCES.md). Reset timestamps shift by (today - anchor_date) days.",
+  "anchor_date": "2026-09-04",
+  "providers": [
+    {
+      "provider": "Claude",
+      "short_window_percent_remaining": 72,
+      "short_window_reset_at": "2026-09-04T13:00:00",
+      "weekly_percent_remaining": 48,
+      "weekly_reset_at": "2026-09-08T09:00:00",
+      "collected_at": "2026-09-04T08:35:00",
+      "collection_status": "ok"
+    },
+    {
+      "provider": "Codex",
+      "short_window_percent_remaining": 91,
+      "short_window_reset_at": "2026-09-04T12:20:00",
+      "weekly_percent_remaining": null,
+      "weekly_reset_at": null,
+      "collected_at": "2026-09-04T08:35:00",
+      "collection_status": "ok"
+    }
+  ]
+}

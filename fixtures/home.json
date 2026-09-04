@@ -1,0 +1,22 @@
+{
+  "_comment": "Demo home and infrastructure status. Same shape as the normalized HomeState model.",
+  "anchor_date": "2026-09-04",
+  "home": {
+    "sensors": [
+      { "key": "front_door", "name": "Front door", "value": "Closed", "unit": null, "severity": "ok" },
+      { "key": "doorbell", "name": "Doorbell", "value": "Idle", "unit": null, "severity": "ok" },
+      { "key": "motion", "name": "Motion", "value": "Clear 41m", "unit": null, "severity": "ok" },
+      { "key": "room_temperature", "name": "Room temp", "value": "27.8", "unit": "C", "severity": "ok" },
+      { "key": "room_humidity", "name": "Room humidity", "value": "64", "unit": "%", "severity": "warn" }
+    ],
+    "services": [
+      { "key": "internet", "name": "Internet", "health": "ok", "detail": "AIS fibre, 18 ms" },
+      { "key": "home_assistant", "name": "Home Assistant", "health": "ok", "detail": "2026.8.3" },
+      { "key": "nas", "name": "NAS", "health": "warn", "detail": "Volume 1 at 88 percent" },
+      { "key": "proxmox", "name": "Proxmox", "health": "ok", "detail": "3 of 3 nodes up" },
+      { "key": "backup", "name": "Backup", "health": "ok", "detail": "Last run 03:12, 0 errors" },
+      { "key": "assistant", "name": "Local assistant", "health": "ok", "detail": "Ollama, 2 models loaded" },
+      { "key": "assistant_last_run", "name": "Last assistant run", "health": "ok", "detail": "06:30, brief written" }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+# Firmware dumps: contain NVS / Wi-Fi credentials. Never commit.
+private-backups/
+
+# Secrets
+firmware/secrets.yaml
+.env
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ESPHome build artifacts
+firmware/.esphome/
+
+# Generated images
+output/
+
+# ESPHome venv
+firmware/.venv/
+
+firmware/run-compile.ps1
+
+# Local logs
+*.log

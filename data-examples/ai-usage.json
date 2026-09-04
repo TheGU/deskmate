@@ -1,0 +1,22 @@
+{
+  "providers": [
+    {
+      "provider": "Claude",
+      "short_window_percent_remaining": 72,
+      "short_window_reset_at": "2026-09-04T13:00:00+07:00",
+      "weekly_percent_remaining": 48,
+      "weekly_reset_at": "2026-09-08T09:00:00+07:00",
+      "collected_at": "2026-09-04T08:35:00+07:00",
+      "collection_status": "ok"
+    },
+    {
+      "provider": "Codex",
+      "short_window_percent_remaining": null,
+      "short_window_reset_at": null,
+      "weekly_percent_remaining": null,
+      "weekly_reset_at": null,
+      "collected_at": "2026-09-04T08:35:00+07:00",
+      "collection_status": "unknown"
+    }
+  ]
+}

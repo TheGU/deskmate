@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block style %}
+.sys-left  { flex: 0 0 348px; width: 348px; border-right: 4px solid #000000; padding: 14px 18px 8px 22px; min-width: 0; }
+.sys-right { flex: 1 1 auto; padding: 14px 22px 8px 18px; min-width: 0; }
+
+.sensor { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.sensor-name { flex: 1 1 auto; font-size: 20px; font-weight: 700; letter-spacing: 0.04em; min-width: 0; }
+.sensor-value { flex: 0 0 auto; }
+
+.service { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+.service-mark { flex: 0 0 auto; min-width: 74px; }
+.service-body { flex: 1 1 auto; min-width: 0; }
+.service-name { font-size: 19px; font-weight: 900; letter-spacing: 0.04em; line-height: 1.15; }
+.service-detail { font-size: 18px; font-weight: 700; line-height: 1.15; }
+.sys-none { font-size: 22px; font-weight: 900; }
+{% endblock %}
+
+{% block header_right %}
+  <div class="sub">UPDATED {{ updated_label }}</div>
+{% endblock %}
+
+{% block content %}
+<div class="sys-left">
+  <div class="section-title">HOME</div>
+  {% if sensors %}
+    {% for sensor in sensors %}
+    <div class="sensor">
+      <div class="sensor-name clip">{{ sensor.name }}</div>
+      <div class="sensor-value"><span class="chip chip-{{ sensor.accent }}">{{ sensor.value }}</span></div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="sys-none">{{ home_note or "unknown" }}</div>
+  {% endif %}
+</div>
+
+<div class="sys-right">
+  <div class="section-title">SYSTEM</div>
+  {% if services %}
+    {% for service in services %}
+    <div class="service">
+      <div class="service-mark"><span class="chip chip-{{ service.accent }}">{{ service.mark }}</span></div>
+      <div class="service-body">
+        <div class="service-name clip">{{ service.name }}</div>
+        <div class="service-detail clip">{{ service.detail }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="sys-none">{{ home_note or "unknown" }}</div>
+  {% endif %}
+</div>
+{% endblock %}

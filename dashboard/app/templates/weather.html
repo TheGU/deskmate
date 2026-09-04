@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block style %}
+.wx { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+
+.wx-top { display: flex; flex: 0 0 156px; min-height: 0; }
+.wx-now { flex: 0 0 356px; padding: 12px 18px 8px 22px; border-right: 4px solid #000000; }
+.wx-temp { font-size: 96px; font-weight: 900; line-height: 0.92; letter-spacing: -0.02em; }
+.wx-unit { font-size: 34px; font-weight: 900; vertical-align: super; }
+.wx-feels { font-size: 22px; font-weight: 700; letter-spacing: 0.02em; margin-top: 4px; }
+.wx-cond { font-size: 20px; font-weight: 900; letter-spacing: 0.06em; margin-top: 4px; }
+
+.wx-rain { flex: 1 1 auto; padding: 12px 22px 8px 20px; }
+.wx-rain-value { font-size: 74px; font-weight: 900; line-height: 0.95; }
+.wx-rain-when { font-size: 24px; font-weight: 900; letter-spacing: 0.04em; margin-top: 6px; }
+.wx-hilo { font-size: 21px; font-weight: 700; margin-top: 8px; letter-spacing: 0.02em; }
+
+.wx-metrics { flex: 0 0 108px; display: flex; border-top: 4px solid #000000; border-bottom: 4px solid #000000; }
+.metric { flex: 1 1 0; padding: 10px 12px 6px 16px; border-right: 3px solid #000000; min-width: 0; }
+.metric:last-child { border-right: none; }
+.metric-label { font-size: 17px; font-weight: 900; letter-spacing: 0.06em; }
+.metric-value { font-size: 44px; font-weight: 900; line-height: 1.05; margin-top: 2px; }
+.metric-mark { display: inline-block; width: 100%; height: 8px; margin-top: 4px; }
+
+.wx-days { flex: 1 1 auto; display: flex; min-height: 0; }
+.wx-day { flex: 1 1 0; padding: 10px 10px 6px 14px; border-right: 3px solid #000000; min-width: 0; }
+.wx-day:last-child { border-right: none; }
+.wx-day-label { font-size: 19px; font-weight: 900; letter-spacing: 0.04em; }
+.wx-day-date { font-size: 17px; font-weight: 700; letter-spacing: 0.04em; }
+.wx-day-temp { font-size: 30px; font-weight: 900; line-height: 1.1; margin-top: 1px; }
+.wx-day-low { font-size: 19px; font-weight: 700; }
+.wx-day-rain { font-size: 19px; font-weight: 900; margin-top: 2px; }
+
+.wx-none { padding: 40px 22px; font-size: 28px; font-weight: 900; letter-spacing: 0.04em; }
+{% endblock %}
+
+{% block header_right %}
+  <div class="sub">{{ location|upper }} &middot; UPDATED {{ updated_label }}</div>
+{% endblock %}
+
+{% block content %}
+<div class="wx">
+{% if weather %}
+  <div class="wx-top">
+    <div class="wx-now">
+      <div class="wx-temp">{{ temp }}<span class="wx-unit">C</span></div>
+      <div class="wx-feels">FEELS LIKE {{ feels }} C</div>
+      <div class="wx-cond">{{ condition }}</div>
+    </div>
+    <div class="wx-rain">
+      <div class="wx-rain-value {% if rain_accent == 'blue' %}t-blue{% endif %}">{{ rain_probability }}</div>
+      <div class="wx-rain-when">RAIN {{ rain_timing }}</div>
+      <div class="wx-hilo">HIGH {{ high }} C &nbsp; LOW {{ low }} C</div>
+    </div>
+  </div>
+
+  <div class="wx-metrics">
+    {% for metric in metrics %}
+    <div class="metric">
+      <div class="metric-label">{{ metric.label }}</div>
+      <div class="metric-value">{{ metric.value }}</div>
+      <div class="metric-mark bar-{{ metric.accent }}"></div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="wx-days">
+    {% for day in daily %}
+    <div class="wx-day">
+      <div class="wx-day-label clip">{{ day.label }}</div>
+      <div class="wx-day-date">{{ day.date_label }}</div>
+      <div class="wx-day-temp">{{ day.high }}</div>
+      <div class="wx-day-low">LOW {{ day.low }}</div>
+      <div class="wx-day-rain {% if day.accent == 'blue' %}t-blue{% endif %}">{{ day.rain }}</div>
+    </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="wx-none">Weather {{ weather_note or "unavailable" }}</div>
+{% endif %}
+</div>
+{% endblock %}

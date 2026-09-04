@@ -1,0 +1,31 @@
+{
+  "mode": "morning",
+  "generated_at": "2026-09-04T06:30:00+07:00",
+  "headline": "Two hard deadlines today, storms from 15:00",
+  "note": "Vendor quote is one day overdue. Answer it before the 11:00 design sync.",
+  "sections": [
+    {
+      "title": "Today's schedule",
+      "items": [
+        "09:30 standup, 11:00 design sync",
+        "14:00 1:1 with Nan",
+        "16:30 client demo"
+      ]
+    },
+    {
+      "title": "Key tasks",
+      "items": [
+        "Finish Q3 OKR review deck",
+        "Answer K. Somchai on the vendor quote"
+      ]
+    },
+    {
+      "title": "Suggested focus",
+      "items": ["09:45 to 11:00 deep work on the deck"]
+    },
+    {
+      "title": "At risk",
+      "items": ["Vendor quote overdue since yesterday"]
+    }
+  ]
+}
