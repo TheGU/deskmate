@@ -51,6 +51,9 @@ psram:
 
 logger:
   level: INFO
+  # The E1002 exposes UART0 through its CH340 bridge. ESPHome's ESP32-S3
+  # default (USB_SERIAL_JTAG) would send logs to a port that is not wired.
+  hardware_uart: UART0
 
 api:
   encryption:
