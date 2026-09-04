@@ -166,10 +166,14 @@ image:
             lambda: "return !cached || id(force_display_update);"
           then:
             - lambda: "id(force_display_update) = false;"
-            - logger.log: "Image changed, refreshing panel"
-            - component.update: epaper_display
+            - logger.log:
+                level: INFO
+                format: "Image changed, queueing panel refresh"
+            - script.execute: refresh_panel
           else:
-            - logger.log: "Image unchanged (304), panel refresh skipped"
+            - logger.log:
+                level: INFO
+                format: "Image unchanged (304), panel refresh skipped"
     on_error:
       - lambda: "id(force_display_update) = false;"
       - logger.log:
@@ -187,6 +191,24 @@ display:
       it.image(0, 0, id(dashboard_image));
 
 script:
+  # The epaper_spi driver drops update() unless its state machine is IDLE,
+  # and a full Spectra 6 cycle (refresh, power off, deep sleep) takes 30 to
+  # 40 s. Component::is_idle() is true exactly when that machine is IDLE
+  # (the driver disables its loop in IDLE and re-enables it on update), so
+  # wait for it instead of losing the refresh. mode: restart means a newer
+  # image simply replaces a still-queued refresh.
+  - id: refresh_panel
+    mode: restart
+    then:
+      - wait_until:
+          condition:
+            lambda: "return id(epaper_display)->is_idle();"
+          timeout: 120s
+      - logger.log:
+          level: INFO
+          format: "Panel idle, refreshing"
+      - component.update: epaper_display
+
   # Request the PNG for the current page. bust_cache adds a query string so
   # the hub re-renders instead of serving its cache. force_display makes the
   # panel refresh even when the hub answers 304.
@@ -454,7 +476,7 @@ text_sensor:
       int idx = id(page_index);
       if (idx < 0 || idx >= ${page_count}) idx = 0;
       return std::string(PAGES[idx]);
-    update_interval: 10s
+    update_interval: 60s
 
 button:
   - platform: restart
