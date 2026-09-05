@@ -237,6 +237,9 @@ class DeviceTelemetry(BaseModel):
     usb_present: bool | None = None
     #: Charger state, one of :data:`ChargeState`. ``None`` on older firmware.
     charge_state: ChargeState | None = None
+    #: Why the device woke up, e.g. "power_on", "timer", "button_left". Free
+    #: string (no enum), ``None`` on older firmware.
+    wake_cause: str | None = Field(default=None, max_length=32)
 
 
 class DeviceSample(DeviceTelemetry):
@@ -273,6 +276,7 @@ class DeviceState(BaseModel):
     battery_mode: bool | None = None
     usb_present: bool | None = None
     charge_state: ChargeState | None = None
+    wake_cause: str | None = None
 
     sample_count: int = 0
     oldest_at: datetime | None = None

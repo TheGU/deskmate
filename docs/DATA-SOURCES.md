@@ -321,6 +321,7 @@ Content-Type: application/json
 | `battery_mode` | bool or null | Whether the gauge is running on battery. Optional; older firmware never sends it. |
 | `usb_present` | bool or null | Whether USB power is plugged in. Optional; older firmware never sends it. |
 | `charge_state` | string or null | One of `charging`, `charged`, `pre_charge`, `not_charging`, `unknown`. Optional; older firmware never sends it. |
+| `wake_cause` | string or null, up to 32 chars | Free string, e.g. `power_on`, `timer`, `button_left`, `button_right`, `button_green`, `button_unknown`, `other`. No fixed enum. Optional; older firmware never sends it. |
 
 The three power fields are all optional and default to null, so a payload from
 older firmware with none of them is still accepted. The DESK panel on the

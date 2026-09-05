@@ -118,6 +118,7 @@ def downsample(
                 battery_mode=chunk[-1].battery_mode,
                 usb_present=chunk[-1].usb_present,
                 charge_state=chunk[-1].charge_state,
+                wake_cause=chunk[-1].wake_cause,
             )
         )
     return reduced
@@ -161,6 +162,7 @@ def build_device_state(
         battery_mode=latest.battery_mode,
         usb_present=latest.usb_present,
         charge_state=latest.charge_state,
+        wake_cause=latest.wake_cause,
         sample_count=summary.sample_count,
         oldest_at=summary.oldest,
         newest_at=summary.newest,

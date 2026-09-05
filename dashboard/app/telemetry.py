@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS telemetry (
     page            TEXT,
     battery_mode    INTEGER,
     usb_present     INTEGER,
-    charge_state    TEXT
+    charge_state    TEXT,
+    wake_cause      TEXT
 );
 CREATE INDEX IF NOT EXISTS telemetry_received_at ON telemetry (received_at);
 """
@@ -55,6 +56,7 @@ _MIGRATION_COLUMNS: Final[tuple[tuple[str, str], ...]] = (
     ("battery_mode", "INTEGER"),
     ("usb_present", "INTEGER"),
     ("charge_state", "TEXT"),
+    ("wake_cause", "TEXT"),
 )
 
 _COLUMNS: Final[tuple[str, ...]] = (
@@ -70,6 +72,7 @@ _COLUMNS: Final[tuple[str, ...]] = (
     "battery_mode",
     "usb_present",
     "charge_state",
+    "wake_cause",
 )
 
 _INSERT_SQL: Final[str] = (
@@ -178,6 +181,7 @@ class TelemetryStore:
             telemetry.battery_mode,
             telemetry.usb_present,
             telemetry.charge_state,
+            telemetry.wake_cause,
         )
         with self._lock:
             self._connection.execute(_INSERT_SQL, row)

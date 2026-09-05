@@ -682,6 +682,24 @@ def test_post_telemetry_without_power_fields_is_still_accepted(device_client: Te
     assert latest["charge_state"] is None
 
 
+def test_post_telemetry_stores_and_returns_the_wake_cause(device_client: TestClient) -> None:
+    payload = dict(DEVICE_PAYLOAD, wake_cause="button_left")
+    response = device_client.post("/api/device/telemetry", json=payload)
+    assert response.status_code == 202
+
+    latest = device_client.get("/api/device/telemetry").json()["latest"]
+    assert latest["wake_cause"] == "button_left"
+
+
+def test_post_telemetry_without_wake_cause_is_still_accepted(device_client: TestClient) -> None:
+    """Older firmware that never sends ``wake_cause`` still posts fine."""
+    response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD)
+    assert response.status_code == 202
+
+    latest = device_client.get("/api/device/telemetry").json()["latest"]
+    assert latest["wake_cause"] is None
+
+
 def test_post_telemetry_rejects_an_unrecognized_charge_state(device_client: TestClient) -> None:
     payload = dict(DEVICE_PAYLOAD, charge_state="fully_charged")
     response = device_client.post("/api/device/telemetry", json=payload)
