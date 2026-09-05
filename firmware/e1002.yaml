@@ -25,17 +25,38 @@ substitutions:
   auto_refresh_interval: 30min              # conditional request, 304 means no panel refresh
   alert_default_seconds: "90"
   telemetry_interval: 5min                  # POST sensors to the hub
+  # Battery mode: wake at these local hours (ascending), refresh, sleep.
+  wake_hours: "8, 12, 17"
+  battery_awake_grace: 45s                  # stay awake this long after the refresh
+  battery_awake_deadline: 150s              # sleep no matter what after this
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  includes:
+    - deskmate_sleep.h
+    - deskmate_charger.h
   on_boot:
+    - priority: 900           # before the gpio binary_sensors (HARDWARE = 800)
+      then:
+        - lambda: "deskmate::release_sleep_pads();"
     - priority: 600
       then:
         - output.turn_on: bsp_battery_enable
     - priority: -100          # after every component is set up
       then:
         - pcf85063.read_time: rtc_time
+        # Decide the power mode first: a battery wake that finds USB plugged
+        # in switches back to always-on before any sleep timer is armed.
+        - script.execute: check_power
+        - if:
+            condition:
+              lambda: "return id(battery_mode);"
+            then:
+              - logger.log:
+                  level: INFO
+                  format: "Battery mode: awake, will sleep after the refresh"
+              - script.execute: battery_deadline
 
 esp32:
   variant: esp32s3
@@ -90,22 +111,62 @@ api:
 ota:
   - platform: esphome
     password: !secret ota_password
+    on_begin:
+      - script.stop: sleep_timer
+      - script.stop: battery_deadline
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   power_save_mode: none            # USB powered, we want quick alerts
+  fast_connect: true               # skip the scan, matters on every battery wake
   on_connect:
     - script.execute:
         id: load_current_page
-        bust_cache: false
+        bust_cache: !lambda "return id(bust_cache_on_boot);"
         force_display: false
+    - lambda: "id(bust_cache_on_boot) = false;"
     - script.execute: report_telemetry
   ap:
     ssid: "reTerminal-E1002 Setup"
     password: !secret ap_password
 
 captive_portal:
+
+# Battery mode only. No run_duration or sleep_duration here: the device sleeps
+# only when the go_to_sleep script says so, and wakes on the timer or on any of
+# the three buttons (active low, ext1 ANY_LOW). The per-pin on_wake triggers
+# run before on_boot, so they can move page_index before the page is fetched.
+deep_sleep:
+  id: sleeper
+  esp32_ext1_wakeup:
+    mode: ANY_LOW
+    pins:
+      - pin:
+          number: GPIO5
+          allow_other_uses: true
+        on_wake:
+          - lambda: |-
+              id(wake_pin) = 5;
+              int count = ${page_count};
+              id(page_index) = ((id(page_index) - 1) % count + count) % count;
+      - pin:
+          number: GPIO4
+          allow_other_uses: true
+        on_wake:
+          - lambda: |-
+              id(wake_pin) = 4;
+              id(page_index) = (id(page_index) + 1) % ${page_count};
+      - pin:
+          number: GPIO3
+          allow_other_uses: true
+        on_wake:
+          - lambda: |-
+              id(wake_pin) = 3;
+              id(bust_cache_on_boot) = true;
+  on_wake:
+    - lambda: |-
+        ESP_LOGI("main", "Woke from deep sleep, cause=%d", (int) cause);
 
 time:
   - platform: sntp
@@ -116,12 +177,43 @@ time:
           id: rtc_time
   - platform: pcf85063
     id: rtc_time
+    i2c_id: main_bus
     address: 0x51
+    timezone: Asia/Bangkok
     # Read once at boot (on_boot above). Polling would overwrite the SNTP
     # epoch with the drifting RTC value every 15 minutes.
     update_interval: never
 
 globals:
+  - id: battery_mode
+    type: bool
+    restore_value: true
+    initial_value: "false"
+  - id: bust_cache_on_boot
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: next_sleep_seconds
+    type: uint32_t
+    restore_value: false
+    initial_value: "3600"
+  - id: wake_pin
+    type: int
+    restore_value: false
+    initial_value: "-1"
+  # Auto power mode: follow USB presence reported by the charger chip.
+  - id: power_auto
+    type: bool
+    restore_value: true
+    initial_value: "true"
+  - id: usb_present
+    type: bool
+    restore_value: false
+    initial_value: "true"
+  - id: charger_status
+    type: int
+    restore_value: false
+    initial_value: "-1"
   - id: current_url
     type: std::string
     restore_value: false
@@ -147,8 +239,14 @@ spi:
   mosi_pin: GPIO9
 
 i2c:
-  sda: GPIO19
-  scl: GPIO20
+  - id: main_bus
+    sda: GPIO19
+    scl: GPIO20
+  # Schematic labels GPIO39/40 as I2C1; the SY6974B charger is probed on both
+  # buses at address 0x6B and the one that answers is used.
+  - id: charger_bus
+    sda: GPIO39
+    scl: GPIO40
 
 http_request:
   timeout: 20s
@@ -176,6 +274,12 @@ image:
             - logger.log:
                 level: INFO
                 format: "Image unchanged (304), panel refresh skipped"
+            - script.execute: report_telemetry
+            - if:
+                condition:
+                  lambda: "return id(battery_mode);"
+                then:
+                  - script.execute: sleep_timer
     on_error:
       - lambda: "id(force_display_update) = false;"
       - logger.log:
@@ -183,6 +287,11 @@ image:
           format: "Image download failed, keeping current screen"
       - rtttl.stop
       - rtttl.play: "err:d=8,o=4,b=140:c"
+      - if:
+          condition:
+            lambda: "return id(battery_mode);"
+          then:
+            - script.execute: sleep_timer
 
 display:
   - platform: epaper_spi
@@ -210,6 +319,17 @@ script:
           level: INFO
           format: "Panel idle, refreshing"
       - component.update: epaper_display
+      - if:
+          condition:
+            lambda: "return id(battery_mode);"
+          then:
+            - delay: 500ms
+            - wait_until:
+                condition:
+                  lambda: "return id(epaper_display)->is_idle();"
+                timeout: 120s
+            - script.execute: report_telemetry
+            - script.execute: sleep_timer
 
   # Push onboard sensor readings to the hub. The hub stores them and draws
   # the desk panel and the 24 h climate chart; the device keeps no history.
@@ -243,6 +363,9 @@ script:
                   body += ",\"wifi_rssi\":" + num(id(wifi_rssi).state, 0);
                   body += ",\"uptime_s\":" + num(id(uptime_s).state, 0);
                   body += std::string(",\"page\":\"") + (id(alert_active) ? "alert" : PAGES[idx]) + "\"";
+                  body += std::string(",\"battery_mode\":") + (id(battery_mode) ? "true" : "false");
+                  body += std::string(",\"usb_present\":") + (id(usb_present) ? "true" : "false");
+                  body += std::string(",\"charge_state\":\"") + deskmate::charge_state_name(id(charger_status)) + "\"";
                   body += "}";
                   return body;
                 capture_response: false
@@ -250,6 +373,127 @@ script:
                   - logger.log:
                       level: WARN
                       format: "Telemetry POST failed"
+
+  # Read the charger status register and, in auto mode, follow USB presence.
+  - id: check_power
+    mode: single
+    then:
+      - lambda: |-
+          static deskmate::ChargerProbe probe_i2c1(id(charger_bus));
+          static deskmate::ChargerProbe probe_i2c0(id(main_bus));
+          int status = probe_i2c1.read_status();
+          if (status < 0) status = probe_i2c0.read_status();
+          bool usb = deskmate::usb_present(status);
+          if (status < 0) {
+            if (id(charger_status) != status)
+              ESP_LOGW("main", "Charger not answering on either I2C bus, assuming USB present");
+            usb = true;
+          } else if (status != id(charger_status) || usb != id(usb_present)) {
+            ESP_LOGI("main", "Charger status 0x%02x: USB %s, %s", status, usb ? "present" : "absent",
+                     deskmate::charge_state_name(status));
+          }
+          id(charger_status) = status;
+          id(usb_present) = usb;
+      - if:
+          condition:
+            lambda: "return id(power_auto) && !id(usb_present) && !id(battery_mode);"
+          then:
+            - logger.log:
+                level: INFO
+                format: "USB unplugged, switching to battery mode"
+            - script.execute:
+                id: set_battery_mode
+                enabled: true
+      - if:
+          condition:
+            lambda: "return id(power_auto) && id(usb_present) && id(battery_mode);"
+          then:
+            - logger.log:
+                level: INFO
+                format: "USB present, switching to always-on mode"
+            - script.execute:
+                id: set_battery_mode
+                enabled: false
+
+  - id: set_battery_mode
+    mode: restart
+    parameters:
+      enabled: bool
+    then:
+      - lambda: "id(battery_mode) = enabled;"
+      - rtttl.stop
+      - if:
+          condition:
+            lambda: "return enabled;"
+          then:
+            - logger.log:
+                level: INFO
+                format: "Battery mode ON"
+            - rtttl.play: "bat_on:d=16,o=6,b=200:g,e,c"
+            - script.execute: sleep_timer
+          else:
+            - logger.log:
+                level: INFO
+                format: "Battery mode OFF"
+            - rtttl.play: "bat_off:d=16,o=6,b=200:c,e,g"
+            - script.stop: sleep_timer
+            - script.stop: battery_deadline
+
+  # Battery mode. sleep_timer gives the user a grace window to press more
+  # buttons; battery_deadline is the safety net if Wi-Fi or the download
+  # never completes. go_to_sleep computes the time to the next slot.
+  - id: sleep_timer
+    mode: restart
+    then:
+      - delay: ${battery_awake_grace}
+      - script.execute: go_to_sleep
+
+  - id: battery_deadline
+    mode: single
+    then:
+      - delay: 25s
+      - if:
+          condition:
+            not:
+              wifi.connected:
+          then:
+            - logger.log:
+                level: WARN
+                format: "Battery mode: no Wi-Fi, sleeping early"
+            - script.execute: go_to_sleep
+      - delay: ${battery_awake_deadline}
+      - logger.log:
+          level: WARN
+          format: "Battery mode: deadline reached, sleeping"
+      - script.execute: go_to_sleep
+
+  - id: go_to_sleep
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: "return !id(battery_mode);"
+          then:
+            - logger.log: "Battery mode off, staying awake"
+          else:
+            # never cut a Spectra 6 cycle in half: the panel would stay powered
+            - wait_until:
+                condition:
+                  lambda: "return id(epaper_display)->is_idle();"
+                timeout: 60s
+            - lambda: |-
+                auto now = id(sntp_time).now();
+                uint32_t secs = 3600;
+                if (now.is_valid()) {
+                  int sod = now.hour * 3600 + now.minute * 60 + now.second;
+                  secs = deskmate::seconds_until_next_slot(sod, {${wake_hours}});
+                }
+                ESP_LOGI("main", "Battery mode: sleeping for %u s (time valid=%d)", (unsigned) secs, (int) now.is_valid());
+                id(next_sleep_seconds) = secs;
+                deskmate::prepare_sleep_pads();
+            - deep_sleep.enter:
+                id: sleeper
+                sleep_duration: !lambda "return id(next_sleep_seconds) * 1000;"
 
   # Request the PNG for the current page. bust_cache adds a query string so
   # the hub re-renders instead of serving its cache. force_display makes the
@@ -260,6 +504,12 @@ script:
       bust_cache: bool
       force_display: bool
     then:
+      # Any page load counts as activity for the battery grace window.
+      - if:
+          condition:
+            lambda: "return id(battery_mode);"
+          then:
+            - script.execute: sleep_timer
       # A second press must not be swallowed by an in-flight download:
       # OnlineImage::update() silently returns while decoding.
       - if:
@@ -335,6 +585,9 @@ script:
           force_display: true
 
 interval:
+  - interval: 10s
+    then:
+      - script.execute: check_power
   - interval: ${telemetry_interval}
     then:
       - script.execute: report_telemetry
@@ -359,20 +612,38 @@ binary_sensor:
       number: GPIO5
       mode: INPUT_PULLUP
       inverted: true
+      allow_other_uses: true
     filters:
       # The tact switches open briefly (under 100 ms) shortly after a press,
       # which made the release-edge click triggers fire while still held.
       - delayed_on: 50ms
       - delayed_off: 250ms
     on_press:
-      - if:
-          condition:
-            lambda: "return !id(alert_active);"
-          then:
-            - script.execute:
-                id: goto_page
-                page: !lambda "return id(page_index) - 1;"
-                bust_cache: false
+      - lambda: "id(wake_pin) = -1;"     # a real press: later clicks are genuine
+    on_click:
+      - min_length: 30ms
+        max_length: 800ms
+        then:
+          - if:
+              condition:
+                lambda: "return !deskmate::consume_wake_click(id(wake_pin), 5) && !id(alert_active);"
+              then:
+                - script.execute:
+                    id: goto_page
+                    page: !lambda "return id(page_index) - 1;"
+                    bust_cache: false
+      # long press: toggle battery mode (and pin it: auto mode off)
+      - min_length: 801ms
+        max_length: 60s
+        then:
+          - if:
+              condition:
+                lambda: "return !deskmate::consume_wake_click(id(wake_pin), 5);"
+              then:
+                - lambda: "id(power_auto) = false;"
+                - script.execute:
+                    id: set_battery_mode
+                    enabled: !lambda "return !id(battery_mode);"
 
   - platform: gpio
     id: button_right
@@ -381,12 +652,14 @@ binary_sensor:
       number: GPIO4
       mode: INPUT_PULLUP
       inverted: true
+      allow_other_uses: true
     filters:
       # The tact switches open briefly (under 100 ms) shortly after a press,
       # which made the release-edge click triggers fire while still held.
       - delayed_on: 50ms
       - delayed_off: 250ms
     on_press:
+      - lambda: "id(wake_pin) = -1;"
       - if:
           condition:
             lambda: "return !id(alert_active);"
@@ -403,11 +676,14 @@ binary_sensor:
       number: GPIO3
       mode: INPUT_PULLUP
       inverted: true
+      allow_other_uses: true
     filters:
       # The tact switches open briefly (under 100 ms) shortly after a press,
       # which made the release-edge click triggers fire while still held.
       - delayed_on: 50ms
       - delayed_off: 250ms
+    on_press:
+      - lambda: "id(wake_pin) = -1;"
     on_click:
       # short press: refresh current page with a fresh render
       # Filters shift the measured length by about +200 ms; ranges stay
@@ -415,38 +691,52 @@ binary_sensor:
       - min_length: 30ms
         max_length: 800ms
         then:
-          - rtttl.stop
-          - rtttl.play: "click:d=32,o=6,b=200:c"
           - if:
               condition:
-                lambda: "return id(alert_active);"
+                lambda: "return !deskmate::consume_wake_click(id(wake_pin), 3);"
               then:
-                # dismiss the alert early
-                - script.stop: show_alert
-                - lambda: |-
-                    id(alert_active) = false;
-                    id(page_index) = id(saved_page_index);
-                - script.execute:
-                    id: load_current_page
-                    bust_cache: false
-                    force_display: true
-              else:
-                - script.execute:
-                    id: load_current_page
-                    bust_cache: true
-                    force_display: true
+                - rtttl.stop
+                - rtttl.play: "click:d=32,o=6,b=200:c"
+                - if:
+                    condition:
+                      lambda: "return id(alert_active);"
+                    then:
+                      # dismiss the alert early
+                      - script.stop: show_alert
+                      - lambda: |-
+                          id(alert_active) = false;
+                          id(page_index) = id(saved_page_index);
+                      - script.execute:
+                          id: load_current_page
+                          bust_cache: false
+                          force_display: true
+                    else:
+                      - script.execute:
+                          id: load_current_page
+                          bust_cache: true
+                          force_display: true
       # long press: back to Today
       - min_length: 801ms
-        max_length: 60s     # default max is 350ms; any realistic hold still counts
+        max_length: 60s
         then:
-          - rtttl.stop
-          - rtttl.play: "home:d=16,o=6,b=200:c,e"
-          - script.stop: show_alert
-          - lambda: "id(alert_active) = false;"
-          - script.execute:
-              id: goto_page
-              page: 0
-              bust_cache: true
+          - if:
+              condition:
+                lambda: "return !deskmate::consume_wake_click(id(wake_pin), 3);"
+              then:
+                - rtttl.stop
+                - rtttl.play: "home:d=16,o=6,b=200:c,e"
+                - script.stop: show_alert
+                - lambda: "id(alert_active) = false;"
+                - script.execute:
+                    id: goto_page
+                    page: 0
+                    bust_cache: true
+
+  - platform: template
+    id: usb_power
+    name: "USB power"
+    device_class: plug
+    lambda: "return id(usb_present);"
 
 output:
   - platform: ledc
@@ -474,6 +764,7 @@ light:
 
 sensor:
   - platform: sht4x
+    i2c_id: main_bus
     temperature:
       name: "Temperature"
       id: temp_sensor
@@ -524,6 +815,21 @@ sensor:
 
 text_sensor:
   - platform: template
+    id: charge_state
+    name: "Charge state"
+    icon: "mdi:battery-charging"
+    lambda: "return std::string(deskmate::charge_state_name(id(charger_status)));"
+    update_interval: 60s
+  - platform: template
+    id: power_mode
+    name: "Power mode"
+    icon: "mdi:power-plug"
+    lambda: |-
+      std::string mode = id(battery_mode) ? "battery" : "always_on";
+      if (id(power_auto)) mode += " (auto)";
+      return mode;
+    update_interval: 60s
+  - platform: template
     id: current_page
     name: "Current page"
     lambda: |-
@@ -533,6 +839,33 @@ text_sensor:
       if (idx < 0 || idx >= ${page_count}) idx = 0;
       return std::string(PAGES[idx]);
     update_interval: 60s
+
+switch:
+  - platform: template
+    id: power_auto_switch
+    restore_mode: DISABLED   # the globals are the state; default ALWAYS_OFF would run turn_off at boot
+    name: "Auto power mode"
+    icon: "mdi:power-settings"
+    lambda: "return id(power_auto);"
+    turn_on_action:
+      - lambda: "id(power_auto) = true;"
+      - script.execute: check_power
+    turn_off_action:
+      - lambda: "id(power_auto) = false;"
+  - platform: template
+    id: battery_mode_switch
+    restore_mode: DISABLED   # the globals are the state; default ALWAYS_OFF would run turn_off at boot
+    name: "Battery mode"
+    icon: "mdi:battery-clock"
+    lambda: "return id(battery_mode);"
+    turn_on_action:
+      - script.execute:
+          id: set_battery_mode
+          enabled: true
+    turn_off_action:
+      - script.execute:
+          id: set_battery_mode
+          enabled: false
 
 button:
   - platform: restart
