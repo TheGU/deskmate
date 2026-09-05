@@ -24,6 +24,7 @@ substitutions:
   page_count: "5"                           # today agenda weather brief system
   auto_refresh_interval: 30min              # conditional request, 304 means no panel refresh
   alert_default_seconds: "90"
+  telemetry_interval: 5min                  # POST sensors to the hub
 
 esphome:
   name: ${name}
@@ -50,7 +51,7 @@ psram:
   ignore_not_found: false   # the 768 KB image buffer needs PSRAM; fail loudly
 
 logger:
-  level: INFO
+  level: DEBUG
   # The E1002 exposes UART0 through its CH340 bridge. ESPHome's ESP32-S3
   # default (USB_SERIAL_JTAG) would send logs to a port that is not wired.
   hardware_uart: UART0
@@ -99,6 +100,7 @@ wifi:
         id: load_current_page
         bust_cache: false
         force_display: false
+    - script.execute: report_telemetry
   ap:
     ssid: "reTerminal-E1002 Setup"
     password: !secret ap_password
@@ -209,6 +211,46 @@ script:
           format: "Panel idle, refreshing"
       - component.update: epaper_display
 
+  # Push onboard sensor readings to the hub. The hub stores them and draws
+  # the desk panel and the 24 h climate chart; the device keeps no history.
+  - id: report_telemetry
+    mode: single
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - http_request.post:
+                url: ${hub_base_url}/api/device/telemetry
+                request_headers:
+                  Content-Type: application/json
+                body: !lambda |-
+                  static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
+                  auto num = [](float v, int decimals) -> std::string {
+                    if (std::isnan(v)) return "null";
+                    char b[24];
+                    snprintf(b, sizeof(b), "%.*f", decimals, v);
+                    return b;
+                  };
+                  int idx = id(page_index);
+                  if (idx < 0 || idx >= ${page_count}) idx = 0;
+                  std::string body = "{";
+                  body += "\"device\":\"${name}\"";
+                  body += ",\"battery_voltage\":" + num(id(battery_voltage).state, 3);
+                  body += ",\"battery_level\":" + num(id(battery_level).state, 1);
+                  body += ",\"temperature\":" + num(id(temp_sensor).state, 2);
+                  body += ",\"humidity\":" + num(id(hum_sensor).state, 1);
+                  body += ",\"wifi_rssi\":" + num(id(wifi_rssi).state, 0);
+                  body += ",\"uptime_s\":" + num(id(uptime_s).state, 0);
+                  body += std::string(",\"page\":\"") + (id(alert_active) ? "alert" : PAGES[idx]) + "\"";
+                  body += "}";
+                  return body;
+                capture_response: false
+                on_error:
+                  - logger.log:
+                      level: WARN
+                      format: "Telemetry POST failed"
+
   # Request the PNG for the current page. bust_cache adds a query string so
   # the hub re-renders instead of serving its cache. force_display makes the
   # panel refresh even when the hub answers 304.
@@ -293,6 +335,9 @@ script:
           force_display: true
 
 interval:
+  - interval: ${telemetry_interval}
+    then:
+      - script.execute: report_telemetry
   - interval: ${auto_refresh_interval}
     then:
       - if:
@@ -315,7 +360,10 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     filters:
-      - delayed_on: 30ms
+      # The tact switches open briefly (under 100 ms) shortly after a press,
+      # which made the release-edge click triggers fire while still held.
+      - delayed_on: 50ms
+      - delayed_off: 250ms
     on_press:
       - if:
           condition:
@@ -334,7 +382,10 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     filters:
-      - delayed_on: 30ms
+      # The tact switches open briefly (under 100 ms) shortly after a press,
+      # which made the release-edge click triggers fire while still held.
+      - delayed_on: 50ms
+      - delayed_off: 250ms
     on_press:
       - if:
           condition:
@@ -353,13 +404,16 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     filters:
-      - delayed_on: 30ms
+      # The tact switches open briefly (under 100 ms) shortly after a press,
+      # which made the release-edge click triggers fire while still held.
+      - delayed_on: 50ms
+      - delayed_off: 250ms
     on_click:
       # short press: refresh current page with a fresh render
-      # delayed_on shifts measured length by -30ms; ranges stay contiguous
-      # so no press length is a dead zone.
+      # Filters shift the measured length by about +200 ms; ranges stay
+      # contiguous so no press length is a dead zone.
       - min_length: 30ms
-        max_length: 749ms
+        max_length: 800ms
         then:
           - rtttl.stop
           - rtttl.play: "click:d=32,o=6,b=200:c"
@@ -382,7 +436,7 @@ binary_sensor:
                     bust_cache: true
                     force_display: true
       # long press: back to Today
-      - min_length: 750ms
+      - min_length: 801ms
         max_length: 60s     # default max is 350ms; any realistic hold still counts
         then:
           - rtttl.stop
@@ -461,9 +515,11 @@ sensor:
           min_value: 0
           max_value: 100
   - platform: wifi_signal
+    id: wifi_rssi
     name: "WiFi signal"
     update_interval: 60s
   - platform: uptime
+    id: uptime_s
     name: "Uptime"
 
 text_sensor:
