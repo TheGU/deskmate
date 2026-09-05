@@ -47,6 +47,7 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | GET | `/display/{page}.png` | page in `today agenda weather brief system alert` |
 | GET | `/preview` | Browser page: switch between pages, shows PNG and HTML |
 | GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work in a browser |
+| GET | `/preview/{page}-rgb.png` | RGB stage before quantization, no cache, dev only |
 | POST | `/api/alert` | Set the current alert `{title, message, priority}` |
 | DELETE | `/api/alert` | Clear the current alert |
 
@@ -67,10 +68,15 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
    previous or empty value. The page still renders with an "unavailable"
    marker. Never fabricate data.
 2. `renderer/render.py` renders a Jinja2 template to HTML, screenshots it
-   with Playwright Chromium at exactly 800x480, device scale 1, then
-   `renderer/palette.py` quantizes to the six-color palette with
-   `Image.quantize(palette=..., dither=NONE)` and saves an 8-bit RGB,
-   non-interlaced PNG (ESPHome's PNG decoder needs non-interlaced).
+   with Playwright Chromium at 4x (3200x1920), downsamples with Lanczos to
+   800x480, then `renderer/palette.py` quantizes to the nearest of the six
+   panel colors with `Image.quantize(palette=..., dither=NONE)` and saves an
+   8-bit RGB, non-interlaced PNG (ESPHome's PNG decoder needs
+   non-interlaced). A panel test on 2026-09-05 found 4x plus Lanczos sharper
+   than rendering at 1x, and found dithering (Floyd-Steinberg, Atkinson,
+   Bayer 8x8, edge-only) spiky on e-paper and rejected it. The PNG must
+   already be six-ink: the ESPHome `epaper_spi` driver thresholds every
+   pixel itself and cannot show anti-aliasing.
 3. Determinism: bundled fonts only, no system fonts, no animations, no
    timestamps other than the state `updated_at`. `view.py` turns the state
    into a flat context and `icons.py` chooses every glyph, so the templates

@@ -10,7 +10,7 @@ colors, and serves it over the LAN. The device is a thin display client that
 downloads a PNG and shows it.
 
 ```
-Data sources -> dashboard-hub (FastAPI + Jinja2 + Chromium + Pillow)
+Data sources -> dashboard-hub (FastAPI + Jinja2 + Chromium at 4x + Lanczos + Pillow)
              -> 800x480 six-color PNG over HTTP -> reTerminal E1002 (ESPHome)
 ```
 
@@ -37,8 +37,9 @@ uv run python ../scripts/render-all.py
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Then open <http://127.0.0.1:8080/preview> to flip through the pages, with the
-device PNG on the left and the raw HTML on the right.
+Then open <http://127.0.0.1:8080/preview> to flip through the pages: the
+simulated panel, the RGB stage before quantization, and the raw HTML, left to
+right.
 
 Tests:
 
@@ -71,6 +72,7 @@ The compose service mounts `./data` read-write (files other agents write),
 | GET | `/display/{page}.png` | 800x480 PNG, `ETag` + `304`, `?t=` busts the cache |
 | GET | `/preview` | Developer page for switching between pages |
 | GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work |
+| GET | `/preview/{page}-rgb.png` | RGB stage before quantization, not cached |
 | POST | `/api/alert` | Set the current alert |
 | DELETE | `/api/alert` | Clear it |
 | POST | `/api/device/telemetry` | Device pushes one sample every 5 min, `202` |

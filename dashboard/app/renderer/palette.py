@@ -2,7 +2,9 @@
 
 The panel shows white, black, red, yellow, green and blue. The server and the
 ESPHome driver agree on pure primaries (docs/ARCHITECTURE.md), so the mapping
-is exact and no dithering is needed - dithering only produces noise on e-paper.
+is exact and no dithering is needed. Dithering was tried on the panel on
+2026-09-05 (Floyd-Steinberg, Atkinson, Bayer 8x8 and an edge-only variant) and
+rejected by the owner as spiky; the hard snap stays.
 """
 
 from __future__ import annotations

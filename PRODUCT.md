@@ -70,9 +70,10 @@ no logic and no credentials on the device.
 Confirmed:
 
 - Pages: today, agenda, weather, brief, system, alert. Rendered by Jinja2 and
-  headless Chromium, then quantized by Pillow to the six panel colors with no
-  dithering. Every image is exactly 800x480 and tests enforce size, PNG
-  validity and palette.
+  headless Chromium at 4x, downsampled, then quantized by Pillow to the six
+  panel colors with no dithering (dithering was tested on the panel on
+  2026-09-05 and rejected). Every image is exactly 800x480 and tests enforce
+  size, PNG validity and palette.
 - Rendering is deterministic: bundled fonts only, no network at render time, no
   clock that changes every minute (a small "Updated HH:MM" instead).
 - No partial refresh, no animation, no gradients, shadows, grays or tiny text.

@@ -31,6 +31,13 @@ logger = logging.getLogger("app.render")
 
 PAGES: Final[tuple[str, ...]] = ("today", "agenda", "weather", "brief", "system", "alert")
 
+#: Chromium renders at this multiple of the panel resolution before the
+#: Lanczos downsample and the six-ink snap. Curves land closer to their true
+#: shape after the six-ink snap when rendered at 4x than at 1x; a panel test
+#: on 2026-09-05 preferred 4x, and dithering was rejected on the same test
+#: (see renderer/palette.py).
+SUPERSAMPLE: Final[int] = 4
+
 #: Per-page render cache lifetime, matching the refresh cadence in the proposal.
 PAGE_TTL_SECONDS: Final[dict[str, float]] = {
     "today": 1800.0,
@@ -164,15 +171,23 @@ class Renderer:
             finally:
                 await context.close()
 
-    # -- png -------------------------------------------------------------
-    async def render_png(self, page: str, state: DashboardState) -> bytes:
+    # -- rgb ---------------------------------------------------------------
+    async def render_rgb(self, page: str, state: DashboardState) -> Image.Image:
+        """The 800x480 RGB stage, before the six-ink snap.
+
+        Chromium renders at ``SUPERSAMPLE`` times the panel resolution
+        (device pixel ratio, not the viewport, so the CSS layout and the
+        screenshot clip stay in panel-pixel units) and the result is
+        downsampled with Lanczos. Curves and diagonals land closer to their
+        true shape once the six-ink snap runs on a downsampled image than on
+        a 1x screenshot.
+        """
         html = self.render_html(page, state, embed_fonts=True)
-        started = time.monotonic()
         async with self._lock:
             browser = await self._ensure_browser()
             context = await browser.new_context(
                 viewport={"width": DISPLAY_SIZE[0], "height": DISPLAY_SIZE[1]},
-                device_scale_factor=1,
+                device_scale_factor=SUPERSAMPLE,
                 color_scheme="light",
                 reduced_motion="reduce",
                 forced_colors="none",
@@ -199,8 +214,22 @@ class Renderer:
 
         image = Image.open(io.BytesIO(raw))
         image.load()
-        if image.size != DISPLAY_SIZE:
-            image = image.convert("RGB").resize(DISPLAY_SIZE, Image.NEAREST)
+        expected_size = (DISPLAY_SIZE[0] * SUPERSAMPLE, DISPLAY_SIZE[1] * SUPERSAMPLE)
+        if image.size != expected_size:
+            log(
+                logger,
+                logging.WARNING,
+                "screenshot size did not match supersample",
+                page=page,
+                expected=expected_size,
+                actual=image.size,
+            )
+        return image.convert("RGB").resize(DISPLAY_SIZE, Image.LANCZOS)
+
+    # -- png -------------------------------------------------------------
+    async def render_png(self, page: str, state: DashboardState) -> bytes:
+        started = time.monotonic()
+        image = await self.render_rgb(page, state)
         payload = to_png_bytes(quantize(image))
         log(
             logger,
@@ -209,5 +238,6 @@ class Renderer:
             page=page,
             bytes=len(payload),
             ms=round((time.monotonic() - started) * 1000),
+            scale=SUPERSAMPLE,
         )
         return payload

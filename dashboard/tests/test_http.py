@@ -112,6 +112,18 @@ def test_preview_html_rejects_an_unknown_page(client: TestClient) -> None:
     assert client.get("/preview/nope.html").status_code == 404
 
 
+def test_preview_rgb_returns_a_png_of_the_right_size(client: TestClient) -> None:
+    response = client.get("/preview/today-rgb.png")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "no-store"
+    assert open_png(response.content).size == DISPLAY_SIZE
+
+
+def test_preview_rgb_rejects_an_unknown_page(client: TestClient) -> None:
+    assert client.get("/preview/nope-rgb.png").status_code == 404
+
+
 def test_root_redirects_to_preview(client: TestClient) -> None:
     response = client.get("/", follow_redirects=False)
     assert response.status_code in (307, 308)

@@ -38,6 +38,14 @@ def test_page_is_palette_constrained(rendered: dict[str, bytes], page: str) -> N
     assert_palette(image)
 
 
+def test_render_rgb_is_800x480_and_pre_quantization(renderer: Renderer, state: DashboardState) -> None:
+    """The RGB stage is downsampled to panel size but not yet snapped to six inks."""
+    image = run(renderer.render_rgb("today", state))
+    assert image.mode == "RGB"
+    assert image.size == DISPLAY_SIZE
+    assert len(image.getcolors(maxcolors=1 << 24) or []) > len(PALETTE_RGB)
+
+
 @pytest.mark.parametrize("page", PAGES)
 def test_page_uses_at_least_one_panel_color(rendered: dict[str, bytes], page: str) -> None:
     """The world commits to color: a page that is only black on white is a bug.

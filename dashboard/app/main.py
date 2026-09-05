@@ -7,6 +7,7 @@ Endpoints follow docs/ARCHITECTURE.md::
     GET    /display/{page}.png
     GET    /preview
     GET    /preview/{page}.html
+    GET    /preview/{page}-rgb.png
     POST   /api/alert
     DELETE /api/alert
     POST   /api/device/telemetry
@@ -38,6 +39,7 @@ from app.alerts import AlertStore
 from app.config import Settings, get_settings
 from app.logging_setup import configure_logging, log
 from app.models import AlertRequest, DashboardState, DeviceSample, DeviceTelemetry
+from app.renderer.palette import to_png_bytes
 from app.renderer.render import PAGE_TTL_SECONDS, PAGES, Renderer
 from app.state import StateService, state_fingerprint
 from app.telemetry import TelemetrySummary, get_telemetry_store, utc_now
@@ -356,6 +358,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         state = await hub.state(force="t" in request.query_params)
         html = hub.renderer.render_html(page, state, embed_fonts=False)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/preview/{page}-rgb.png")
+    async def preview_rgb(page: str, request: Request) -> Response:
+        """The RGB stage before quantization, for the developer preview.
+
+        Not cached: it exists to let a developer see what the six-ink snap
+        removes, not to serve the panel.
+        """
+        hub: Hub = app.state.hub
+        if page not in PAGES:
+            return JSONResponse({"error": f"unknown page {page}"}, status_code=404)
+        state = await hub.state(force="t" in request.query_params)
+        image = await hub.renderer.render_rgb(page, state)
+        payload = to_png_bytes(image)
+        return Response(
+            content=payload,
+            media_type="image/png",
+            headers={"Cache-Control": "no-store"},
+        )
 
     return app
 
