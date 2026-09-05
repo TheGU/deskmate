@@ -301,7 +301,10 @@ Content-Type: application/json
   "humidity": 54.4,
   "wifi_rssi": -28,
   "uptime_s": 425,
-  "page": "brief"
+  "page": "brief",
+  "battery_mode": false,
+  "usb_present": true,
+  "charge_state": "charged"
 }
 ```
 
@@ -315,6 +318,17 @@ Content-Type: application/json
 | `wifi_rssi` | float or null | dBm, negative. |
 | `uptime_s` | float or null | Seconds since boot. |
 | `page` | string or null, up to 32 chars | Page the device is showing. |
+| `battery_mode` | bool or null | Whether the gauge is running on battery. Optional; older firmware never sends it. |
+| `usb_present` | bool or null | Whether USB power is plugged in. Optional; older firmware never sends it. |
+| `charge_state` | string or null | One of `charging`, `charged`, `pre_charge`, `not_charging`, `unknown`. Optional; older firmware never sends it. |
+
+The three power fields are all optional and default to null, so a payload from
+older firmware with none of them is still accepted. The DESK panel on the
+System page turns them into one power label next to WIFI: "ON USB, CHARGING"
+when `usb_present` is true and `charge_state` is `charging`, "ON USB, CHARGED"
+when `charge_state` is `charged`, "ON BATTERY" when `usb_present` is false, and
+nothing at all for any other combination (including a payload that never sent
+the fields).
 
 Every numeric field may be `null`: on a cold boot the sensors are not ready
 yet, and the firmware reports the hole rather than a made up reading. A hole is

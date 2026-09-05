@@ -470,6 +470,23 @@ def wifi_accent(rssi: float | None) -> str:
     return "red"
 
 
+def power_label(usb_present: bool | None, charge_state: str | None) -> tuple[str | None, str | None]:
+    """Label and chip accent for the DESK power row.
+
+    Only the three states the device firmware can actually distinguish are
+    named; anything else (older firmware that never sends the fields, or a
+    charge state the gauge itself calls "unknown") prints nothing rather than
+    guessing.
+    """
+    if usb_present is False:
+        return "ON BATTERY", "yellow"
+    if usb_present is True and charge_state == "charging":
+        return "ON USB, CHARGING", "green"
+    if usb_present is True and charge_state == "charged":
+        return "ON USB, CHARGED", "green"
+    return None, None
+
+
 def age_label(age_seconds: float | None) -> str:
     if age_seconds is None:
         return UNKNOWN.upper()
@@ -495,11 +512,14 @@ def device_panel(state: DashboardState, settings: Settings) -> dict[str, Any]:
             "chart": build_chart([], state.timezone, note=NO_DEVICE_DATA),
         }
     level = device.battery_level
+    power_text, power_accent = power_label(device.usb_present, device.charge_state)
     return {
         "available": True,
         "name": (device.device or UNKNOWN).upper(),
         "temperature": fmt_number(device.temperature, digits=1),
         "humidity": fmt_number(device.humidity, digits=0, suffix="%"),
+        "power_label": power_text,
+        "power_accent": power_accent,
         "battery_percent": fmt_number(level, digits=0, suffix="%"),
         # Clamped only for the bar width; the printed number stays as reported.
         "battery_fill": 0 if level is None else int(max(0.0, min(100.0, level))),

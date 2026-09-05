@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import Iterator
@@ -33,7 +34,7 @@ from app.models import (
     DeviceTelemetry,
 )
 from app.renderer.chart import build_chart
-from app.view import device_panel, system_context
+from app.view import device_panel, power_label, system_context
 from app.telemetry import (
     TelemetryStore,
     TelemetrySummary,
@@ -54,6 +55,11 @@ DEVICE_PAYLOAD: dict[str, object] = {
     "uptime_s": 425,
     "page": "brief",
 }
+
+#: The same payload once the firmware also reports power state.
+DEVICE_PAYLOAD_WITH_POWER: dict[str, object] = dict(
+    DEVICE_PAYLOAD, battery_mode=False, usb_present=True, charge_state="charging"
+)
 
 
 def sample(minutes_ago: float, temperature: float | None, humidity: float | None) -> DeviceSample:
@@ -77,6 +83,7 @@ def store(tmp_path: Path) -> Iterator[TelemetryStore]:
 def device_settings(tmp_path: Path) -> Settings:
     """A hub whose telemetry database starts out empty."""
     return Settings(
+        _env_file=None,
         TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
@@ -104,6 +111,77 @@ def test_insert_stores_every_field(store: TelemetryStore) -> None:
     assert latest.page == "brief"
     assert latest.received_at == received_at
     assert store.summary().sample_count == 1
+
+
+def test_insert_stores_the_power_fields(store: TelemetryStore) -> None:
+    telemetry = DeviceTelemetry.model_validate(DEVICE_PAYLOAD_WITH_POWER)
+    store.insert(telemetry)
+    latest = store.latest()
+    assert latest is not None
+    assert latest.battery_mode is False
+    assert latest.usb_present is True
+    assert latest.charge_state == "charging"
+
+
+def test_insert_accepts_missing_power_fields(store: TelemetryStore) -> None:
+    """Older firmware that never sends the three power fields still stores fine."""
+    telemetry = DeviceTelemetry.model_validate(DEVICE_PAYLOAD)
+    store.insert(telemetry)
+    latest = store.latest()
+    assert latest is not None
+    assert latest.battery_mode is None
+    assert latest.usb_present is None
+    assert latest.charge_state is None
+
+
+def test_store_migrates_a_database_from_before_the_power_fields(tmp_path: Path) -> None:
+    """A database file written by an older build has no ``battery_mode`` /
+    ``usb_present`` / ``charge_state`` columns. Opening it must add them
+    without losing the row that is already there, and a sample with the new
+    fields must round-trip alongside the old one."""
+    path = tmp_path / "pre-power.sqlite"
+    raw = sqlite3.connect(str(path))
+    raw.execute(
+        """
+        CREATE TABLE telemetry (
+            received_at     TEXT NOT NULL,
+            device          TEXT NOT NULL,
+            battery_voltage REAL,
+            battery_level   REAL,
+            temperature     REAL,
+            humidity        REAL,
+            wifi_rssi       REAL,
+            uptime_s        REAL,
+            page            TEXT
+        )
+        """
+    )
+    raw.execute("CREATE INDEX telemetry_received_at ON telemetry (received_at)")
+    raw.execute(
+        "INSERT INTO telemetry (received_at, device, temperature) VALUES (?, ?, ?)",
+        ("2026-09-04T00:00:00.000+00:00", "reterminal-e1002", 30.0),
+    )
+    raw.commit()
+    raw.close()
+
+    store = TelemetryStore(path, retention_days=30)
+    try:
+        store.insert(
+            DeviceTelemetry.model_validate(DEVICE_PAYLOAD_WITH_POWER),
+            received_at=datetime(2026, 9, 5, 0, 0, tzinfo=dt_timezone.utc),
+        )
+        rows = store.history(24 * 365)
+        assert len(rows) == 2
+        old_row, new_row = rows
+        assert old_row.temperature == pytest.approx(30.0)
+        assert old_row.battery_mode is None
+        assert old_row.usb_present is None
+        assert old_row.charge_state is None
+        assert new_row.battery_mode is False
+        assert new_row.usb_present is True
+        assert new_row.charge_state == "charging"
+    finally:
+        store.close()
 
 
 def test_insert_accepts_null_numeric_fields(store: TelemetryStore) -> None:
@@ -458,6 +536,96 @@ def test_device_panel_formats_battery_and_wifi(device_settings: Settings) -> Non
     assert panel["humidity"] == "--"
 
 
+def test_power_label_maps_the_three_named_states() -> None:
+    assert power_label(True, "charging") == ("ON USB, CHARGING", "green")
+    assert power_label(True, "charged") == ("ON USB, CHARGED", "green")
+    assert power_label(False, "charging") == ("ON BATTERY", "yellow")
+    assert power_label(False, None) == ("ON BATTERY", "yellow")
+
+
+def test_power_label_is_nothing_when_it_cannot_be_determined() -> None:
+    # Older firmware never sends usb_present at all.
+    assert power_label(None, None) == (None, None)
+    # usb_present true but the gauge itself doesn't know the charge state.
+    assert power_label(True, "unknown") == (None, None)
+    assert power_label(True, "pre_charge") == (None, None)
+    assert power_label(True, "not_charging") == (None, None)
+    assert power_label(True, None) == (None, None)
+
+
+def _device_state_with_power(
+    usb_present: bool | None, charge_state: str | None, *, now: datetime
+) -> DeviceSample:
+    return DeviceSample(
+        received_at=now,
+        device="reterminal-e1002",
+        temperature=30.0,
+        humidity=50.0,
+        usb_present=usb_present,
+        charge_state=charge_state,
+    )
+
+
+def test_device_panel_shows_the_power_label_on_usb(device_settings: Settings) -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    latest = _device_state_with_power(True, "charging", now=now)
+    state = _state_with(
+        DeviceBlock(
+            status=AdapterStatus.OK,
+            source="store",
+            device=build_device_state(
+                latest=latest,
+                history=[latest],
+                summary=TelemetrySummary(sample_count=1, oldest=now, newest=now),
+                now=now,
+            ),
+        )
+    )
+    panel = device_panel(state, device_settings)
+    assert panel["power_label"] == "ON USB, CHARGING"
+    assert panel["power_accent"] == "green"
+
+
+def test_device_panel_shows_the_power_label_on_battery(device_settings: Settings) -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    latest = _device_state_with_power(False, "not_charging", now=now)
+    state = _state_with(
+        DeviceBlock(
+            status=AdapterStatus.OK,
+            source="store",
+            device=build_device_state(
+                latest=latest,
+                history=[latest],
+                summary=TelemetrySummary(sample_count=1, oldest=now, newest=now),
+                now=now,
+            ),
+        )
+    )
+    panel = device_panel(state, device_settings)
+    assert panel["power_label"] == "ON BATTERY"
+    assert panel["power_accent"] == "yellow"
+
+
+def test_device_panel_hides_the_power_label_when_unreported(device_settings: Settings) -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    latest = _device_state_with_power(None, None, now=now)
+    state = _state_with(
+        DeviceBlock(
+            status=AdapterStatus.OK,
+            source="store",
+            device=build_device_state(
+                latest=latest,
+                history=[latest],
+                summary=TelemetrySummary(sample_count=1, oldest=now, newest=now),
+                now=now,
+            ),
+        )
+    )
+    panel = device_panel(state, device_settings)
+    assert panel["power_label"] is None
+    assert panel["power_accent"] is None
+
+
 def test_system_page_drops_the_home_room_rows(settings: Settings, state: DashboardState) -> None:
     """The DESK panel owns temperature and humidity now."""
     context = system_context(state, settings)
@@ -491,6 +659,34 @@ def test_post_telemetry_is_accepted_and_stored(device_client: TestClient) -> Non
     assert latest["latest"]["page"] == "brief"
     assert latest["summary"]["sample_count"] == 1
     assert latest["summary"]["retention_days"] == 30
+
+
+def test_post_telemetry_stores_and_returns_the_power_fields(device_client: TestClient) -> None:
+    response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD_WITH_POWER)
+    assert response.status_code == 202
+
+    latest = device_client.get("/api/device/telemetry").json()["latest"]
+    assert latest["battery_mode"] is False
+    assert latest["usb_present"] is True
+    assert latest["charge_state"] == "charging"
+
+
+def test_post_telemetry_without_power_fields_is_still_accepted(device_client: TestClient) -> None:
+    """The exact payload today's firmware sends, with no power fields at all."""
+    response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD)
+    assert response.status_code == 202
+
+    latest = device_client.get("/api/device/telemetry").json()["latest"]
+    assert latest["battery_mode"] is None
+    assert latest["usb_present"] is None
+    assert latest["charge_state"] is None
+
+
+def test_post_telemetry_rejects_an_unrecognized_charge_state(device_client: TestClient) -> None:
+    payload = dict(DEVICE_PAYLOAD, charge_state="fully_charged")
+    response = device_client.post("/api/device/telemetry", json=payload)
+    assert response.status_code == 400
+    assert response.json()["accepted"] is False
 
 
 def test_post_telemetry_accepts_null_numeric_fields(device_client: TestClient) -> None:

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone as dt_timezone
 
 import pytest
 from PIL import Image
 
-from app.models import AdapterStatus, DashboardState, DeviceBlock
+from app.adapters.device import build_device_state
+from app.models import AdapterStatus, DashboardState, DeviceBlock, DeviceSample
 from app.renderer.palette import DISPLAY_SIZE, PALETTE_RGB, assert_palette, palette_violations
 from app.renderer.render import PAGES, Renderer
+from app.telemetry import TelemetrySummary
 from tests.conftest import open_png, run
 
 
@@ -77,6 +80,67 @@ def test_system_page_without_device_data_is_still_clean(
     assert image.size == DISPLAY_SIZE
     assert palette_violations(image) == set()
     assert_palette(image)
+
+
+def _device_block_with_power(usb_present: bool | None, charge_state: str | None) -> DeviceBlock:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    latest = DeviceSample(
+        received_at=now,
+        device="reterminal-e1002",
+        temperature=30.0,
+        humidity=50.0,
+        usb_present=usb_present,
+        charge_state=charge_state,
+    )
+    return DeviceBlock(
+        status=AdapterStatus.OK,
+        source="store",
+        device=build_device_state(
+            latest=latest,
+            history=[latest],
+            summary=TelemetrySummary(sample_count=1, oldest=now, newest=now),
+            now=now,
+        ),
+    )
+
+
+def test_system_page_shows_power_on_usb_and_stays_palette_clean(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    charging = state.model_copy(
+        update={"device": _device_block_with_power(True, "charging")}
+    )
+    html = renderer.render_html("system", charging, embed_fonts=False)
+    assert "ON USB, CHARGING" in html
+
+    image = open_png(run(renderer.render_png("system", charging)))
+    assert image.size == DISPLAY_SIZE
+    assert palette_violations(image) == set()
+    assert_palette(image)
+
+
+def test_system_page_shows_power_on_battery_and_stays_palette_clean(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    on_battery = state.model_copy(
+        update={"device": _device_block_with_power(False, "not_charging")}
+    )
+    html = renderer.render_html("system", on_battery, embed_fonts=False)
+    assert "ON BATTERY" in html
+
+    image = open_png(run(renderer.render_png("system", on_battery)))
+    assert image.size == DISPLAY_SIZE
+    assert palette_violations(image) == set()
+    assert_palette(image)
+
+
+def test_system_page_hides_power_row_when_unreported(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    unreported = state.model_copy(update={"device": _device_block_with_power(None, None)})
+    html = renderer.render_html("system", unreported, embed_fonts=False)
+    assert "ON USB" not in html
+    assert "ON BATTERY" not in html
 
 
 def test_pages_cover_the_documented_set() -> None:

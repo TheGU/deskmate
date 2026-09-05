@@ -5,23 +5,23 @@
 .sys-right { flex: 1 1 auto; padding: 12px 22px 8px 16px; min-width: 0; overflow: hidden; }
 
 /* --- DESK panel ------------------------------------------------------- */
-.desk-hero { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 8px; }
+.desk-hero { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 5px; }
 .desk-temp { font-size: 74px; font-weight: 900; line-height: 0.92; letter-spacing: -0.02em; }
 .desk-unit { font-size: 30px; font-weight: 900; letter-spacing: 0.02em; padding-left: 4px; }
 .desk-aside { padding-bottom: 6px; }
 .desk-label { font-size: 15px; font-weight: 900; letter-spacing: 0.10em; }
 .desk-humidity { font-size: 34px; font-weight: 900; line-height: 1.0; }
 
-.desk-meter { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.desk-meter { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
 .desk-meter-label { flex: 0 0 46px; font-size: 15px; font-weight: 900; letter-spacing: 0.08em; }
 .desk-bar { flex: 1 1 auto; height: 22px; border: 3px solid #000000; background: #FFFFFF; min-width: 0; }
 .desk-bar-fill { height: 16px; }
 .desk-meter-value { flex: 0 0 auto; font-size: 22px; font-weight: 900; letter-spacing: 0.02em; }
 
-.desk-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.desk-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .desk-row-value { flex: 1 1 auto; font-size: 22px; font-weight: 900; letter-spacing: 0.02em; min-width: 0; }
 
-.desk-chart-title { font-size: 15px; font-weight: 900; letter-spacing: 0.10em; margin-bottom: 2px; }
+.desk-chart-title { font-size: 15px; font-weight: 900; letter-spacing: 0.10em; margin-bottom: 1px; }
 .desk-chart { display: block; background: #FFFFFF; }
 .desk-empty { font-size: 26px; font-weight: 900; letter-spacing: 0.04em; margin-top: 14px; }
 .desk-empty-note { font-size: 18px; font-weight: 700; letter-spacing: 0.02em; margin-top: 8px; }
@@ -72,6 +72,12 @@
       <div class="desk-row-value">{{ device.wifi }}</div>
       <span class="chip chip-{{ device.status_accent }}">{{ device.status_label }}</span>
     </div>
+    {% if device.power_label %}
+    <div class="desk-row">
+      <div class="desk-meter-label">PWR</div>
+      <span class="chip chip-{{ device.power_accent }}">{{ device.power_label }}</span>
+    </div>
+    {% endif %}
     <div class="desk-chart-title">24H TEMPERATURE AND HUMIDITY</div>
     {% set chart = device.chart %}
     {% if chart.has_data %}

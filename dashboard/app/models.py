@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -79,6 +80,10 @@ class DeviceStatus(str, Enum):
 DEVICE_INTERVAL_SECONDS: int = 300
 #: Three missed reports in a row mean the sample on screen is stale.
 DEVICE_STALE_AFTER_SECONDS: int = 3 * DEVICE_INTERVAL_SECONDS
+
+#: Charge state as reported by the battery gauge. Unrecognized strings are
+#: rejected rather than stored, same as every other telemetry field.
+ChargeState = Literal["charging", "charged", "pre_charge", "not_charging", "unknown"]
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +231,12 @@ class DeviceTelemetry(BaseModel):
     wifi_rssi: float | None = None
     uptime_s: float | None = None
     page: str | None = Field(default=None, max_length=32)
+    #: Whether the gauge is in "on battery" mode. ``None`` on older firmware.
+    battery_mode: bool | None = None
+    #: Whether USB power is plugged in. ``None`` on older firmware.
+    usb_present: bool | None = None
+    #: Charger state, one of :data:`ChargeState`. ``None`` on older firmware.
+    charge_state: ChargeState | None = None
 
 
 class DeviceSample(DeviceTelemetry):
@@ -259,6 +270,9 @@ class DeviceState(BaseModel):
     wifi_rssi: float | None = None
     uptime_s: float | None = None
     page: str | None = None
+    battery_mode: bool | None = None
+    usb_present: bool | None = None
+    charge_state: ChargeState | None = None
 
     sample_count: int = 0
     oldest_at: datetime | None = None

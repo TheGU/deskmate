@@ -40,10 +40,22 @@ CREATE TABLE IF NOT EXISTS telemetry (
     humidity        REAL,
     wifi_rssi       REAL,
     uptime_s        REAL,
-    page            TEXT
+    page            TEXT,
+    battery_mode    INTEGER,
+    usb_present     INTEGER,
+    charge_state    TEXT
 );
 CREATE INDEX IF NOT EXISTS telemetry_received_at ON telemetry (received_at);
 """
+
+#: Columns added after the table first shipped. ``open()`` adds whichever of
+#: these a pre-existing database file is still missing, so an old install can
+#: be started against a new build without a manual migration step.
+_MIGRATION_COLUMNS: Final[tuple[tuple[str, str], ...]] = (
+    ("battery_mode", "INTEGER"),
+    ("usb_present", "INTEGER"),
+    ("charge_state", "TEXT"),
+)
 
 _COLUMNS: Final[tuple[str, ...]] = (
     "received_at",
@@ -55,6 +67,9 @@ _COLUMNS: Final[tuple[str, ...]] = (
     "wifi_rssi",
     "uptime_s",
     "page",
+    "battery_mode",
+    "usb_present",
+    "charge_state",
 )
 
 _INSERT_SQL: Final[str] = (
@@ -105,6 +120,7 @@ class TelemetryStore:
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._connection.execute("PRAGMA synchronous=NORMAL")
             self._connection.executescript(SCHEMA)
+            self._migrate_locked()
             self._connection.commit()
         log(
             logger,
@@ -113,6 +129,24 @@ class TelemetryStore:
             path=str(path),
             retention_days=self._retention_days,
         )
+
+    def _migrate_locked(self) -> None:
+        """Add any column from ``_MIGRATION_COLUMNS`` a pre-existing file lacks.
+
+        Caller holds ``self._lock``. ``CREATE TABLE IF NOT EXISTS`` only
+        matters for a brand-new file; a database opened from an older build
+        already has the ``telemetry`` table without these columns, so they
+        have to be added with ``ALTER TABLE`` instead.
+        """
+        existing = {
+            str(row["name"]) for row in self._connection.execute("PRAGMA table_info(telemetry)")
+        }
+        for name, column_type in _MIGRATION_COLUMNS:
+            if name not in existing:
+                self._connection.execute(
+                    f"ALTER TABLE telemetry ADD COLUMN {name} {column_type}"
+                )
+                log(logger, logging.INFO, "telemetry column added", column=name)
 
     @property
     def path(self) -> Path:
@@ -141,6 +175,9 @@ class TelemetryStore:
             telemetry.wifi_rssi,
             telemetry.uptime_s,
             telemetry.page,
+            telemetry.battery_mode,
+            telemetry.usb_present,
+            telemetry.charge_state,
         )
         with self._lock:
             self._connection.execute(_INSERT_SQL, row)

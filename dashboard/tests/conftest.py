@@ -50,7 +50,9 @@ def session_loop() -> Iterator[asyncio.AbstractEventLoop]:
 @pytest.fixture(scope="session")
 def settings(tmp_path_factory: pytest.TempPathFactory) -> Settings:
     data_dir: Path = tmp_path_factory.mktemp("data")
+    # _env_file=None keeps a developer's .env out of the test run.
     return Settings(
+        _env_file=None,
         TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,

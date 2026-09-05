@@ -115,6 +115,9 @@ def downsample(
                 wifi_rssi=_mean([s.wifi_rssi for s in chunk if s.wifi_rssi is not None]),
                 uptime_s=_mean([s.uptime_s for s in chunk if s.uptime_s is not None]),
                 page=chunk[-1].page,
+                battery_mode=chunk[-1].battery_mode,
+                usb_present=chunk[-1].usb_present,
+                charge_state=chunk[-1].charge_state,
             )
         )
     return reduced
@@ -155,6 +158,9 @@ def build_device_state(
         wifi_rssi=latest.wifi_rssi,
         uptime_s=latest.uptime_s,
         page=latest.page,
+        battery_mode=latest.battery_mode,
+        usb_present=latest.usb_present,
+        charge_state=latest.charge_state,
         sample_count=summary.sample_count,
         oldest_at=summary.oldest,
         newest_at=summary.newest,
@@ -200,6 +206,11 @@ def load_device_fixture(path: Path, *, now: datetime) -> list[DeviceSample]:
                 wifi_rssi=entry.get("wifi_rssi"),
                 uptime_s=entry.get("uptime_s"),
                 page=entry.get("page"),
+                # The demo device is always shown plugged in and topped off;
+                # entries may still override any of the three explicitly.
+                battery_mode=entry.get("battery_mode", False),
+                usb_present=entry.get("usb_present", True),
+                charge_state=entry.get("charge_state", "charged"),
             )
         )
     samples.sort(key=lambda item: item.received_at)
