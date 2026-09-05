@@ -31,6 +31,7 @@ curl -s http://127.0.0.1:8080/api/state
 | ai_usage | `fixture`, `file` | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
 | ai_brief | `fixture`, `file` | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`), `BRIEF_EVENING_HOUR` |
 | home_assistant | `fixture`, `rest` | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` |
+| device | `store`, `fixture` | `DEVICE_SOURCE`, `TELEMETRY_DB_PATH`, `TELEMETRY_RETENTION_DAYS` |
 
 Global: `TIMEZONE` (default `Asia/Bangkok`), `UNITS` (`metric`),
 `FIXTURES_DIR`, `DATA_DIR`, `FIXTURE_RELATIVE_DATES`.
@@ -271,6 +272,112 @@ Slots you leave out are not drawn. Slots that name an entity Home Assistant does
 not return are drawn as `unknown`. `binary_sensor.*` entities are labelled from
 their `device_class` (door/window/opening/lock give Open / Closed,
 motion/occupancy/presence give Detected / Clear).
+
+---
+
+## Device telemetry: the E1002 pushes, the hub stores
+
+This is the only adapter whose data flows the other way: the reTerminal E1002
+POSTs one sample every 5 minutes and the hub appends it to a local SQLite file.
+There is no polling, no device credential and nothing to configure but paths.
+
+```sh
+DEVICE_SOURCE=store
+#TELEMETRY_DB_PATH=/data/telemetry.sqlite
+TELEMETRY_RETENTION_DAYS=30
+```
+
+### Payload
+
+```http
+POST /api/device/telemetry
+Content-Type: application/json
+
+{
+  "device": "reterminal-e1002",
+  "battery_voltage": 4.056,
+  "battery_level": 92.6,
+  "temperature": 32.80,
+  "humidity": 54.4,
+  "wifi_rssi": -28,
+  "uptime_s": 425,
+  "page": "brief"
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `device` | string, 1 to 64 chars | Required. The ESPHome node name. |
+| `battery_voltage` | float or null | Volts. |
+| `battery_level` | float or null | Percent. Drives the battery bar. |
+| `temperature` | float or null | Degrees C at the desk. |
+| `humidity` | float or null | Percent relative humidity. |
+| `wifi_rssi` | float or null | dBm, negative. |
+| `uptime_s` | float or null | Seconds since boot. |
+| `page` | string or null, up to 32 chars | Page the device is showing. |
+
+Every numeric field may be `null`: on a cold boot the sensors are not ready
+yet, and the firmware reports the hole rather than a made up reading. A hole is
+stored as `NULL` and becomes a gap in the chart, never an interpolated point.
+
+Responses: `202` with `{"accepted": true, "received_at": "<local ISO>"}`, or
+`400` with `{"accepted": false, "error": ..., "detail": [...]}` when the body is
+not JSON or fails validation.
+
+### Reading it back
+
+```sh
+curl -s http://127.0.0.1:8080/api/device/telemetry
+curl -s "http://127.0.0.1:8080/api/device/history?hours=6"
+```
+
+`GET /api/device/telemetry` returns the newest sample, its `age_seconds` and a
+summary (`sample_count`, `oldest`, `newest`, `retention_days`).
+`GET /api/device/history?hours=24` returns the samples in that window, folded
+into at most 300 evenly sized means (`downsampled` says whether that happened).
+`hours` must be greater than 0 and at most 8760.
+
+The device also shows up in `/healthz` and `/api/state` as the `device` block.
+
+### Storage and retention
+
+One file, `{DATA_DIR}/telemetry.sqlite`, one table `telemetry` with an index on
+`received_at`, WAL journal so a page render never blocks the device. Timestamps
+are stored as fixed-width UTC ISO strings and presented in `TIMEZONE`. Rows
+older than `TELEMETRY_RETENTION_DAYS` (default 30) are deleted inside the same
+transaction as each insert, so there is no background job to keep alive. At one
+sample per 5 minutes that is about 8600 rows per month.
+
+### Freshness
+
+| `status` | Meaning |
+| --- | --- |
+| `ok` | The newest sample is younger than 15 minutes (three missed reports). |
+| `stale` | The device reported before, but not recently enough. |
+| `unavailable` | Nothing has ever been stored. |
+
+### The DESK panel and the chart
+
+The System page draws temperature (big), humidity, battery percent with a bar,
+Wi-Fi dBm and a 24 hour chart. Home Assistant's `room_temperature` and
+`room_humidity` slots are no longer drawn there: the device owns those numbers
+now.
+
+History for the chart is meaned into 15 minute buckets, at most 96 points. The
+SVG is built in `app/renderer/chart.py` and drawn with pure panel primaries so
+it survives quantization: 4 px red temperature, 4 px blue humidity, 3 px black
+axes, white ground, three clock labels plus `NOW`, and the min/max of each
+series in bold. With no history the panel prints `NO DEVICE DATA YET`; it never
+draws an invented line.
+
+### Fixture
+
+`DEVICE_SOURCE=fixture` falls back to `fixtures/device.json` (24 hours at 5
+minute spacing) **only while the store is empty**, so the page can be designed
+before the device is flashed. The first real sample retires the fixture. Sample
+times in that file are `offset_minutes` relative to now rather than absolute
+stamps, because a rolling 24 hour window only means anything against the
+current clock. Production should set `DEVICE_SOURCE=store`.
 
 ---
 

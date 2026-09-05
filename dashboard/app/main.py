@@ -9,29 +9,39 @@ Endpoints follow docs/ARCHITECTURE.md::
     GET    /preview/{page}.html
     POST   /api/alert
     DELETE /api/alert
+    POST   /api/device/telemetry
+    GET    /api/device/telemetry
+    GET    /api/device/history
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator
+from datetime import datetime
+from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from app import __version__
+from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
 from app.config import Settings, get_settings
 from app.logging_setup import configure_logging, log
-from app.models import AlertRequest, DashboardState
+from app.models import AlertRequest, DashboardState, DeviceSample, DeviceTelemetry
 from app.renderer.render import PAGE_TTL_SECONDS, PAGES, Renderer
 from app.state import StateService, state_fingerprint
+from app.telemetry import TelemetrySummary, get_telemetry_store, utc_now
+from app.timeutil import to_local
 
 logger = logging.getLogger("app.main")
 
@@ -50,6 +60,7 @@ class Hub:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.alerts = AlertStore(settings.alert_file, settings.timezone)
+        self.telemetry = get_telemetry_store(settings)
         self.state_service = StateService(settings, self.alerts)
         self.renderer = Renderer(settings)
         self._cache: dict[str, RenderCacheEntry] = {}
@@ -99,6 +110,33 @@ def etag_matches(header: str | None, etag: str) -> bool:
     return False
 
 
+def _validation_problems(error: ValidationError) -> list[dict[str, str]]:
+    """Pydantic errors flattened to something JSON-safe and short."""
+    return [
+        {
+            "field": ".".join(str(part) for part in item["loc"]) or "body",
+            "error": str(item["msg"]),
+        }
+        for item in error.errors(include_url=False)[:5]
+    ]
+
+
+def _stamp(value: datetime | None, timezone_name: str) -> str | None:
+    """UTC storage stamp presented in TIMEZONE."""
+    return None if value is None else to_local(value, timezone_name).isoformat()
+
+
+def _sample_json(sample: DeviceSample, timezone_name: str) -> dict[str, Any]:
+    payload = sample.model_dump(mode="json")
+    payload["received_at"] = _stamp(sample.received_at, timezone_name)
+    return payload
+
+
+def _read_latest(hub: "Hub") -> tuple[DeviceSample | None, TelemetrySummary]:
+    """One thread-pool hop for the two store reads the latest endpoint needs."""
+    return hub.telemetry.latest(), hub.telemetry.summary()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
@@ -119,12 +157,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ai_usage=settings.ai_usage_source,
             brief=settings.brief_source,
             home=settings.ha_source,
+            device=settings.device_source,
+            telemetry_db=str(settings.telemetry_db_file),
         )
         await hub.renderer.start()
         try:
             yield
         finally:
             await hub.renderer.close()
+            # The telemetry store is process-wide and may be shared with another
+            # app instance (tests build several), so shutdown leaves it open.
+            # Every insert commits, so nothing is lost when the process exits.
             log(logger, logging.INFO, "dashboard-hub stopped")
 
     app = FastAPI(title="dashboard-hub", version=__version__, lifespan=lifespan)
@@ -188,6 +231,79 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hub: Hub = app.state.hub
         cleared = hub.alerts.clear()
         return JSONResponse({"cleared": cleared})
+
+    # -- device telemetry ------------------------------------------------
+    @app.post("/api/device/telemetry")
+    async def post_device_telemetry(request: Request) -> JSONResponse:
+        hub: Hub = app.state.hub
+        try:
+            payload: Any = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            log(logger, logging.WARNING, "telemetry rejected", reason="body is not JSON")
+            return JSONResponse(
+                {"accepted": False, "error": "request body is not valid JSON"},
+                status_code=400,
+            )
+        try:
+            telemetry = DeviceTelemetry.model_validate(payload)
+        except ValidationError as exc:
+            problems = _validation_problems(exc)
+            log(logger, logging.WARNING, "telemetry rejected", reason="invalid", detail=problems)
+            return JSONResponse(
+                {"accepted": False, "error": "invalid telemetry payload", "detail": problems},
+                status_code=400,
+            )
+
+        received_at = await run_in_threadpool(hub.telemetry.insert, telemetry)
+        # The next page render must see this sample, not the cached one.
+        hub.state_service.device.invalidate()
+        return JSONResponse(
+            {
+                "accepted": True,
+                "received_at": to_local(received_at, settings.timezone).isoformat(),
+            },
+            status_code=202,
+        )
+
+    @app.get("/api/device/telemetry")
+    async def get_device_telemetry() -> JSONResponse:
+        hub: Hub = app.state.hub
+        latest, summary = await run_in_threadpool(_read_latest, hub)
+        age = None if latest is None else round((utc_now() - latest.received_at).total_seconds(), 1)
+        return JSONResponse(
+            {
+                "status": device_status(age).value,
+                "source": settings.device_source,
+                "age_seconds": age,
+                "latest": None if latest is None else _sample_json(latest, settings.timezone),
+                "summary": {
+                    "sample_count": summary.sample_count,
+                    "oldest": _stamp(summary.oldest, settings.timezone),
+                    "newest": _stamp(summary.newest, settings.timezone),
+                    "retention_days": hub.telemetry.retention_days,
+                },
+            },
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @app.get("/api/device/history")
+    async def get_device_history(
+        hours: float = Query(default=24.0, gt=0.0, le=8760.0),
+    ) -> JSONResponse:
+        hub: Hub = app.state.hub
+        samples = await run_in_threadpool(hub.telemetry.history, hours)
+        points = downsample(samples, HISTORY_MAX_POINTS)
+        return JSONResponse(
+            {
+                "hours": hours,
+                "sample_count": len(samples),
+                "point_count": len(points),
+                "max_points": HISTORY_MAX_POINTS,
+                "downsampled": len(points) < len(samples),
+                "samples": [_sample_json(sample, settings.timezone) for sample in points],
+            },
+            headers={"Cache-Control": "no-cache"},
+        )
 
     # -- display ---------------------------------------------------------
     @app.get("/display/{page}.png")

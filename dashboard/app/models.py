@@ -64,6 +64,23 @@ class ServiceHealth(str, Enum):
     UNKNOWN = "unknown"
 
 
+class DeviceStatus(str, Enum):
+    """Freshness of the newest telemetry sample the device posted."""
+
+    #: Younger than :data:`DEVICE_STALE_AFTER_SECONDS`.
+    OK = "ok"
+    #: The device has reported before, but not recently enough.
+    STALE = "stale"
+    #: Nothing has ever been stored.
+    UNAVAILABLE = "unavailable"
+
+
+#: The device POSTs telemetry on this cadence (firmware/e1002.yaml).
+DEVICE_INTERVAL_SECONDS: int = 300
+#: Three missed reports in a row mean the sample on screen is stale.
+DEVICE_STALE_AFTER_SECONDS: int = 3 * DEVICE_INTERVAL_SECONDS
+
+
 # ---------------------------------------------------------------------------
 # Tasks
 # ---------------------------------------------------------------------------
@@ -191,6 +208,70 @@ class HomeState(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Device telemetry
+# ---------------------------------------------------------------------------
+class DeviceTelemetry(BaseModel):
+    """Body of ``POST /api/device/telemetry``, exactly as ESPHome sends it.
+
+    Every numeric field may be ``null``: on a cold boot the SHT4x and the
+    battery gauge are not ready yet, and the firmware would rather report a
+    hole than a made up reading.
+    """
+
+    device: str = Field(min_length=1, max_length=64)
+    battery_voltage: float | None = None
+    battery_level: float | None = None
+    temperature: float | None = None
+    humidity: float | None = None
+    wifi_rssi: float | None = None
+    uptime_s: float | None = None
+    page: str | None = Field(default=None, max_length=32)
+
+
+class DeviceSample(DeviceTelemetry):
+    """One stored telemetry row. ``received_at`` is when the hub accepted it."""
+
+    device: str = Field(default="unknown", max_length=64)
+    received_at: datetime
+
+
+class DevicePoint(BaseModel):
+    """One downsampled history point. ``None`` means "no reading in bucket"."""
+
+    at: datetime
+    temperature: float | None = None
+    humidity: float | None = None
+
+
+class DeviceState(BaseModel):
+    """What the pages know about the desk device."""
+
+    status: DeviceStatus = DeviceStatus.UNAVAILABLE
+    device: str | None = None
+    received_at: datetime | None = None
+    #: Seconds between ``received_at`` and the moment the state was built.
+    age_seconds: float | None = None
+
+    battery_voltage: float | None = None
+    battery_level: float | None = None
+    temperature: float | None = None
+    humidity: float | None = None
+    wifi_rssi: float | None = None
+    uptime_s: float | None = None
+    page: str | None = None
+
+    sample_count: int = 0
+    oldest_at: datetime | None = None
+    newest_at: datetime | None = None
+    #: 24 hours of history, meaned into 15 minute buckets (at most 96 points).
+    history_24h: list[DevicePoint] = Field(default_factory=list)
+
+    @property
+    def has_reading(self) -> bool:
+        return self.status is not DeviceStatus.UNAVAILABLE
+
+
+# ---------------------------------------------------------------------------
 # Alerts
 # ---------------------------------------------------------------------------
 class Alert(BaseModel):
@@ -263,6 +344,10 @@ class HomeBlock(Block):
     home: HomeState | None = None
 
 
+class DeviceBlock(Block):
+    device: DeviceState | None = None
+
+
 class DashboardState(BaseModel):
     """Everything the templates are allowed to see."""
 
@@ -274,6 +359,7 @@ class DashboardState(BaseModel):
     ai_usage: AIUsageBlock = Field(default_factory=AIUsageBlock)
     brief: BriefBlock = Field(default_factory=BriefBlock)
     home: HomeBlock = Field(default_factory=HomeBlock)
+    device: DeviceBlock = Field(default_factory=DeviceBlock)
     alert: Alert | None = None
 
     @property
@@ -285,6 +371,7 @@ class DashboardState(BaseModel):
             "ai_usage": self.ai_usage,
             "brief": self.brief,
             "home": self.home,
+            "device": self.device,
         }
 
     @property

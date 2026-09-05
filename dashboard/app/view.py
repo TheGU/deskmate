@@ -15,11 +15,14 @@ from app.models import (
     Alert,
     AlertPriority,
     DashboardState,
+    DeviceState,
+    DeviceStatus,
     Event,
     PRIORITY_RANK,
     Priority,
     Task,
 )
+from app.renderer.chart import build_chart
 from app.timeutil import to_local, zone
 
 UNKNOWN = "unknown"
@@ -438,10 +441,88 @@ def sensor_value(value: str | None, unit: str | None) -> str:
     return f"{value} {unit}"
 
 
+#: The DESK panel owns temperature and humidity now, so the Home Assistant
+#: room rows would only repeat it (usually from a sensor in another room).
+DESK_OWNED_SLOTS: frozenset[str] = frozenset({"room_temperature", "room_humidity"})
+
+NO_DEVICE_DATA = "NO DEVICE DATA YET"
+#: The device is reporting, it just has not reported long enough to plot.
+NO_DEVICE_HISTORY = "NOT ENOUGH HISTORY YET"
+
+
+def battery_accent(level: float | None) -> str:
+    if level is None:
+        return "black"
+    if level <= 15:
+        return "red"
+    if level <= 35:
+        return "yellow"
+    return "green"
+
+
+def wifi_accent(rssi: float | None) -> str:
+    if rssi is None:
+        return "black"
+    if rssi >= -67:
+        return "green"
+    if rssi >= -80:
+        return "yellow"
+    return "red"
+
+
+def age_label(age_seconds: float | None) -> str:
+    if age_seconds is None:
+        return UNKNOWN.upper()
+    minutes = int(age_seconds // 60)
+    if minutes < 1:
+        return "NOW"
+    if minutes < 60:
+        return f"{minutes}M AGO"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}H AGO"
+    return f"{hours // 24}D AGO"
+
+
+def device_panel(state: DashboardState, settings: Settings) -> dict[str, Any]:
+    """Everything the DESK panel draws, including the chart geometry."""
+    device: DeviceState | None = state.device.device
+    if not state.device.usable or device is None or not device.has_reading:
+        return {
+            "available": False,
+            "note": block_note(state.device.status, "device") or NO_DEVICE_DATA,
+            "empty_label": NO_DEVICE_DATA,
+            "chart": build_chart([], state.timezone, note=NO_DEVICE_DATA),
+        }
+    level = device.battery_level
+    return {
+        "available": True,
+        "name": (device.device or UNKNOWN).upper(),
+        "temperature": fmt_number(device.temperature, digits=1),
+        "humidity": fmt_number(device.humidity, digits=0, suffix="%"),
+        "battery_percent": fmt_number(level, digits=0, suffix="%"),
+        # Clamped only for the bar width; the printed number stays as reported.
+        "battery_fill": 0 if level is None else int(max(0.0, min(100.0, level))),
+        "battery_accent": battery_accent(level),
+        "wifi": fmt_number(device.wifi_rssi, digits=0, suffix=" dBm"),
+        "wifi_accent": wifi_accent(device.wifi_rssi),
+        "status_label": (
+            age_label(device.age_seconds)
+            if device.status is DeviceStatus.OK
+            else f"STALE {age_label(device.age_seconds)}"
+        ),
+        "status_accent": "black" if device.status is DeviceStatus.OK else "yellow",
+        "empty_label": NO_DEVICE_DATA,
+        "note": block_note(state.device.status, "device"),
+        "chart": build_chart(device.history_24h, state.timezone, note=NO_DEVICE_HISTORY),
+    }
+
+
 def system_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     context = base_context(state, settings, "system")
     home = state.home.home
     context["home_note"] = block_note(state.home.status, "home")
+    context["device"] = device_panel(state, settings)
     if not state.home.usable or home is None:
         context["sensors"] = []
         context["services"] = []
@@ -455,6 +536,7 @@ def system_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
             ),
         }
         for sensor in home.sensors
+        if sensor.key not in DESK_OWNED_SLOTS
     ]
     context["services"] = [
         {

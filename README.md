@@ -73,6 +73,9 @@ The compose service mounts `./data` read-write (files other agents write),
 | GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work |
 | POST | `/api/alert` | Set the current alert |
 | DELETE | `/api/alert` | Clear it |
+| POST | `/api/device/telemetry` | Device pushes one sample every 5 min, `202` |
+| GET | `/api/device/telemetry` | Latest sample plus sample count, oldest, newest |
+| GET | `/api/device/history` | `?hours=24`, downsampled to at most 300 points |
 
 ## Layout
 

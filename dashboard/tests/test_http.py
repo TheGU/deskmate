@@ -24,6 +24,7 @@ def test_healthz_reports_every_adapter(client: TestClient) -> None:
         "ai_usage",
         "brief",
         "home",
+        "device",
     }
     for name, block in payload["adapters"].items():
         assert block["status"] == "ok", f"{name} is {block['status']}: {block['error']}"

@@ -15,6 +15,7 @@ from app.adapters.ai_brief import build_brief_adapter
 from app.adapters.ai_usage import build_ai_usage_adapter
 from app.adapters.base import CachedAdapter, Outcome
 from app.adapters.calendar import build_calendar_adapter
+from app.adapters.device import build_device_adapter
 from app.adapters.home_assistant import build_home_adapter
 from app.adapters.tasks import build_tasks_adapter
 from app.adapters.weather import build_weather_adapter
@@ -27,6 +28,7 @@ from app.models import (
     BriefBlock,
     CalendarBlock,
     DashboardState,
+    DeviceBlock,
     HomeBlock,
     TasksBlock,
     WeatherBlock,
@@ -54,18 +56,26 @@ class StateService:
         )
         self.brief = CachedAdapter(build_brief_adapter(settings), settings.brief_ttl_seconds)
         self.home = CachedAdapter(build_home_adapter(settings), settings.home_ttl_seconds)
+        self.device = CachedAdapter(build_device_adapter(settings), settings.device_ttl_seconds)
 
     async def build(self, *, force: bool = False) -> DashboardState:
         """Fetch every adapter (concurrently) and fold the results into state."""
-        tasks_out, calendar_out, weather_out, usage_out, brief_out, home_out = (
-            await asyncio.gather(
-                self.tasks.get(force=force),
-                self.calendar.get(force=force),
-                self.weather.get(force=force),
-                self.ai_usage.get(force=force),
-                self.brief.get(force=force),
-                self.home.get(force=force),
-            )
+        (
+            tasks_out,
+            calendar_out,
+            weather_out,
+            usage_out,
+            brief_out,
+            home_out,
+            device_out,
+        ) = await asyncio.gather(
+            self.tasks.get(force=force),
+            self.calendar.get(force=force),
+            self.weather.get(force=force),
+            self.ai_usage.get(force=force),
+            self.brief.get(force=force),
+            self.home.get(force=force),
+            self.device.get(force=force),
         )
 
         state = DashboardState(
@@ -77,6 +87,7 @@ class StateService:
             ai_usage=_block(AIUsageBlock, usage_out, "providers", []),
             brief=_block(BriefBlock, brief_out, "brief", None),
             home=_block(HomeBlock, home_out, "home", None),
+            device=_block(DeviceBlock, device_out, "device", None),
             alert=self._alerts.current,
         )
         log(

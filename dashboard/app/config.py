@@ -21,6 +21,9 @@ WeatherSource = Literal["fixture", "open_meteo"]
 AIUsageSource = Literal["fixture", "file"]
 BriefSource = Literal["fixture", "file"]
 HomeAssistantSource = Literal["fixture", "rest"]
+#: ``store`` reads only what the device posted; ``fixture`` falls back to
+#: ``fixtures/device.json`` while the store is still empty (dev and preview).
+DeviceSource = Literal["fixture", "store"]
 
 #: Repository root, i.e. the directory that holds ``fixtures/`` and ``data/``.
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -98,6 +101,13 @@ class Settings(BaseSettings):
     ha_token: str = Field(default="", alias="HA_TOKEN")
     ha_entities_raw: str = Field(default="", alias="HA_ENTITIES")
 
+    # -- device telemetry -----------------------------------------------
+    device_source: DeviceSource = Field(default="fixture", alias="DEVICE_SOURCE")
+    telemetry_db_path: Path | None = Field(default=None, alias="TELEMETRY_DB_PATH")
+    telemetry_retention_days: int = Field(
+        default=30, ge=1, le=3650, alias="TELEMETRY_RETENTION_DAYS"
+    )
+
     # -- adapter cache TTLs (seconds) -----------------------------------
     tasks_ttl_seconds: float = Field(default=300.0, alias="TASKS_TTL_SECONDS")
     calendar_ttl_seconds: float = Field(default=300.0, alias="CALENDAR_TTL_SECONDS")
@@ -105,6 +115,7 @@ class Settings(BaseSettings):
     ai_usage_ttl_seconds: float = Field(default=300.0, alias="AI_USAGE_TTL_SECONDS")
     brief_ttl_seconds: float = Field(default=60.0, alias="BRIEF_TTL_SECONDS")
     home_ttl_seconds: float = Field(default=120.0, alias="HOME_TTL_SECONDS")
+    device_ttl_seconds: float = Field(default=60.0, alias="DEVICE_TTL_SECONDS")
 
     # -- rendering ------------------------------------------------------
     render_timeout_ms: int = Field(default=15000, alias="RENDER_TIMEOUT_MS")
@@ -138,6 +149,10 @@ class Settings(BaseSettings):
     @property
     def alert_file(self) -> Path:
         return self.data_dir / "alert.json"
+
+    @property
+    def telemetry_db_file(self) -> Path:
+        return self.telemetry_db_path or (self.data_dir / "telemetry.sqlite")
 
     @property
     def ics_sources(self) -> list[str]:
