@@ -353,6 +353,13 @@ script:
           condition:
             wifi.connected:
           then:
+            # Same guard as load_current_page: the POST blocks the loop.
+            - wait_until:
+                condition:
+                  not:
+                    rtttl.is_playing:
+                timeout: 500ms
+            - rtttl.stop
             - http_request.post:
                 url: ${hub_base_url}/api/device/telemetry
                 request_headers:
@@ -544,6 +551,17 @@ script:
             id(current_url) = url;
             id(dashboard_image)->set_url(url);
           }
+      # The HTTP connect inside update() blocks the main loop, and the rtttl
+      # component only advances notes from loop(). A click tone still
+      # sounding here stayed on for the whole connect (20 s when the hub was
+      # down) and read as a stuck buzzer. Let the tone finish, then silence
+      # the output before the blocking call.
+      - wait_until:
+          condition:
+            not:
+              rtttl.is_playing:
+          timeout: 500ms
+      - rtttl.stop
       - component.update: dashboard_image
 
   - id: goto_page
@@ -600,6 +618,14 @@ script:
       - lambda: |-
           id(current_url) = std::string("${hub_base_url}/display/alert.png?t=") + std::to_string(millis());
           id(dashboard_image)->set_url(id(current_url));
+      # Let the alert tone finish before the blocking connect (see
+      # load_current_page); the tone is about 1.6 s long.
+      - wait_until:
+          condition:
+            not:
+              rtttl.is_playing:
+          timeout: 2500ms
+      - rtttl.stop
       - component.update: dashboard_image
       - delay: !lambda "return (duration > 0 ? duration : ${alert_default_seconds}) * 1000;"
       - lambda: |-
@@ -780,7 +806,9 @@ output:
 rtttl:
   id: buzzer
   output: buzzer_output
-  gain: 60%
+  # Lowered from 60% on 2026-09-05: the owner found a stuck note at 60%
+  # painful. Tones are feedback, not alarms; the alert page has the screen.
+  gain: 30%
 
 light:
   - platform: binary
