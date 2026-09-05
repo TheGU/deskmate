@@ -148,6 +148,7 @@ deep_sleep:
         on_wake:
           - lambda: |-
               id(wake_pin) = 5;
+              id(wake_cause) = "button_left";
               int count = ${page_count};
               id(page_index) = ((id(page_index) - 1) % count + count) % count;
       - pin:
@@ -156,6 +157,7 @@ deep_sleep:
         on_wake:
           - lambda: |-
               id(wake_pin) = 4;
+              id(wake_cause) = "button_right";
               id(page_index) = (id(page_index) + 1) % ${page_count};
       - pin:
           number: GPIO3
@@ -163,10 +165,17 @@ deep_sleep:
         on_wake:
           - lambda: |-
               id(wake_pin) = 3;
+              id(wake_cause) = "button_green";
               id(bust_cache_on_boot) = true;
   on_wake:
     - lambda: |-
-        ESP_LOGI("main", "Woke from deep sleep, cause=%d", (int) cause);
+        // Per-pin triggers above already named the button; only fill in the rest.
+        if (id(wake_cause) == "power_on") {
+          if (cause == deep_sleep::WAKEUP_CAUSE_TIMER) id(wake_cause) = "timer";
+          else if (cause == deep_sleep::WAKEUP_CAUSE_GPIO) id(wake_cause) = "button_unknown";
+          else id(wake_cause) = "other";
+        }
+        ESP_LOGI("main", "Woke from deep sleep: %s (cause=%d)", id(wake_cause).c_str(), (int) cause);
 
 time:
   - platform: sntp
@@ -201,6 +210,10 @@ globals:
     type: int
     restore_value: false
     initial_value: "-1"
+  - id: wake_cause
+    type: std::string
+    restore_value: false
+    initial_value: '"power_on"'
   # Auto power mode: follow USB presence reported by the charger chip.
   - id: power_auto
     type: bool
@@ -366,6 +379,7 @@ script:
                   body += std::string(",\"battery_mode\":") + (id(battery_mode) ? "true" : "false");
                   body += std::string(",\"usb_present\":") + (id(usb_present) ? "true" : "false");
                   body += std::string(",\"charge_state\":\"") + deskmate::charge_state_name(id(charger_status)) + "\"";
+                  body += std::string(",\"wake_cause\":\"") + id(wake_cause) + "\"";
                   body += "}";
                   return body;
                 capture_response: false
@@ -780,14 +794,15 @@ sensor:
     update_interval: 60s
     filters:
       - multiply: 2.0
-  - platform: template
+  - platform: copy
+    source_id: battery_voltage
     id: battery_level
     name: "Battery level"
     unit_of_measurement: "%"
+    icon: "mdi:battery"
     device_class: battery
     state_class: measurement
-    update_interval: 60s
-    lambda: "return id(battery_voltage).state;"
+    accuracy_decimals: 0
     filters:
       - calibrate_linear:
           - 4.15 -> 100.0
@@ -819,6 +834,12 @@ text_sensor:
     name: "Charge state"
     icon: "mdi:battery-charging"
     lambda: "return std::string(deskmate::charge_state_name(id(charger_status)));"
+    update_interval: 60s
+  - platform: template
+    id: last_wake_cause
+    name: "Last wake cause"
+    icon: "mdi:sleep-off"
+    lambda: "return id(wake_cause);"
     update_interval: 60s
   - platform: template
     id: power_mode
