@@ -12,14 +12,23 @@ from app.models import (
     AdapterStatus,
     AIUsage,
     AIUsageBlock,
+    Alert,
+    AlertPriority,
+    Brief,
+    BriefBlock,
+    BriefMode,
+    BriefSection,
     CalendarBlock,
+    DailyForecast,
     DashboardState,
     DeviceBlock,
     DeviceState,
     DeviceStatus,
     Event,
     HomeBlock,
+    HomeSensor,
     HomeState,
+    HourlyRain,
     Priority,
     ServiceHealth,
     ServiceStatus,
@@ -30,19 +39,44 @@ from app.models import (
 )
 from app.timeutil import zone
 from app.view import (
+    SCALE_END_HOUR,
+    SCALE_START_HOUR,
+    ALERT_BAND_ACCENT,
+    agenda_route,
     ai_capacity_rows,
+    alert_context,
+    battery_accent,
+    brief_context,
+    brief_is_risk,
+    brief_lines,
     build_context,
+    desk_accent,
+    device_panel,
     due_label,
     header_weather,
     meter_cells,
+    month_grid,
+    next_seven_days,
     percent_accent,
+    power_label,
     priority_tasks,
     scale_position,
+    sensor_accent,
     sensor_value,
+    service_mark,
+    system_context,
     task_accent,
     task_sort_key,
-    today_scale,
+    today_due_label,
+    today_next_rows,
+    today_priority_tasks,
     upcoming_events,
+    wake_label,
+    weather_daily_rows,
+    weather_hourly_plates,
+    weather_readings,
+    weather_summary,
+    wifi_accent,
     wifi_level,
     worst_accent,
 )
@@ -75,9 +109,13 @@ def test_pages_render_context_when_everything_is_unavailable(settings: Settings)
     assert today["header"]["weather"]["available"] is False
     assert "unavailable" in today["ai_note"]["text"]
     weather = build_context("weather", state, settings)
-    assert weather["weather"] is None
+    assert weather["hero"]["available"] is False
     brief = build_context("brief", state, settings)
-    assert brief["sections"] == []
+    assert brief["brief_available"] is False
+    assert brief["lines"] == []
+    system = build_context("system", state, settings)
+    assert system["device"]["available"] is False
+    assert system["sensors"] == []
 
 
 def test_task_order_puts_overdue_first_then_priority() -> None:
@@ -118,6 +156,32 @@ def test_due_labels() -> None:
     assert due_label(TODAY - timedelta(days=1), TODAY) == "1D LATE"
     assert due_label(TODAY - timedelta(days=3), TODAY) == "3D LATE"
     assert due_label(TODAY + timedelta(days=5), TODAY) == "DUE 09 SEP"
+
+
+def test_today_due_label_uses_weekday_not_tomorrow() -> None:
+    """The Today page's own chip: tomorrow's 3-letter weekday, never the
+    word TOMORROW (too long); every other case matches due_label."""
+    assert today_due_label(None, TODAY) == ""
+    assert today_due_label(TODAY, TODAY) == "TODAY"
+    tomorrow = TODAY + timedelta(days=1)
+    assert today_due_label(tomorrow, TODAY) == tomorrow.strftime("%a").upper() == "SAT"
+    assert today_due_label(TODAY - timedelta(days=1), TODAY) == "1D LATE"
+    assert today_due_label(TODAY - timedelta(days=3), TODAY) == "3D LATE"
+    assert today_due_label(TODAY + timedelta(days=5), TODAY) == "DUE 09 SEP"
+
+
+def test_today_priority_tasks_shows_weekday_for_tomorrow(settings: Settings) -> None:
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
+        timezone="Asia/Bangkok",
+        tasks=TasksBlock(
+            status=AdapterStatus.OK,
+            items=[Task(id="1", title="Ship it", due=TODAY + timedelta(days=1), priority=Priority.HIGH)],
+        ),
+    )
+    rows = today_priority_tasks(state, TODAY, settings.max_priority_tasks)
+    assert rows[0]["due_label"] == "SAT"
+    assert "TOMORROW" not in rows[0]["due_label"]
 
 
 def test_upcoming_events_labels_and_skips_the_past() -> None:
@@ -167,15 +231,61 @@ def test_ai_capacity_rows_show_unavailable_when_collection_failed() -> None:
     )
     rows = ai_capacity_rows(state)
     claude, codex = rows[0]["windows"][0], rows[1]["windows"][0]
-    # No percent sign: the numeral is the whole message, the "5H" label beside
-    # it says what it is measuring.
+    # The numeral is bare (no percent sign baked in: the template draws that
+    # separately, raised); the caption beneath names the window.
     assert claude["value"] == "8"
     assert claude["accent"] == "red"
     assert claude["available"] is True
+    assert claude["label"] == "5H"
     # A failed collection is never displayed as a number; the hatch flag
-    # takes its place instead.
+    # takes its place instead, but the caption (and any reset time) stays.
     assert codex["value"] is None
     assert codex["available"] is False
+
+
+def test_ai_capacity_rows_5h_label_carries_the_reset_time() -> None:
+    tz = zone("Asia/Bangkok")
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
+        timezone="Asia/Bangkok",
+        ai_usage=AIUsageBlock(
+            status=AdapterStatus.OK,
+            providers=[
+                AIUsage(
+                    provider="Claude",
+                    short_window_percent_remaining=72,
+                    short_window_reset_at=datetime(2026, 9, 4, 21, 30, tzinfo=tz),
+                    weekly_percent_remaining=48,
+                    collection_status="ok",
+                )
+            ],
+        ),
+    )
+    windows = ai_capacity_rows(state)[0]["windows"]
+    assert windows[0]["label"] == "5H RESET 21:30"
+    # The 7D window never carries a reset time, only its own bare label.
+    assert windows[1]["label"] == "7D"
+
+
+def test_ai_capacity_rows_5h_label_is_bare_without_a_reset_time() -> None:
+    tz = zone("Asia/Bangkok")
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
+        timezone="Asia/Bangkok",
+        ai_usage=AIUsageBlock(
+            status=AdapterStatus.OK,
+            providers=[
+                AIUsage(
+                    provider="Claude",
+                    short_window_percent_remaining=72,
+                    short_window_reset_at=None,
+                    collection_status="ok",
+                )
+            ],
+        ),
+    )
+    windows = ai_capacity_rows(state)[0]["windows"]
+    assert windows[0]["label"] == "5H"
 
 
 def test_ai_capacity_rows_meter_fraction_is_the_used_share() -> None:
@@ -292,75 +402,75 @@ def test_scale_position_endpoints_and_a_mid_afternoon_time() -> None:
     assert scale_position(25 * 60) == 100.0
 
 
-def test_today_scale_drops_a_close_marker_to_the_next_line() -> None:
+def test_today_next_rows_orders_future_events_and_labels_by_day() -> None:
+    """Today's own remaining events first with a bare time, then later days
+    with their 3-letter weekday; the word TOMORROW never appears."""
     tz = zone("Asia/Bangkok")
-    today = date(2026, 9, 4)
     reference = datetime(2026, 9, 4, 12, 0, tzinfo=tz)
-    close_events = CalendarBlock(
+    events = CalendarBlock(
         status=AdapterStatus.OK,
         items=[
-            Event(id="a", title="First", start=datetime(2026, 9, 4, 12, 0, tzinfo=tz)),
-            # Four minutes later lands well under the 12 px collision distance.
-            Event(id="b", title="Second", start=datetime(2026, 9, 4, 12, 4, tzinfo=tz)),
+            Event(id="past", title="Standup", start=datetime(2026, 9, 4, 9, 30, tzinfo=tz)),
+            Event(id="later-today", title="Demo", start=datetime(2026, 9, 4, 16, 30, tzinfo=tz)),
+            Event(id="tomorrow", title="Drill", start=datetime(2026, 9, 5, 18, 0, tzinfo=tz)),
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=close_events)
-    markers = today_scale(state, {}, today, reference)["markers"]
-    assert markers[0]["row"] == 0
-    assert markers[1]["row"] == 1
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    rows = today_next_rows(state, reference, {})
+    assert [row["title"] for row in rows] == ["Demo", "Drill"]
+    assert rows[0]["when"] == "16:30"
+    assert rows[1]["when"] == "SAT 18:00"
+    assert "TOMORROW" not in rows[1]["when"]
 
 
-def test_today_scale_keeps_well_spaced_markers_on_one_line() -> None:
+def test_today_next_rows_all_day_variants() -> None:
     tz = zone("Asia/Bangkok")
-    today = date(2026, 9, 4)
-    # Before either event starts, so both are still "next" and get a marker.
-    reference = datetime(2026, 9, 4, 7, 0, tzinfo=tz)
-    spaced_events = CalendarBlock(
-        status=AdapterStatus.OK,
-        items=[
-            Event(id="a", title="Standup", start=datetime(2026, 9, 4, 8, 0, tzinfo=tz)),
-            Event(id="b", title="Retro", start=datetime(2026, 9, 4, 20, 0, tzinfo=tz)),
-        ],
-    )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=spaced_events)
-    markers = today_scale(state, {}, today, reference)["markers"]
-    assert len(markers) == 2
-    assert markers[0]["row"] == 0
-    assert markers[1]["row"] == 0
-
-
-def test_today_scale_excludes_events_before_six_am() -> None:
-    tz = zone("Asia/Bangkok")
-    today = date(2026, 9, 4)
-    reference = datetime(2026, 9, 4, 12, 0, tzinfo=tz)
-    early = CalendarBlock(
-        status=AdapterStatus.OK,
-        items=[Event(id="a", title="Early flight", start=datetime(2026, 9, 4, 5, 0, tzinfo=tz))],
-    )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=early)
-    assert today_scale(state, {}, today, reference)["markers"] == []
-
-
-def test_today_scale_drops_events_that_already_ended() -> None:
-    """The scale looks forward: a meeting that is over is not still "now"."""
-    tz = zone("Asia/Bangkok")
-    today = date(2026, 9, 4)
-    reference = datetime(2026, 9, 4, 15, 0, tzinfo=tz)
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
     events = CalendarBlock(
         status=AdapterStatus.OK,
         items=[
             Event(
-                id="a",
-                title="Standup",
-                start=datetime(2026, 9, 4, 9, 30, tzinfo=tz),
-                end=datetime(2026, 9, 4, 9, 45, tzinfo=tz),
+                id="today-allday",
+                title="Offsite",
+                start=datetime(2026, 9, 4, 0, 0, tzinfo=tz),
+                end=datetime(2026, 9, 5, 0, 0, tzinfo=tz),
+                all_day=True,
             ),
-            Event(id="b", title="Demo", start=datetime(2026, 9, 4, 16, 30, tzinfo=tz)),
+            Event(
+                id="later-allday",
+                title="Conference",
+                start=datetime(2026, 9, 6, 0, 0, tzinfo=tz),
+                all_day=True,
+            ),
         ],
     )
     state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
-    markers = today_scale(state, {}, today, reference)["markers"]
-    assert [marker["title"] for marker in markers] == ["Demo"]
+    rows = today_next_rows(state, reference, {})
+    assert rows[0]["when"] == "ALL DAY"
+    assert rows[1]["when"] == "SUN"
+
+
+def test_today_next_rows_caps_at_the_row_limit() -> None:
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 6, 0, tzinfo=tz)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            Event(id=str(n), title=f"Event {n}", start=datetime(2026, 9, 4, 7 + n, 0, tzinfo=tz))
+            for n in range(8)
+        ],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    rows = today_next_rows(state, reference, {}, limit=3)
+    assert len(rows) == 3
+    assert [row["title"] for row in rows] == ["Event 0", "Event 1", "Event 2"]
+
+
+def test_today_next_rows_empty_calendar_gives_no_rows() -> None:
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
+    assert today_next_rows(state, reference, {}) == []
 
 
 def test_due_chip_accents() -> None:
@@ -530,14 +640,12 @@ def test_today_has_no_title_accents_left_to_carry(settings: Settings) -> None:
     assert build_context("today", state, settings)["title_accents"] == {}
 
 
-def test_other_pages_still_carry_their_pane_title_accents(settings: Settings) -> None:
-    """Agenda, weather, brief and system keep the older chrome for now."""
+def test_agenda_and_weather_have_no_title_accents_left_to_carry(settings: Settings) -> None:
+    """Agenda and weather refuse the pane title bar too: their own route,
+    month grid, readings and plates carry state directly."""
     state = empty_state()
-    assert build_context("agenda", state, settings)["title_accents"] == {
-        "days": "black",
-        "then": "black",
-    }
-    assert build_context("weather", state, settings)["title_accents"] == {"weather": "black"}
+    assert build_context("agenda", state, settings)["title_accents"] == {}
+    assert build_context("weather", state, settings)["title_accents"] == {}
 
 
 def test_ai_capacity_accent_never_goes_green(settings: Settings) -> None:
@@ -587,3 +695,430 @@ def test_sensor_value_formatting() -> None:
     assert sensor_value("Closed", None) == "Closed"
     assert sensor_value("64", "%") == "64%"
     assert sensor_value("27.8", "C") == "27.8 C"
+
+
+# ---------------------------------------------------------------------------
+# agenda: the route strip, the month grid, the next-seven-days strip
+# ---------------------------------------------------------------------------
+def test_agenda_route_positions_and_midnight_clamp() -> None:
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 5)
+    reference = datetime(2026, 9, 5, 8, 0, tzinfo=tz)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            Event(
+                id="a",
+                title="Late shift",
+                calendar="work",
+                start=datetime(2026, 9, 5, 23, 0, tzinfo=tz),
+                end=datetime(2026, 9, 6, 1, 0, tzinfo=tz),
+            )
+        ],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    route = agenda_route(state, {"work": "blue"}, today, reference)
+    assert route["hours"][0]["pct"] == 0.0
+    assert route["hours"][-1]["pct"] == 100.0
+    marker = route["markers"][0]
+    # An event that runs past midnight clamps to the bottom of the route
+    # rather than wrapping its end time back to the small hours.
+    assert marker["bar_top"] + marker["bar_height"] == pytest.approx(route["height_px"], abs=0.5)
+
+
+def test_agenda_route_stacks_labels_that_would_collide() -> None:
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 5)
+    reference = datetime(2026, 9, 5, 7, 0, tzinfo=tz)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            Event(id="a", title="Standup", calendar="work", start=datetime(2026, 9, 5, 9, 0, tzinfo=tz)),
+            Event(id="b", title="Sync", calendar="personal", start=datetime(2026, 9, 5, 9, 0, tzinfo=tz)),
+        ],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    route = agenda_route(state, {"work": "blue", "personal": "green"}, today, reference)
+    first, second = route["markers"]
+    # Same start time on two calendars (an interchange): both dots land on
+    # the same row, but the labels still keep their minimum clearance.
+    assert first["dot_top"] == pytest.approx(second["dot_top"])
+    assert second["label_top"] - first["label_top"] >= 22.0 - 0.01
+
+
+def test_agenda_route_empty_still_carries_hours_and_now() -> None:
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 5)
+    reference = datetime(2026, 9, 5, 10, 0, tzinfo=tz)
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
+    route = agenda_route(state, {}, today, reference)
+    assert route["empty"] is True
+    assert route["markers"] == []
+    assert len(route["hours"]) == SCALE_END_HOUR - SCALE_START_HOUR + 1
+    assert route["now_pct"] > 0.0
+
+
+def test_month_grid_starts_monday_and_marks_today() -> None:
+    today = date(2026, 9, 5)  # a Saturday; 1 Sep 2026 is a Tuesday
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 5, 8, 0, tzinfo=zone("Asia/Bangkok")), timezone="Asia/Bangkok"
+    )
+    grid = month_grid(state, {}, today)
+    assert grid["name"] == "SEPTEMBER"
+    first_week = grid["weeks"][0]
+    assert first_week[0] is None
+    assert first_week[1]["number"] == 1
+    flat = [cell for week in grid["weeks"] for cell in week if cell]
+    today_cells = [cell for cell in flat if cell["is_today"]]
+    assert [cell["number"] for cell in today_cells] == [5]
+
+
+def test_month_grid_dots_use_calendar_color_and_black_for_multiple() -> None:
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 5)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            Event(id="a", title="Solo", calendar="work", start=datetime(2026, 9, 10, 9, 0, tzinfo=tz)),
+            Event(id="b", title="One", calendar="work", start=datetime(2026, 9, 12, 9, 0, tzinfo=tz)),
+            Event(id="c", title="Two", calendar="personal", start=datetime(2026, 9, 12, 14, 0, tzinfo=tz)),
+        ],
+    )
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 5, 8, 0, tzinfo=tz), timezone="Asia/Bangkok", calendar=events
+    )
+    grid = month_grid(state, {"work": "blue", "personal": "green"}, today)
+    flat = {cell["number"]: cell for week in grid["weeks"] for cell in week if cell}
+    assert flat[10]["dot"] == "blue"
+    assert flat[12]["dot"] == "black"
+    assert flat[11]["dot"] is None
+
+
+def test_next_seven_days_clamp_busy_bars_and_blank_count() -> None:
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 5)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            # Starts before 06:00 and runs past 22:00: clamps to a full bar.
+            Event(
+                id="a",
+                title="Overnight",
+                start=datetime(2026, 9, 6, 4, 0, tzinfo=tz),
+                end=datetime(2026, 9, 6, 23, 0, tzinfo=tz),
+            ),
+        ],
+    )
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 5, 8, 0, tzinfo=tz), timezone="Asia/Bangkok", calendar=events
+    )
+    rows = next_seven_days(state, today)
+    assert len(rows) == 7
+    tomorrow = rows[0]
+    assert tomorrow["segments"] == [{"left": 0.0, "width": 100.0}]
+    assert tomorrow["count"] == 1
+    # A day with nothing on it prints no count at all, not a zero.
+    empty_day = rows[1]
+    assert empty_day["segments"] == []
+    assert empty_day["count"] is None
+
+
+# ---------------------------------------------------------------------------
+# weather: the hero, the four readings, the hourly plates, the daily rows
+# ---------------------------------------------------------------------------
+def test_weather_summary_hero_states() -> None:
+    heat = weather_summary(Weather(condition="Sunny", temperature_c=37.0, rain_from="15:00"))
+    assert heat["dot"] == "red"
+    rain = weather_summary(Weather(condition="Showers", temperature_c=29.0, rain_probability_percent=60))
+    assert rain["dot"] == "blue"
+    plain = weather_summary(Weather(condition="Cloudy", temperature_c=28.0, rain_probability_percent=10))
+    assert plain["dot"] == ""
+    assert weather_summary(None) == {"available": False}
+
+
+def test_weather_readings_carry_unavailable_flags_and_selective_dots() -> None:
+    empty = weather_readings(None)
+    assert all(reading["value"] is None for reading in empty)
+
+    full = weather_readings(
+        Weather(humidity_percent=76, uv_index=8.4, aqi=71, rain_probability_percent=80)
+    )
+    by_label = {reading["label"]: reading for reading in full}
+    assert by_label["HUMIDITY"]["value"] == "76"
+    assert by_label["HUMIDITY"]["dot"] == ""
+    assert by_label["UV"]["dot"] == "red"
+    assert by_label["AQI"]["dot"] == "yellow"
+    assert by_label["RAIN"]["value"] == "80%"
+    assert by_label["RAIN"]["dot"] == "blue"
+
+    # A healthy UV reading stays quiet; a healthy AQI still dots (green).
+    calm = weather_readings(Weather(uv_index=2.0, aqi=10))
+    calm_by_label = {reading["label"]: reading for reading in calm}
+    assert calm_by_label["UV"]["dot"] == ""
+    assert calm_by_label["AQI"]["dot"] == "green"
+
+
+def test_weather_hourly_plates_start_at_current_hour_and_cap_at_six() -> None:
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 14, 30, tzinfo=tz)
+    hourly = [
+        HourlyRain(at=datetime(2026, 9, 4, hour, 0, tzinfo=tz), probability_percent=hour)
+        for hour in range(9, 22)
+    ]
+    weather = Weather(hourly_rain=hourly)
+    plates = weather_hourly_plates(weather, reference)
+    assert len(plates) == 6
+    assert plates[0]["hour"] == "14"
+    assert plates[-1]["hour"] == "19"
+    assert weather_hourly_plates(None, reference) == []
+
+
+def test_weather_daily_rows_cap_at_seven() -> None:
+    today = date(2026, 9, 4)
+    daily = [
+        DailyForecast(day=today + timedelta(days=offset), high_c=30.0, low_c=24.0, rain_probability_percent=10)
+        for offset in range(10)
+    ]
+    weather = Weather(daily=daily)
+    rows = weather_daily_rows(weather, today)
+    assert len(rows) == 7
+    assert rows[0]["label"] == "TODAY"
+    assert weather_daily_rows(None, today) == []
+
+
+# ---------------------------------------------------------------------------
+# brief page
+# ---------------------------------------------------------------------------
+def _brief_state(brief: Brief | None, *, status: AdapterStatus = AdapterStatus.OK) -> DashboardState:
+    tz = zone("Asia/Bangkok")
+    return DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
+        timezone="Asia/Bangkok",
+        brief=BriefBlock(status=status, brief=brief),
+    )
+
+
+def test_brief_mode_label_and_generated_time(settings: Settings) -> None:
+    tz = zone("Asia/Bangkok")
+    brief = Brief(
+        mode=BriefMode.MORNING,
+        generated_at=datetime(2026, 9, 4, 7, 40, tzinfo=tz),
+        headline="Two hard deadlines today",
+    )
+    context = brief_context(_brief_state(brief), settings)
+    assert context["mode_label"] == "MORNING BRIEF"
+    assert context["generated_label"] == "GENERATED 07:40"
+
+
+def test_brief_generated_label_is_not_generated_when_missing(settings: Settings) -> None:
+    brief = Brief(mode=BriefMode.EVENING, generated_at=None, headline="x")
+    context = brief_context(_brief_state(brief), settings)
+    assert context["generated_label"] == "NOT GENERATED"
+
+
+def test_brief_risk_sections_get_flagged(settings: Settings) -> None:
+    tz = zone("Asia/Bangkok")
+    brief = Brief(
+        mode=BriefMode.MORNING,
+        generated_at=datetime(2026, 9, 4, 7, 0, tzinfo=tz),
+        headline="x",
+        sections=[
+            BriefSection(title="At risk", items=["Vendor quote overdue"]),
+            BriefSection(title="Key tasks", items=["Finish deck"]),
+        ],
+    )
+    context = brief_context(_brief_state(brief), settings)
+    headers = [line for line in context["lines"] if line["kind"] == "header"]
+    assert headers[0]["risk"] is True
+    assert headers[1]["risk"] is False
+    assert brief_is_risk("At risk") is True
+    assert brief_is_risk("Key tasks") is False
+
+
+def test_brief_clipping_produces_an_ellipsis_line() -> None:
+    sections = [{"title": "SECTION", "risk": False, "items": [f"Item {n}" for n in range(20)]}]
+    lines, truncated = brief_lines(sections, max_lines=5)
+    assert truncated is True
+    assert len(lines) == 5
+    assert lines[-1]["kind"] == "item"
+    assert lines[-1]["text"].endswith("...")
+
+
+def test_brief_lines_never_cuts_leaving_a_bare_header() -> None:
+    sections = [
+        {"title": "FIRST", "risk": False, "items": ["one", "two"]},
+        {"title": "SECOND", "risk": False, "items": ["three"]},
+    ]
+    # Exactly enough room for the first section's header and items, nothing
+    # from the second: the cut must drop the bare "SECOND" header too.
+    lines, truncated = brief_lines(sections, max_lines=3)
+    assert truncated is True
+    assert [line["kind"] for line in lines] == ["header", "item", "item"]
+
+
+def test_brief_unavailable_message_when_brief_is_missing(settings: Settings) -> None:
+    context = brief_context(_brief_state(None, status=AdapterStatus.UNAVAILABLE), settings)
+    assert context["brief_available"] is False
+    assert context["unavailable_message"] == "No brief from the PC yet"
+
+
+# ---------------------------------------------------------------------------
+# system page
+# ---------------------------------------------------------------------------
+def test_battery_accent_thresholds() -> None:
+    assert battery_accent(None) == "black"
+    assert battery_accent(21) == "black"
+    assert battery_accent(20) == "yellow"
+    assert battery_accent(11) == "yellow"
+    assert battery_accent(10) == "red"
+
+
+def _device_state(**overrides: Any) -> DeviceState:
+    base: dict[str, Any] = dict(
+        status=DeviceStatus.OK,
+        device="reterminal-e1002",
+        received_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
+        age_seconds=30.0,
+    )
+    base.update(overrides)
+    return DeviceState(**base)
+
+
+def test_device_panel_hatches_the_battery_block_when_level_is_none(settings: Settings) -> None:
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
+        timezone="Asia/Bangkok",
+        device=DeviceBlock(status=AdapterStatus.OK, device=_device_state(battery_level=None)),
+    )
+    panel = device_panel(state, settings)
+    assert panel["available"] is True
+    assert panel["battery_available"] is False
+
+
+def test_device_panel_flags_stale_with_a_tell_tale_and_age(settings: Settings) -> None:
+    now = datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc)
+    device = _device_state(
+        status=DeviceStatus.STALE, received_at=now - timedelta(hours=2), age_seconds=7200.0
+    )
+    state = DashboardState(
+        generated_at=now, timezone="Asia/Bangkok", device=DeviceBlock(status=AdapterStatus.OK, device=device)
+    )
+    panel = device_panel(state, settings)
+    assert panel["stale"] is True
+    assert panel["age_text"] == "2 H AGO"
+    assert desk_accent(state) == "yellow"
+
+
+def test_wifi_level_glyph_choice_matches_the_system_reading() -> None:
+    assert wifi_level(-60) == "strong"
+    assert wifi_level(-75) == "low"
+    assert wifi_level(None) == "off"
+    assert wifi_accent(-60) == "green"
+    assert wifi_accent(-75) == "yellow"
+    assert wifi_accent(None) == "black"
+
+
+def test_sensor_accent_only_flags_warn_and_alert() -> None:
+    assert sensor_accent("ok") == ""
+    assert sensor_accent("unknown") == ""
+    assert sensor_accent("warn") == "yellow"
+    assert sensor_accent("alert") == "red"
+
+
+def test_service_mark_per_health() -> None:
+    assert service_mark("ok") == "black"
+    assert service_mark("warn") == "yellow"
+    assert service_mark("down") == "red"
+    assert service_mark("unknown") == "hatch"
+
+
+def test_system_context_sensor_and_service_rows(settings: Settings) -> None:
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
+        timezone="Asia/Bangkok",
+        home=HomeBlock(
+            status=AdapterStatus.OK,
+            home=HomeState(
+                sensors=[
+                    HomeSensor(key="front_door", name="Front door", value="Closed", severity="ok")
+                ],
+                services=[ServiceStatus(key="nas", name="NAS", health=ServiceHealth.DOWN)],
+            ),
+        ),
+    )
+    context = system_context(state, settings)
+    assert context["sensors"][0]["accent"] == ""
+    assert context["services"][0]["mark"] == "red"
+    assert context["services"][0]["down"] is True
+
+
+def test_power_label_words_feed_the_battery_meter_caption() -> None:
+    assert power_label(False, None) == "BATTERY"
+    assert power_label(True, "charging") == "CHARGING"
+    assert power_label(True, "charged") == "USB"
+    assert power_label(True, "unknown") is None
+
+
+def test_wake_label_spaces_out_the_firmware_word() -> None:
+    assert wake_label(None) == "UNKNOWN"
+    assert wake_label("button_left") == "BUTTON LEFT"
+
+
+# ---------------------------------------------------------------------------
+# alert page
+# ---------------------------------------------------------------------------
+def _alert_state(alert: Alert | None) -> DashboardState:
+    return DashboardState(
+        generated_at=datetime(2026, 9, 4, 15, 6, tzinfo=dt_timezone.utc),
+        timezone="Asia/Bangkok",
+        alert=alert,
+    )
+
+
+def test_alert_band_colour_per_priority(settings: Settings) -> None:
+    assert ALERT_BAND_ACCENT[AlertPriority.CRITICAL] == "red"
+    assert ALERT_BAND_ACCENT[AlertPriority.DOORBELL] == "red"
+    assert ALERT_BAND_ACCENT[AlertPriority.IMPORTANT] == "yellow"
+    assert ALERT_BAND_ACCENT[AlertPriority.NORMAL] == "black"
+
+    tz = zone("Asia/Bangkok")
+    alert = Alert(
+        title="Smoke", priority=AlertPriority.CRITICAL, created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz)
+    )
+    context = alert_context(_alert_state(alert), settings)
+    assert context["band_accent"] == "red"
+
+
+def test_alert_band_label_falls_back_to_alert_without_a_source(settings: Settings) -> None:
+    tz = zone("Asia/Bangkok")
+    unnamed = Alert(
+        title="Doorbell",
+        priority=AlertPriority.DOORBELL,
+        created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz),
+        source=None,
+    )
+    assert alert_context(_alert_state(unnamed), settings)["band_label"] == "ALERT"
+
+    named = Alert(
+        title="Doorbell",
+        priority=AlertPriority.DOORBELL,
+        created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz),
+        source="Front door",
+    )
+    assert alert_context(_alert_state(named), settings)["band_label"] == "FRONT DOOR"
+
+
+def test_alert_band_right_carries_the_priority_word_and_time(settings: Settings) -> None:
+    tz = zone("Asia/Bangkok")
+    alert = Alert(
+        title="Smoke", priority=AlertPriority.CRITICAL, created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz)
+    )
+    context = alert_context(_alert_state(alert), settings)
+    assert context["band_right"] == "CRITICAL 15:06"
+
+
+def test_alert_context_without_an_active_alert(settings: Settings) -> None:
+    context = alert_context(_alert_state(None), settings)
+    assert context["band_label"] == "ALERT"
+    assert context["band_accent"] == "black"
+    assert context["title"] == "NO ACTIVE ALERT"

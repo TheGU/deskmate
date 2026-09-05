@@ -1,106 +1,148 @@
 {% extends "base.html" %}
 
 {% block style %}
-.ag-left  { flex: 0 0 400px; width: 400px; }
-.ag-right { flex: 1 1 auto; }
-.pane-then { flex: 1 1 auto; }
-.pane-over { flex: 0 0 80px; }
-/* 5px, not 6px: the new frame's header and footer leave 4 px less for the
-   body than the old status band and window list did. */
-.ag-left .pane-body, .ag-right .pane-body { padding: 5px 12px; }
+.ag-left, .ag-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ag-left  { flex: 0 0 456px; padding-right: 16px; }
+.ag-right { flex: 1 1 auto; padding-left: 16px; gap: 8px; }
 
-.day + .day { margin-top: 2px; }
-.day-head { display: flex; align-items: center; gap: 8px; height: 26px; }
-.day-chip {
-  display: inline-flex; align-items: center; height: 26px; padding: 0 7px;
-  background: #000000; color: #FFFFFF;
-  font-size: 20px; font-weight: 700; letter-spacing: 0.02em;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
+.ag-head { display: flex; align-items: baseline; gap: 12px; height: 24px; margin-bottom: 8px; }
+.ag-date { font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* The route: all-day rows (hollow dot, calendar color), then the timed
+   route itself, a vertical scale from 06:00 to 24:00. Left to right: hour
+   numerals, hour ticks, one 4 px line per calendar with an event today,
+   then the label column (time in the calendar color, title in black). */
+.route-allday { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.route-allday-row { display: flex; align-items: center; gap: 8px; height: 22px; }
+.route-allday-dot {
+  width: 14px; height: 14px; border-radius: 50%; border-width: 2px; border-style: solid;
+  background: #FFFFFF; flex: 0 0 auto;
 }
-.day-label { font-size: 20px; font-weight: 700; letter-spacing: 0.04em; }
+.route-allday-title { font-size: 20px; font-weight: 500; }
 
-.ln { display: flex; align-items: center; gap: 8px; height: 27px; }
-/* Wide enough for ALL DAY, which must never wrap onto the line below it. */
-.ln-when { flex: 0 0 92px; font-size: 22px; font-weight: 700; white-space: nowrap; }
-/* A due line has no time, so its flag sits in the time column and the titles
-   below each other stay on one left edge. */
-.ln-mark { flex: 0 0 92px; font-size: 22px; text-align: right; padding-right: 10px; }
-.ln-mark-tight { flex: 0 0 28px; font-size: 22px; text-align: left; padding-right: 0; }
-.ln-title { flex: 1 1 auto; font-size: 24px; font-weight: 700; min-width: 0; }
-.day-empty { font-size: 24px; font-weight: 700; height: 27px; line-height: 27px; }
+.route-body { position: relative; }
+.route-hournum {
+  position: absolute; left: 0; width: 24px; text-align: right;
+  font-size: 16px; font-weight: 500; transform: translateY(-50%);
+}
+.route-tick { position: absolute; left: 30px; width: 8px; height: 2px; background: #000000; }
+.route-line { position: absolute; top: 0; bottom: 0; width: 4px; }
+.route-dot { position: absolute; width: 14px; height: 14px; border-radius: 50%; transform: translate(-50%, -50%); }
+.route-bar { position: absolute; width: 2px; background: #000000; }
+.route-label { position: absolute; left: 108px; font-size: 20px; white-space: nowrap; transform: translateY(-50%); }
+.route-label .t { font-weight: 700; }
+.route-label .n { font-weight: 500; color: #000000; max-width: 300px; display: inline-block; vertical-align: bottom; }
+.route-now { position: absolute; left: 46px; right: 0; height: 2px; background: #000000; }
+.route-now-label {
+  position: absolute; right: 0; font-size: 16px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; transform: translateY(-50%); background: #FFFFFF; padding-left: 4px;
+}
+.route-empty { position: absolute; left: 46px; font-size: 20px; font-weight: 500; transform: translateY(-50%); }
+
+/* Month grid: today inverted, a dot under any day with an event. */
+.month-weekdays { display: flex; }
+.month-weekdays span { width: 40px; text-align: center; font-size: 14px; font-weight: 700; text-transform: uppercase; }
+.month-row { display: flex; }
+.month-cell {
+  width: 40px; height: 22px; display: flex; flex-direction: column; align-items: center;
+  font-size: 16px; font-weight: 500; line-height: 16px; font-variant-numeric: tabular-nums;
+}
+.month-today { background: #000000; color: #FFFFFF; }
+.month-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+/* NEXT 7 DAYS: a fixed 06:00-22:00 busy bar per day, black is busy. */
+.next7-list { display: flex; flex-direction: column; }
+.next7-row { display: flex; align-items: center; gap: 8px; height: 24px; }
+.next7-label { flex: 0 0 64px; font-size: 16px; font-weight: 700; text-transform: uppercase; }
+.next7-bar { position: relative; flex: 1 1 auto; height: 14px; border: 2px solid #000000; background: #FFFFFF; }
+.next7-seg { position: absolute; top: 0; bottom: 0; background: #000000; }
+.next7-count { flex: 0 0 20px; font-size: 16px; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
 {% endblock %}
 
-{% macro day_block(day, lines) %}
-{% set events = day.events[:lines] %}
-{% set due = day.due[:lines - events|length] %}
-<div class="day">
-  <div class="day-head">
-    <span class="day-chip">{{ day.chip_label }}</span>
-    {% if day.head_label %}<span class="day-label">{{ day.head_label }}</span>{% endif %}
-  </div>
-  {% for event in events %}
-  <div class="ln">
-    <div class="ln-when num t-{{ event.color }}">{{ event.when }}</div>
-    <div class="ln-title clip">{{ event.title }}</div>
-  </div>
-  {% endfor %}
-  {% for task in due %}
-  <div class="ln">
-    <div class="ln-mark i t-red">{{ icons.FLAG }}</div>
-    <div class="ln-title clip">{{ task.title }}</div>
-  </div>
-  {% endfor %}
-  {% if day.empty %}
-  <div class="day-empty">Nothing scheduled</div>
-  {% endif %}
-</div>
-{% endmacro %}
-
 {% block content %}
-<div class="col ag-left br">
-  <section class="pane">
-    <div class="pane-title f-{{ title_accents.days }}">
-      <span class="i">{{ icons.CALENDAR }}</span><span>NEXT 4 DAYS</span>
+<div class="ag-left">
+  <div class="ag-head">
+    <span class="label">TODAY</span>
+    <span class="ag-date">{{ long_date }}</span>
+  </div>
+
+  {% if route.allday %}
+  <div class="route-allday">
+    {% for item in route.allday %}
+    <div class="route-allday-row">
+      <span class="route-allday-dot t-{{ item.color }}" style="border-color: currentColor;"></span>
+      <span class="route-allday-title clip">{{ item.title }}</span>
     </div>
-    <div class="pane-body">
-      {% for day in days[:4] %}{{ day_block(day, 3) }}{% endfor %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="route-body" style="height: {{ route.height_px }}px;">
+    {% for hour in route.hours %}
+    <div class="route-tick" style="top: {{ hour.pct }}%;"></div>
+    {% if hour.labeled %}
+    <div class="route-hournum" style="top: {{ hour.pct }}%;">{{ hour.label }}</div>
+    {% endif %}
+    {% endfor %}
+
+    {% for line in route.lines %}
+    <div class="route-line bar-{{ line.color }}" style="left: calc(46px + {{ line.x }}px);"></div>
+    {% endfor %}
+
+    {% for marker in route.markers %}
+    <div class="route-bar" style="left: calc(46px + {{ marker.x }}px + 1px); top: {{ marker.bar_top }}px; height: {{ marker.bar_height }}px;"></div>
+    <div class="route-dot bar-{{ marker.color }}" style="left: calc(46px + {{ marker.x }}px + 2px); top: {{ marker.dot_top }}px;"></div>
+    <div class="route-label" style="top: {{ marker.label_top }}px;">
+      <span class="t t-{{ marker.color }}">{{ marker.time }}</span> <span class="n clip">{{ marker.title }}</span>
     </div>
-  </section>
+    {% endfor %}
+
+    {% if route.empty %}
+    <div class="route-empty" style="top: {{ route.empty_top_px }}px;">Nothing scheduled</div>
+    {% endif %}
+
+    <div class="route-now" style="top: {{ route.now_pct }}%;"></div>
+    <div class="route-now-label" style="top: {{ route.now_pct }}%;">NOW</div>
+  </div>
 </div>
 
-<div class="col ag-right">
-  <section class="pane pane-then bb">
-    <div class="pane-title f-{{ title_accents.then }}">
-      <span class="i">{{ icons.CALENDAR_CLOCK }}</span><span>THEN</span>
-    </div>
-    <div class="pane-body">
-      {% for day in days[4:7] %}{{ day_block(day, 2) }}{% endfor %}
-    </div>
-  </section>
+<div class="rule-v"></div>
 
-  <section class="pane pane-over">
-    {% if overdue %}
-    <div class="pane-title f-red">
-      <span class="i">{{ icons.ALERT }}</span><span>OVERDUE</span>
-    </div>
-    <div class="pane-body">
-      {% for task in overdue[:1] %}
-      <div class="ln">
-        <div class="ln-mark ln-mark-tight i t-red">{{ icons.ALERT_CIRCLE }}</div>
-        <div class="ln-title clip">{{ task.title }}</div>
+<div class="ag-right">
+  <div class="label">{{ month.name }}</div>
+  <div class="month-weekdays"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+  <div class="month-grid">
+    {% for week in month.weeks %}
+    <div class="month-row">
+      {% for cell in week %}
+      {% if cell %}
+      <div class="month-cell{% if cell.is_today %} month-today{% endif %}">
+        <span class="num">{{ cell.number }}</span>
+        {% if cell.dot %}<span class="month-dot bar-{{ cell.dot }}"></span>{% endif %}
       </div>
+      {% else %}
+      <div class="month-cell"></div>
+      {% endif %}
       {% endfor %}
     </div>
-    {% else %}
-    <div class="pane-title f-green">
-      <span class="i">{{ icons.CHECK }}</span><span>NOTHING OVERDUE</span>
+    {% endfor %}
+  </div>
+
+  <div class="rule-h"></div>
+
+  <div class="label">NEXT 7 DAYS</div>
+  <div class="next7-list">
+    {% for row in next7 %}
+    <div class="next7-row">
+      <span class="next7-label">{{ row.label }}</span>
+      <div class="next7-bar">
+        {% for seg in row.segments %}
+        <div class="next7-seg" style="left: {{ seg.left }}%; width: {{ seg.width }}%;"></div>
+        {% endfor %}
+      </div>
+      <span class="next7-count num">{{ row.count or '' }}</span>
     </div>
-    <div class="pane-body">
-      {% if calendar_note or tasks_note %}
-      <div class="day-empty">{{ calendar_note }} {{ tasks_note }}</div>
-      {% endif %}
-    </div>
-    {% endif %}
-  </section>
+    {% endfor %}
+  </div>
 </div>
 {% endblock %}

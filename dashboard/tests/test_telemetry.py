@@ -420,9 +420,13 @@ def test_chart_points_stay_inside_the_plot_box() -> None:
     for label in chart.labels:
         assert 0.0 <= label.x <= chart.width
         assert 0.0 <= label.y <= chart.height
+    for leader in chart.leaders:
+        assert 0.0 <= leader.x1 <= chart.width and 0.0 <= leader.x2 <= chart.width
+        assert 0.0 <= leader.y1 <= chart.height and 0.0 <= leader.y2 <= chart.height
     assert any(label.text == "NOW" for label in chart.labels)
-    # Three clock ticks plus NOW, plus one range label per series.
-    assert len([label for label in chart.labels if label.color == "#000000"]) == 4
+    # Three clock ticks plus NOW, plus a min and a max annotation for
+    # temperature (humidity gets no point labels, only its line color).
+    assert len([label for label in chart.labels if label.color == "#000000"]) == 6
 
 
 def test_chart_breaks_the_line_where_a_reading_is_missing() -> None:
@@ -449,11 +453,37 @@ def test_chart_uses_only_panel_colors() -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     samples = load_device_fixture(FIXTURES_DIR / "device.json", now=now)
     chart = build_chart(bucket_points(samples), "Asia/Bangkok")
-    allowed = {"#FF0000", "#0000FF", "#000000"}
+    # Black temperature, blue humidity: the panel has no gray, so the two
+    # series are told apart by color alone, never red.
+    allowed = {"#0000FF", "#000000"}
     assert {series.color for series in chart.series} <= allowed
     assert {label.color for label in chart.labels} <= allowed
-    assert chart.series_stroke >= 4
-    assert chart.axis_stroke >= 3
+    assert chart.series_stroke >= 2
+    assert chart.axis_stroke >= 2
+
+
+def test_chart_annotates_temperature_min_and_max_inside_the_box() -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    samples = load_device_fixture(FIXTURES_DIR / "device.json", now=now)
+    chart = build_chart(bucket_points(samples), "Asia/Bangkok")
+    # One leader and one value label for the minimum, one for the maximum.
+    assert len(chart.leaders) == 2
+    for leader in chart.leaders:
+        assert 0.0 <= leader.x1 <= chart.width and 0.0 <= leader.x2 <= chart.width
+        assert 0.0 <= leader.y1 <= chart.height and 0.0 <= leader.y2 <= chart.height
+        # The leader actually leaves the point rather than sitting on it.
+        assert leader.y1 != leader.y2
+
+    numeric_labels = []
+    for label in chart.labels:
+        try:
+            numeric_labels.append(float(label.text))
+        except ValueError:
+            continue
+        assert 0.0 <= label.x <= chart.width
+        assert 0.0 <= label.y <= chart.height
+    assert len(numeric_labels) == 2
+    assert min(numeric_labels) < max(numeric_labels)
 
 
 # ---------------------------------------------------------------------------
@@ -473,8 +503,8 @@ def test_device_panel_without_a_device(device_settings: Settings) -> None:
         device_settings,
     )
     assert panel["available"] is False
-    assert panel["empty_label"] == "NO DEVICE DATA YET"
     assert panel["chart"].has_data is False
+    assert panel["chart"].note == "NO DEVICE DATA YET"
 
 
 def test_device_panel_separates_no_data_from_no_history(device_settings: Settings) -> None:
@@ -497,8 +527,8 @@ def test_device_panel_separates_no_data_from_no_history(device_settings: Setting
     )
     panel = device_panel(state, device_settings)
     assert panel["available"] is True
-    assert panel["temperature"] == "32.8"
-    assert panel["humidity"] == "54%"
+    assert panel["temperature_text"] == "32.8"
+    assert panel["humidity_text"] == "54"
     assert panel["chart"].has_data is False
     assert panel["chart"].note == "NOT ENOUGH HISTORY YET"
 
@@ -526,31 +556,31 @@ def test_device_panel_formats_battery_and_wifi(device_settings: Settings) -> Non
         )
     )
     panel = device_panel(state, device_settings)
-    assert panel["battery_percent"] == "12%"
-    assert panel["battery_fill"] == 12
-    assert panel["battery_accent"] == "red"
-    assert panel["wifi"] == "-84 dBm"
-    assert panel["wifi_accent"] == "red"
+    assert panel["battery_text"] == "12"
+    assert panel["battery_fraction"] == pytest.approx(0.12)
+    # 12 is above the 10 percent red floor, so this only warrants yellow.
+    assert panel["battery_accent"] == "yellow"
+    assert panel["wifi_text"] == "-84"
     # No reading is never drawn as a zero.
-    assert panel["temperature"] == "--"
-    assert panel["humidity"] == "--"
+    assert panel["temperature_text"] == "--"
+    assert panel["humidity_text"] == "--"
 
 
 def test_power_label_maps_the_three_named_states() -> None:
-    assert power_label(True, "charging") == ("ON USB, CHARGING", "green")
-    assert power_label(True, "charged") == ("ON USB, CHARGED", "green")
-    assert power_label(False, "charging") == ("ON BATTERY", "yellow")
-    assert power_label(False, None) == ("ON BATTERY", "yellow")
+    assert power_label(True, "charging") == "CHARGING"
+    assert power_label(True, "charged") == "USB"
+    assert power_label(False, "charging") == "BATTERY"
+    assert power_label(False, None) == "BATTERY"
 
 
 def test_power_label_is_nothing_when_it_cannot_be_determined() -> None:
     # Older firmware never sends usb_present at all.
-    assert power_label(None, None) == (None, None)
+    assert power_label(None, None) is None
     # usb_present true but the gauge itself doesn't know the charge state.
-    assert power_label(True, "unknown") == (None, None)
-    assert power_label(True, "pre_charge") == (None, None)
-    assert power_label(True, "not_charging") == (None, None)
-    assert power_label(True, None) == (None, None)
+    assert power_label(True, "unknown") is None
+    assert power_label(True, "pre_charge") is None
+    assert power_label(True, "not_charging") is None
+    assert power_label(True, None) is None
 
 
 def _device_state_with_power(
@@ -582,8 +612,7 @@ def test_device_panel_shows_the_power_label_on_usb(device_settings: Settings) ->
         )
     )
     panel = device_panel(state, device_settings)
-    assert panel["power_label"] == "ON USB, CHARGING"
-    assert panel["power_accent"] == "green"
+    assert panel["power_word"] == "CHARGING"
 
 
 def test_device_panel_shows_the_power_label_on_battery(device_settings: Settings) -> None:
@@ -602,8 +631,7 @@ def test_device_panel_shows_the_power_label_on_battery(device_settings: Settings
         )
     )
     panel = device_panel(state, device_settings)
-    assert panel["power_label"] == "ON BATTERY"
-    assert panel["power_accent"] == "yellow"
+    assert panel["power_word"] == "BATTERY"
 
 
 def test_device_panel_hides_the_power_label_when_unreported(device_settings: Settings) -> None:
@@ -622,8 +650,7 @@ def test_device_panel_hides_the_power_label_when_unreported(device_settings: Set
         )
     )
     panel = device_panel(state, device_settings)
-    assert panel["power_label"] is None
-    assert panel["power_accent"] is None
+    assert panel["power_word"] is None
 
 
 def test_system_page_drops_the_home_room_rows(settings: Settings, state: DashboardState) -> None:

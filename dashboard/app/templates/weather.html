@@ -1,139 +1,157 @@
 {% extends "base.html" %}
 
 {% block style %}
-.wx-left  { flex: 0 0 340px; width: 340px; }
-.wx-right { flex: 1 1 auto; }
-.pane-rain { flex: 0 0 107px; }
-.pane-air  { flex: 0 0 106px; }
-.pane-days { flex: 1 1 auto; }
+.no-data { font-size: 20px; font-weight: 500; }
 
-/* NOW */
-.now-glyph { font-size: 88px; line-height: 1; }
-.now-temp { font-size: 120px; font-weight: 700; line-height: 0.92; letter-spacing: -0.03em; margin-top: 6px; }
-.now-unit { font-size: 40px; font-weight: 700; vertical-align: super; letter-spacing: 0; }
-.now-feels { font-size: 22px; font-weight: 700; letter-spacing: 0.03em; margin-top: 10px; }
-.now-cond { font-size: 22px; font-weight: 700; letter-spacing: 0.05em; margin-top: 4px; }
+.wx-left, .wx-right { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.wx-left  { flex: 0 0 456px; padding-right: 16px; }
+.wx-right { flex: 1 1 auto; padding-left: 16px; }
 
-/* RAIN */
-.wx-right .pane-body { padding: 2px 12px; }
-.rain { display: flex; align-items: center; gap: 16px; }
-.rain-value { flex: 0 0 auto; font-size: 60px; font-weight: 700; line-height: 1; }
-.rain-side { flex: 1 1 auto; min-width: 0; }
-.rain-when { font-size: 24px; font-weight: 700; letter-spacing: 0.03em; line-height: 1.2; }
-.rain-hilo { font-size: 22px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.2; margin-top: 4px; }
+/* Hero: temperature, glyph, condition word and feels-like. */
+.wx-hero { display: flex; align-items: center; gap: 16px; height: 96px; }
+.wx-hero-temp { font-size: 96px; font-weight: 500; line-height: 1; }
+.wx-hero-unit { font-size: 32px; font-weight: 600; position: relative; top: -40px; margin-left: 2px; }
+.wx-hero-icon { font-size: 64px; }
+.wx-hero-stack { display: flex; flex-direction: column; gap: 6px; }
+.wx-hero-cond {
+  font-size: 20px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  display: flex; align-items: center; gap: 8px;
+}
+.wx-hero-feels { font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.wx-hero-hatch { width: 64px; height: 36px; }
 
-/* AIR */
-.air { display: flex; height: 100%; }
-.air-cell { flex: 1 1 0; min-width: 0; padding: 0 5px; border-right: 3px solid #000000; }
-.air-cell:last-child { border-right: none; padding-right: 0; }
-.air-cell:first-child { padding-left: 0; }
-.air-top { display: flex; align-items: baseline; gap: 4px; }
-.air-top .i { font-size: 24px; }
-.air-value { font-size: 34px; font-weight: 700; line-height: 1; }
-.air-label { font-size: 20px; font-weight: 700; letter-spacing: 0; line-height: 1; }
-.air-bar { height: 8px; margin-top: 4px; }
+/* The four small readings under the hero. */
+.wx-readings { display: flex; justify-content: space-between; }
+.wx-reading-cell { display: flex; flex-direction: column; gap: 4px; }
+.wx-reading-label { display: flex; align-items: center; gap: 6px; }
 
-/* 5 DAYS */
-.days { display: flex; height: 100%; }
-.day-col { flex: 1 1 0; min-width: 0; padding: 0 5px; border-right: 3px solid #000000; }
-.day-col:last-child { border-right: none; padding-right: 0; }
-.day-col:first-child { padding-left: 0; }
-/* The column inner width is about 73 px, so relative day names live only
-   where there is room: TODAY fits here, TOMORROW does not and stays on the
-   agenda. Everything else is a weekday. */
-.dc-label { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.1; }
-.dc-date { font-size: 20px; font-weight: 700; letter-spacing: 0; line-height: 1.1; }
-.dc-high { font-size: 30px; font-weight: 700; line-height: 1; }
-/* LOW 26 wraps to two lines in a 73 px column unless it is told not to. */
-.dc-low { font-size: 20px; font-weight: 700; line-height: 1.1; white-space: nowrap; }
-/* No umbrella here: at 20 px the glyph quantizes into something that reads as
-   an arrow. The blue percentage already says rain is likely. */
-.dc-rain { font-size: 20px; font-weight: 700; line-height: 1.1; }
+/* Next hours: one plate per hour, the bar the fixed 56 px scale, the percent
+   riding on top of its own bar (its bottom edge always 4 px above the bar's
+   current top, so the number's position itself encodes the value, not just
+   the bar), the hour label below the shared baseline as its axis. */
+.wx-hours-head { display: flex; align-items: baseline; gap: 12px; }
+.wx-hours-span { font-size: 16px; font-weight: 500; text-transform: uppercase; }
+.wx-plates { position: relative; display: flex; }
+.wx-plate { width: 64px; display: flex; flex-direction: column; align-items: center; }
+.wx-plate-scale { position: relative; width: 100%; height: 56px; }
+.wx-plate-bar {
+  position: absolute; left: 50%; bottom: 0; width: 16px; transform: translateX(-50%);
+  border: 2px solid #000000; box-sizing: border-box; background: #FFFFFF;
+}
+.wx-plate-fill { background: #0000FF; border-color: #0000FF; }
+.wx-plate-pct {
+  position: absolute; left: 0; right: 0; text-align: center;
+  font-size: 16px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.wx-baseline { position: absolute; left: 0; right: 0; top: 56px; height: 2px; background: #000000; }
+.wx-plate-hour {
+  margin-top: 4px; font-size: 16px; font-weight: 700; text-transform: uppercase;
+}
 
-.wx-none { font-size: 32px; font-weight: 700; letter-spacing: 0.02em; }
+/* 7 DAYS: fixed-scale rain plates so rows compare by position. */
+.wx-days { display: flex; flex-direction: column; }
+.wx-day-row { display: flex; align-items: center; gap: 10px; height: 44px; }
+.wx-day-label { flex: 0 0 64px; font-size: 16px; font-weight: 700; text-transform: uppercase; }
+.wx-day-icon { font-size: 24px; flex: 0 0 auto; }
+.wx-day-high { font-size: 24px; font-weight: 600; flex: 0 0 34px; font-variant-numeric: tabular-nums; }
+.wx-day-low { font-size: 20px; font-weight: 500; flex: 0 0 30px; font-variant-numeric: tabular-nums; }
+.wx-day-rain { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.wx-rain-bar { position: relative; width: 72px; height: 10px; border: 2px solid #000000; }
+.wx-rain-fill { position: absolute; top: 0; left: 0; bottom: 0; background: #000000; }
+.wx-rain-fill-blue { background: #0000FF; }
+.wx-rain-pct { font-size: 16px; font-weight: 500; width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
 {% endblock %}
 
 {% block content %}
-{% if weather %}
-<div class="col wx-left br">
-  <section class="pane">
-    <div class="pane-title f-{{ title_accents.now }}">
-      <span class="i">{{ condition_icon }}</span><span>NOW</span>
+<div class="wx-left">
+  <div class="wx-hero">
+    {% if hero.available %}
+    <span class="wx-hero-temp num">{{ hero.temp }}<span class="wx-hero-unit">C</span></span>
+    <span class="i wx-hero-icon">{{ hero.icon }}</span>
+    <div class="wx-hero-stack">
+      <span class="wx-hero-cond">
+        {% if hero.dot %}<span class="telltale {{ hero.dot }}"></span>{% endif %}{{ hero.condition }}
+      </span>
+      <span class="wx-hero-feels num">FEELS {{ hero.feels }}</span>
     </div>
-    <div class="pane-body">
-      <div class="now-glyph i">{{ condition_icon }}</div>
-      <div class="now-temp num">{{ temp }}<span class="now-unit">C</span></div>
-      <div class="now-feels num">FEELS LIKE {{ feels }}</div>
-      <div class="now-cond clip">{{ condition }}</div>
-    </div>
-  </section>
-</div>
+    {% else %}
+    <span class="hatch wx-hero-hatch"></span>
+    <span class="wx-hero-cond">UNAVAILABLE</span>
+    {% endif %}
+  </div>
 
-<div class="col wx-right">
-  <section class="pane pane-rain bb">
-    <div class="pane-title f-{{ title_accents.rain }}">
-      <span class="i">{{ icons.UMBRELLA }}</span><span>RAIN</span>
-    </div>
-    <div class="pane-body">
-      <div class="rain">
-        <div class="rain-value num {% if rain_accent == 'blue' %}t-blue{% endif %}">{{ rain_probability }}</div>
-        <div class="rain-side">
-          <div class="rain-when num">{{ rain_timing }}</div>
-          <div class="rain-hilo num">HIGH {{ high }} &nbsp; LOW {{ low }}</div>
-        </div>
+  <div class="wx-readings">
+    {% for reading in readings %}
+    <div class="wx-reading-cell">
+      {% if reading.value is not none %}
+      <span class="reading reading-32"><span class="num">{{ reading.value }}</span></span>
+      {% else %}
+      <div class="hatch" style="width: 40px; height: 20px;"></div>
+      {% endif %}
+      <div class="label wx-reading-label">
+        {% if reading.dot %}<span class="telltale {{ reading.dot }}"></span>{% endif %}{{ reading.label }}
       </div>
     </div>
-  </section>
+    {% endfor %}
+  </div>
 
-  <section class="pane pane-air bb">
-    <div class="pane-title f-{{ title_accents.air }}">
-      <span class="i">{{ icons.GAUGE }}</span><span>AIR</span>
+  <div class="rule-h"></div>
+
+  <div class="wx-hours-head">
+    <span class="label">NEXT HOURS</span>
+    {% if hourly_span %}<span class="wx-hours-span">{{ hourly_span }}</span>{% endif %}
+  </div>
+  {% if hourly %}
+  <div class="wx-plates">
+    <div class="wx-baseline"></div>
+    {% for plate in hourly %}
+    <div class="wx-plate">
+      <div class="wx-plate-scale">
+        <span class="wx-plate-pct num" style="bottom: calc({{ plate.percent }}% + 4px);">{{ plate.percent }}%</span>
+        <div class="wx-plate-bar{% if plate.fill %} wx-plate-fill{% endif %}" style="height: {{ plate.percent }}%;"></div>
+      </div>
+      <span class="wx-plate-hour">{{ plate.hour }}</span>
     </div>
-    <div class="pane-body">
-      <div class="air">
-        {% for metric in metrics %}
-        <div class="air-cell">
-          <div class="air-top">
-            <span class="i">{{ metric.icon }}</span>
-            <span class="air-value num">{{ metric.value }}</span>
-          </div>
-          <div class="air-label clip">{{ metric.label }}</div>
-          <div class="air-bar bar-{{ metric.accent }}"></div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="no-data">No hourly forecast</div>
+  {% endif %}
+</div>
+
+<div class="rule-v"></div>
+
+<div class="wx-right">
+  <div class="label">7 DAYS</div>
+  <div class="wx-days">
+    {% for day in daily %}
+    <div class="wx-day-row">
+      <span class="wx-day-label">{{ day.label }}</span>
+      <span class="i wx-day-icon">{{ day.icon }}</span>
+      {% if day.high is not none %}
+      <span class="wx-day-high num">{{ day.high }}</span>
+      {% else %}
+      <div class="hatch" style="width: 32px; height: 20px;"></div>
+      {% endif %}
+      {% if day.low is not none %}
+      <span class="wx-day-low num">{{ day.low }}</span>
+      {% else %}
+      <div class="hatch" style="width: 26px; height: 16px;"></div>
+      {% endif %}
+      <div class="wx-day-rain">
+        <div class="wx-rain-bar">
+          {% if day.rain_percent is not none %}
+          <div class="wx-rain-fill{% if day.rain_fill %} wx-rain-fill-blue{% endif %}" style="width: {{ day.rain_percent }}%;"></div>
+          {% endif %}
         </div>
-        {% endfor %}
+        {% if day.rain_percent is not none %}
+        <span class="wx-rain-pct num">{{ day.rain_percent }}%</span>
+        {% else %}
+        <div class="hatch" style="width: 28px; height: 16px;"></div>
+        {% endif %}
       </div>
     </div>
-  </section>
-
-  <section class="pane pane-days">
-    <div class="pane-title f-{{ title_accents.days }}">
-      <span class="i">{{ icons.CALENDAR }}</span><span>5 DAYS</span>
-    </div>
-    <div class="pane-body">
-      <div class="days">
-        {% for day in daily %}
-        <div class="day-col">
-          <div class="dc-label clip">{{ day.label }}</div>
-          <div class="dc-date num">{{ day.date_label }}</div>
-          <div class="dc-high num">{{ day.high }}</div>
-          <div class="dc-low num">LOW {{ day.low }}</div>
-          <div class="dc-rain num {% if day.accent == 'blue' %}t-blue{% endif %}">{{ day.rain }}</div>
-        </div>
-        {% endfor %}
-      </div>
-    </div>
-  </section>
+    {% endfor %}
+  </div>
 </div>
-{% else %}
-<div class="col" style="flex: 1 1 auto;">
-  <section class="pane">
-    <div class="pane-title f-{{ title_accents.weather }}">
-      <span class="i">{{ icons.WEATHER_PARTLY_CLOUDY }}</span><span>WEATHER</span>
-    </div>
-    <div class="pane-body">
-      <div class="wx-none">{{ weather_note or "unavailable" }}</div>
-    </div>
-  </section>
-</div>
-{% endif %}
 {% endblock %}

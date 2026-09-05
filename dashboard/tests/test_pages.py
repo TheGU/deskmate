@@ -91,9 +91,13 @@ def test_rendering_is_deterministic(
 def test_system_page_draws_the_device_chart(renderer: Renderer, state: DashboardState) -> None:
     html = renderer.render_html("system", state, embed_fonts=False)
     assert "<polyline" in html
-    assert 'stroke="#FF0000"' in html and 'stroke="#0000FF"' in html
+    # Black temperature, blue humidity: the panel has no gray, so the two
+    # series are told apart by color alone, never red.
+    assert 'stroke="#000000"' in html and 'stroke="#0000FF"' in html
     assert ">NOW<" in html
     assert "NO DEVICE DATA YET" not in html
+    # The min and max temperature annotations, each with their own leader.
+    assert "<line " in html
 
 
 def test_system_page_without_device_data_is_still_clean(
@@ -146,7 +150,7 @@ def test_system_page_shows_power_on_usb_and_stays_palette_clean(
         update={"device": _device_block_with_power(True, "charging")}
     )
     html = renderer.render_html("system", charging, embed_fonts=False)
-    assert "ON USB, CHARGING" in html
+    assert 'class="sys-power-word">CHARGING<' in html
 
     image = open_png(run(renderer.render_png("system", charging)))
     assert image.size == DISPLAY_SIZE
@@ -161,7 +165,7 @@ def test_system_page_shows_power_on_battery_and_stays_palette_clean(
         update={"device": _device_block_with_power(False, "not_charging")}
     )
     html = renderer.render_html("system", on_battery, embed_fonts=False)
-    assert "ON BATTERY" in html
+    assert 'class="sys-power-word">BATTERY<' in html
 
     image = open_png(run(renderer.render_png("system", on_battery)))
     assert image.size == DISPLAY_SIZE
@@ -174,8 +178,7 @@ def test_system_page_hides_power_row_when_unreported(
 ) -> None:
     unreported = state.model_copy(update={"device": _device_block_with_power(None, None)})
     html = renderer.render_html("system", unreported, embed_fonts=False)
-    assert "ON USB" not in html
-    assert "ON BATTERY" not in html
+    assert '<div class="sys-power-word">' not in html
 
 
 #: Measured in the rendered document: does the header's right cluster (the
@@ -288,6 +291,57 @@ def test_today_has_no_element_overflowing_the_800x480_box(
     renderer: Renderer, state: DashboardState
 ) -> None:
     overflow = run(renderer.probe("today", _widest_header_state(state), _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_agenda_has_no_element_overflowing_the_800x480_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    overflow = run(renderer.probe("agenda", _widest_header_state(state), _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_weather_has_no_element_overflowing_the_800x480_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    overflow = run(renderer.probe("weather", _widest_header_state(state), _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_brief_has_no_element_overflowing_the_800x480_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    overflow = run(renderer.probe("brief", _widest_header_state(state), _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_system_has_no_element_overflowing_the_800x480_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    overflow = run(renderer.probe("system", _widest_header_state(state), _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_system_without_device_data_has_no_element_overflowing_the_800x480_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    blank = _widest_header_state(state).model_copy(
+        update={
+            "device": DeviceBlock(
+                status=AdapterStatus.UNAVAILABLE,
+                source="store",
+                error="the device has not posted any telemetry yet",
+            )
+        }
+    )
+    overflow = run(renderer.probe("system", blank, _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_alert_has_no_element_overflowing_the_800x480_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    overflow = run(renderer.probe("alert", _widest_header_state(state), _VIEWPORT_OVERFLOW))
     assert overflow == [], overflow
 
 

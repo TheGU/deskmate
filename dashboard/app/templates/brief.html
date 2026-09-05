@@ -1,80 +1,108 @@
 {% extends "base.html" %}
 
 {% block style %}
-.brief { flex: 1 1 auto; min-width: 0; }
-/* The headline is the page's own voice, so it takes a pane with no title bar
-   rather than a band with a label above it. */
-.brief-head {
-  flex: 0 0 52px; height: 52px;
-  display: flex; align-items: center;
-  padding: 0 12px;
-  font-size: 28px; font-weight: 700; line-height: 1.2; letter-spacing: 0.01em;
-  overflow: hidden;
+.brief-cols { flex: 1 1 auto; display: flex; min-height: 0; overflow: hidden; }
+
+.brief-left {
+  flex: 0 0 456px; display: flex; flex-direction: column; min-height: 0;
+  padding-right: 16px; overflow: hidden;
 }
-.brief-row { display: flex; min-height: 0; }
-.brief-row-1 { flex: 0 0 164px; }
-.brief-row-2 { flex: 1 1 auto; }
-.brief-row > .pane { flex: 1 1 0; }
-.brief .pane-title { letter-spacing: 0.04em; }
-.brief .pane-body { padding: 5px 12px; }
+.brief-right {
+  flex: 0 0 296px; display: flex; flex-direction: column; min-height: 0;
+  padding-left: 16px; overflow: hidden;
+}
 
-.bullet { display: flex; gap: 6px; font-size: 24px; font-weight: 700; line-height: 1.15; }
-.bullet + .bullet { margin-top: 2px; }
-.bullet .i { flex: 0 0 22px; font-size: 22px; line-height: 1.15; }
-.bullet-text { flex: 1 1 auto; min-width: 0; }
+/* Left: mode + generated time, headline, rule, running-text body. */
+.brief-topline { flex: 0 0 24px; height: 24px; display: flex; align-items: center; justify-content: space-between; }
+.brief-headline {
+  flex: 0 0 76px; height: 76px; margin-top: 4px;
+  font-size: 28px; font-weight: 600; line-height: 1.35;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.brief-rule { margin: 9px 0; }
+.brief-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
-.brief-none { font-size: 32px; font-weight: 700; }
+.brief-row { flex: 0 0 26px; height: 26px; display: flex; align-items: center; gap: 8px; overflow: hidden; }
+.brief-row-header .label { line-height: 1; }
+.brief-row-item { font-size: 20px; font-weight: 500; }
+.brief-bullet { width: 12px; height: 12px; background: #000000; flex: 0 0 auto; }
+.brief-row-item .brief-text { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.brief-unavailable { display: flex; flex-direction: column; gap: 10px; }
+.brief-unavailable .hatch { width: 40px; height: 20px; }
+.brief-unavailable-line { font-size: 20px; font-weight: 500; }
+
+/* Right: task list, same due-state chip grammar as Today. */
+.brief-tasks-head { flex: 0 0 24px; height: 24px; display: flex; align-items: baseline; gap: 8px; }
+.brief-task-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; margin-top: 4px; }
+.brief-task-row { flex: 0 0 32px; height: 32px; display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; }
+.brief-task-title { flex: 1 1 auto; min-width: 0; }
+.brief-none { font-size: 20px; font-weight: 500; margin-top: 4px; }
+.brief-tasks .chip { border: none; padding: 2px 6px 3px; font-size: 16px; font-weight: 700; line-height: 1.1; }
 {% endblock %}
 
 {% block content %}
-{% if sections %}
-<div class="col brief">
-  <div class="brief-head bb clip">{{ headline }}</div>
-  <div class="brief-row brief-row-1 bb">
-    {% for section in sections[:2] %}
-    <section class="pane{% if loop.first %} br{% endif %}">
-      <div class="pane-title f-{{ section.accent }}">
-        <span class="i">{{ section.icon }}</span><span class="clip">{{ section.title }}</span>
-      </div>
-      <div class="pane-body">
-        {% for line in section.lines[:2] %}
-        <div class="bullet">
-          <span class="i">{{ icons.CHEVRON_RIGHT }}</span>
-          <span class="bullet-text clamp2">{{ line }}</span>
+<div class="brief-cols">
+  <div class="brief-left">
+    {% if brief_available %}
+    <div class="brief-topline">
+      <span class="label">{{ mode_label }}</span>
+      <span class="chip-plain">{{ generated_label }}</span>
+    </div>
+    <div class="brief-headline">{{ headline }}</div>
+    <div class="rule-h brief-rule"></div>
+    <div class="brief-body">
+      {% for line in lines %}
+        {% if line.kind == 'header' %}
+        <div class="brief-row brief-row-header">
+          {% if line.risk %}<span class="telltale red"></span>{% endif %}
+          <span class="label clip">{{ line.title }}</span>
         </div>
-        {% endfor %}
-      </div>
-    </section>
-    {% endfor %}
+        {% else %}
+        <div class="brief-row brief-row-item">
+          <span class="brief-bullet"></span>
+          <span class="brief-text">{{ line.text }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="brief-unavailable">
+      <span class="label">BRIEF</span>
+      <div class="hatch"></div>
+      <div class="brief-unavailable-line">{{ unavailable_message }}</div>
+    </div>
+    {% endif %}
   </div>
-  <div class="brief-row brief-row-2">
-    {% for section in sections[2:4] %}
-    <section class="pane{% if loop.first %} br{% endif %}">
-      <div class="pane-title f-{{ section.accent }}">
-        <span class="i">{{ section.icon }}</span><span class="clip">{{ section.title }}</span>
+
+  <div class="rule-v"></div>
+
+  <div class="brief-right brief-tasks">
+    <div class="brief-tasks-head">
+      <span class="label">TASKS</span>
+      <span class="chip-plain">{{ tasks_open_count }} OPEN</span>
+    </div>
+    {% if tasks %}
+    <div class="brief-task-list">
+      {% for task in tasks %}
+      <div class="brief-task-row">
+        <span class="i">{{ icons.CHECKBOX_BLANK }}</span>
+        <span class="brief-task-title clip">{{ task.title }}</span>
+        {% if task.due_label %}
+          {% if task.accent == 'red' %}
+          <span class="chip chip-red"><span class="i">{{ icons.FLAG }}</span>{{ task.due_label }}</span>
+          {% elif task.accent == 'yellow' %}
+          <span class="chip chip-yellow">{{ task.due_label }}</span>
+          {% else %}
+          <span class="chip-plain">{{ task.due_label }}</span>
+          {% endif %}
+        {% endif %}
       </div>
-      <div class="pane-body">
-        {% for line in section.lines[:2] %}
-        <div class="bullet">
-          <span class="i">{{ icons.CHEVRON_RIGHT }}</span>
-          <span class="bullet-text clamp2">{{ line }}</span>
-        </div>
-        {% endfor %}
-      </div>
-    </section>
-    {% endfor %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="brief-none">No open tasks</div>
+    {% endif %}
   </div>
 </div>
-{% else %}
-<div class="col brief">
-  <section class="pane">
-    <div class="pane-title f-{{ title_accents.brief }}">
-      <span class="i">{{ icons.ROBOT }}</span><span>AI BRIEF</span>
-    </div>
-    <div class="pane-body">
-      <div class="brief-none">{{ headline }}</div>
-    </div>
-  </section>
-</div>
-{% endif %}
 {% endblock %}

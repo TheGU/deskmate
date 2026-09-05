@@ -2,12 +2,15 @@
 
 All the arithmetic lives here so the template stays a dumb list of shapes:
 :func:`build_chart` returns polyline point strings and pre-positioned labels,
-and ``system.html`` only pastes them into ``<polyline>`` and ``<text>``.
+and ``system.html`` only pastes them into ``<polyline>``, ``<line>`` and
+``<text>``.
 
-The chart has to survive quantization to six colors, so it is built from thick
-pure primaries on white: 4 px red for temperature, 4 px blue for humidity,
-3 px black axes. No gridlines, no gray, no gradients, nothing thinner than
-3 px, because anything lighter turns into noise on the panel.
+The panel has no gray, so both series are told apart by color alone: black
+for temperature, blue for humidity. There is no legend box; the page prints a
+one-line key under the chart instead. Temperature's minimum and maximum are
+called out at their own points with a short leader line and the value,
+because a reader can find "how hot did it get" faster from a number at the
+peak than from scanning the whole curve.
 """
 
 from __future__ import annotations
@@ -20,31 +23,36 @@ from app.models import DevicePoint
 from app.timeutil import to_local
 
 #: Pure panel primaries. See docs/ARCHITECTURE.md.
-RED: Final[str] = "#FF0000"
-BLUE: Final[str] = "#0000FF"
 BLACK: Final[str] = "#000000"
+BLUE: Final[str] = "#0000FF"
 WHITE: Final[str] = "#FFFFFF"
 
-CHART_WIDTH: Final[int] = 344
-CHART_HEIGHT: Final[int] = 170
+#: Sized to sit under the "24 H" label and above the one-line color key in the
+#: system page's left column (296 px wide, 170 px tall bottom row).
+CHART_WIDTH: Final[int] = 280
+CHART_HEIGHT: Final[int] = 118
 
-#: Room left of the plot for nothing at all; the value labels sit above it.
-PLOT_LEFT: Final[float] = 7.0
-PLOT_RIGHT: Final[float] = CHART_WIDTH - 7.0
-PLOT_TOP: Final[float] = 30.0
-PLOT_BOTTOM: Final[float] = CHART_HEIGHT - 34.0
+PLOT_LEFT: Final[float] = 8.0
+PLOT_RIGHT: Final[float] = CHART_WIDTH - 8.0
+#: Top and bottom margins leave room for the temperature extreme labels
+#: (drawn outside the plot box, above the max and below the min) and, at the
+#: bottom, the hour tick labels underneath those.
+PLOT_TOP: Final[float] = 28.0
+PLOT_BOTTOM: Final[float] = 68.0
 
-SERIES_STROKE: Final[int] = 4
-AXIS_STROKE: Final[int] = 3
-#: The page floor: nothing on the panel is drawn below 20 px.
-LABEL_SIZE: Final[int] = 20
-#: The page stack, unquoted because an SVG presentation attribute takes a bare
-#: font family list. Google Sans carries Latin and Thai in one file.
+SERIES_STROKE: Final[int] = 2
+AXIS_STROKE: Final[int] = 2
+#: The page floor: nothing on the panel is drawn below 16 px.
+LABEL_SIZE: Final[int] = 16
 LABEL_FONT: Final[str] = "Google Sans, sans-serif"
-TICK_SIZE: Final[int] = 20
-#: Baselines for the two text rows.
-VALUE_BASELINE: Final[float] = 19.0
-TICK_BASELINE: Final[float] = CHART_HEIGHT - 8.0
+TICK_SIZE: Final[int] = 16
+TICK_BASELINE: Final[float] = CHART_HEIGHT - 4.0
+
+#: Length of the leader line from a temperature extreme point to its label.
+LEADER_LEN: Final[float] = 8.0
+#: A label within this many px of the plot edge anchors from that edge
+#: instead of centering on the point, so it never runs off the chart.
+EDGE_MARGIN: Final[float] = 34.0
 
 #: Smallest span each axis is stretched to, so a flat day is not amplified
 #: into a mountain range by autoscaling.
@@ -62,6 +70,17 @@ class ChartText:
     color: str
     anchor: str = "start"
     size: int = LABEL_SIZE
+
+
+@dataclass(frozen=True, slots=True)
+class ChartLeader:
+    """One short straight line from a data point to its annotation."""
+
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    color: str = BLACK
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +108,7 @@ class Chart:
     label_font: str = LABEL_FONT
     series: list[ChartSeries] = field(default_factory=list)
     labels: list[ChartText] = field(default_factory=list)
+    leaders: list[ChartLeader] = field(default_factory=list)
     has_data: bool = False
     #: Shown instead of the plot when there is nothing honest to draw.
     note: str = "NO DEVICE DATA YET"
@@ -103,6 +123,18 @@ def _extent(values: Sequence[float], minimum_span: float) -> tuple[float, float]
     return low, high
 
 
+Coord = tuple[float, float]
+
+
+def _xy(at: datetime, value: float, start: datetime, span_seconds: float, low: float, high: float) -> Coord:
+    plot_width = PLOT_RIGHT - PLOT_LEFT
+    plot_height = PLOT_BOTTOM - PLOT_TOP
+    ratio = (at - start).total_seconds() / span_seconds
+    x = PLOT_LEFT + max(0.0, min(1.0, ratio)) * plot_width
+    y = PLOT_BOTTOM - ((value - low) / (high - low)) * plot_height
+    return x, y
+
+
 def _segments(
     points: Sequence[DevicePoint],
     reader: str,
@@ -112,9 +144,6 @@ def _segments(
     high: float,
 ) -> list[str]:
     """Polyline segments for one field, split wherever a reading is missing."""
-    plot_width = PLOT_RIGHT - PLOT_LEFT
-    plot_height = PLOT_BOTTOM - PLOT_TOP
-    value_span = high - low
     segments: list[str] = []
     current: list[str] = []
     for point in points:
@@ -124,13 +153,40 @@ def _segments(
                 segments.append(" ".join(current))
             current = []
             continue
-        ratio = (point.at - start).total_seconds() / span_seconds
-        x = PLOT_LEFT + max(0.0, min(1.0, ratio)) * plot_width
-        y = PLOT_BOTTOM - ((value - low) / value_span) * plot_height
+        x, y = _xy(point.at, value, start, span_seconds, low, high)
         current.append(f"{x:.1f},{y:.1f}")
     if len(current) > 1:
         segments.append(" ".join(current))
     return segments
+
+
+def _extreme_anchor(x: float) -> str:
+    """Which edge a label at ``x`` should hang from, so it stays on the chart."""
+    if x <= PLOT_LEFT + EDGE_MARGIN:
+        return "start"
+    if x >= PLOT_RIGHT - EDGE_MARGIN:
+        return "end"
+    return "middle"
+
+
+def _annotate_extreme(x: float, y: float, value: float, *, upward: bool) -> tuple[ChartLeader, ChartText]:
+    """A leader line and value label for one temperature extreme point.
+
+    The maximum always renders at ``y == PLOT_TOP`` and the minimum always at
+    ``y == PLOT_BOTTOM`` (the axis is scaled to the data's own extent), so the
+    leader only ever needs to run outward into the margin reserved for it,
+    never across the line itself.
+    """
+    anchor = _extreme_anchor(x)
+    if upward:
+        tip_y = y - LEADER_LEN
+        text_y = tip_y - 4.0
+    else:
+        tip_y = y + LEADER_LEN
+        text_y = tip_y + LABEL_SIZE - 2.0
+    leader = ChartLeader(x1=x, y1=y, x2=x, y2=tip_y, color=BLACK)
+    label = ChartText(x=x, y=text_y, text=f"{value:.1f}", color=BLACK, anchor=anchor, size=LABEL_SIZE)
+    return leader, label
 
 
 def _tick_times(start: datetime, end: datetime) -> list[datetime]:
@@ -171,25 +227,36 @@ def build_chart(
 
     series: list[ChartSeries] = []
     labels: list[ChartText] = []
+    leaders: list[ChartLeader] = []
 
     if len(temperatures) >= 2:
         low, high = _extent(temperatures, MIN_TEMPERATURE_SPAN)
         series.append(
             ChartSeries(
                 key="temperature",
-                color=RED,
+                color=BLACK,
                 segments=_segments(usable, "temperature", start, span_seconds, low, high),
             )
         )
-        labels.append(
-            ChartText(
-                x=PLOT_LEFT,
-                y=VALUE_BASELINE,
-                text=f"{min(temperatures):.1f} TO {max(temperatures):.1f} C",
-                color=RED,
-                anchor="start",
-            )
+        # First occurrence of the min and the max: the axis is scaled to
+        # exactly this range, so the two points land on the top and bottom
+        # plot edges and their leaders never have to cross the line.
+        min_point = min(
+            ((p.at, p.temperature) for p in usable if p.temperature is not None),
+            key=lambda item: item[1],
         )
+        max_point = max(
+            ((p.at, p.temperature) for p in usable if p.temperature is not None),
+            key=lambda item: item[1],
+        )
+        max_x, max_y = _xy(max_point[0], max_point[1], start, span_seconds, low, high)
+        min_x, min_y = _xy(min_point[0], min_point[1], start, span_seconds, low, high)
+        leader, label = _annotate_extreme(max_x, max_y, max_point[1], upward=True)
+        leaders.append(leader)
+        labels.append(label)
+        leader, label = _annotate_extreme(min_x, min_y, min_point[1], upward=False)
+        leaders.append(leader)
+        labels.append(label)
     if len(humidities) >= 2:
         low, high = _extent(humidities, MIN_HUMIDITY_SPAN)
         series.append(
@@ -197,15 +264,6 @@ def build_chart(
                 key="humidity",
                 color=BLUE,
                 segments=_segments(usable, "humidity", start, span_seconds, low, high),
-            )
-        )
-        labels.append(
-            ChartText(
-                x=PLOT_RIGHT,
-                y=VALUE_BASELINE,
-                text=f"{min(humidities):.0f} TO {max(humidities):.0f}%",
-                color=BLUE,
-                anchor="end",
             )
         )
 
@@ -243,7 +301,7 @@ def build_chart(
         )
     )
 
-    return Chart(series=series, labels=labels, has_data=True, note=note)
+    return Chart(series=series, labels=labels, leaders=leaders, has_data=True, note=note)
 
 
-__all__ = ["Chart", "ChartSeries", "ChartText", "build_chart"]
+__all__ = ["Chart", "ChartLeader", "ChartSeries", "ChartText", "build_chart"]

@@ -13,27 +13,21 @@
 .pri-mark { font-size: 24px; flex: 0 0 auto; }
 .pri-title { flex: 1 1 auto; font-size: 24px; font-weight: 500; }
 
-/* The day scale: a line, hour ticks, the NOW pointer, event dots and their
-   time/title labels underneath. Positions arrive as percentages already
-   computed in view.py; only the fixed vertical offsets live here. */
-.scale { height: 104px; }
-.scale-line { top: 14px; }
-.scale-tick { top: 15px; }
-.scale-tick-num { top: 35px; }
-.scale-now { top: 2px; }
-.scale-dot { top: 15px; }
+/* The agenda: one line per upcoming event, a fixed time column then the
+   title. As many rows as the space below priorities holds; see
+   AGENDA_ROW_LIMIT in view.py for the measured count. */
+.agenda-list { display: flex; flex-direction: column; }
+.agenda-row { display: flex; align-items: center; height: 36px; flex: 0 0 36px; font-size: 24px; font-weight: 500; }
+.agenda-time { flex: 0 0 132px; font-weight: 700; }
+.agenda-title { flex: 1 1 auto; }
 
-.next-list { display: flex; flex-direction: column; gap: 2px; }
-.next-row { display: flex; align-items: baseline; gap: 8px; font-size: 20px; height: 24px; }
-.next-when { font-weight: 700; flex: 0 0 auto; white-space: nowrap; }
-.next-title { flex: 1 1 auto; font-weight: 500; }
-
-/* AI capacity: one block per provider, two readings side by side. */
+/* AI capacity: one block per provider, two readings side by side, the
+   percent numeral above its own RESET caption and meter. */
 .providers-list { display: flex; flex-direction: column; gap: 10px; }
 .prov-block { display: flex; flex-direction: column; gap: 4px; }
 .prov-windows { display: flex; gap: 24px; }
 .prov-col { display: flex; flex-direction: column; gap: 4px; }
-.unit-only { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
+.pct-sign { font-size: 20px; font-weight: 600; position: relative; top: -9px; margin-left: 1px; }
 
 .note-text {
   font-size: 22px; font-weight: 500; line-height: 1.3;
@@ -69,33 +63,18 @@
 
   <div class="rule-h"></div>
 
-  <div class="label">TODAY</div>
-  <div class="scale">
-    <div class="scale-line"></div>
-    {% for hour in scale.hours %}
-    <div class="scale-tick {{ 'scale-tick-tall' if hour.tall else 'scale-tick-short' }}" style="left: {{ hour.pct }}%;"></div>
-    {% if hour.tall %}
-    <div class="scale-tick-num" style="left: {{ hour.pct }}%;">{{ hour.label }}</div>
-    {% endif %}
-    {% endfor %}
-    <div class="scale-now" style="left: {{ scale.now_pct }}%;"></div>
-    {% for marker in scale.markers %}
-    <span class="telltale {{ marker.color }} scale-dot" style="left: {{ marker.pct }}%;"></span>
-    <div class="scale-evt" style="left: {{ marker.label_left }}px; top: {{ 58 + marker.row * 22 }}px;">
-      <span class="t t-{{ marker.color }}">{{ marker.time }}</span> <span class="n">{{ marker.title }}</span>
+  <div class="label">AGENDA</div>
+  {% if agenda_rows %}
+  <div class="agenda-list">
+    {% for row in agenda_rows %}
+    <div class="agenda-row">
+      <span class="agenda-time num t-{{ row.color }}">{{ row.when }}</span>
+      <span class="agenda-title clip">{{ row.title }}</span>
     </div>
     {% endfor %}
   </div>
-
-  {% if next_events %}
-  <div class="next-list">
-    {% for row in next_events %}
-    <div class="next-row">
-      <span class="next-when num t-{{ row.color }}">{{ row.when }}</span>
-      <span class="next-title clip">{{ row.title }}</span>
-    </div>
-    {% endfor %}
-  </div>
+  {% else %}
+  <div class="no-data">Nothing scheduled</div>
   {% endif %}
 </div>
 
@@ -112,11 +91,12 @@
         {% for window in provider.windows %}
         <div class="prov-col">
           {% if window.available %}
-          <span class="reading reading-32"><span class="num t-{{ window.accent }}">{{ window.value }}</span><span class="unit">{{ window.label }}</span></span>
+          <span class="reading reading-32"><span class="num t-{{ window.accent }}">{{ window.value }}</span><span class="pct-sign t-{{ window.accent }}">%</span></span>
+          <div class="label">{{ window.label }}</div>
           <div class="meter" style="width: 120px;"><div class="meter-fill" style="width: {{ (window.fraction * 100) | round(1) }}%;"></div></div>
           {% else %}
-          <span class="unit-only">{{ window.label }}</span>
           <div class="hatch" style="width: 40px; height: 20px;"></div>
+          <div class="label">{{ window.label }}</div>
           {% endif %}
         </div>
         {% endfor %}
