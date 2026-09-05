@@ -73,6 +73,12 @@ firmware\.venv\Scripts\esphome.exe run firmware\e1002.yaml --device COM3 --uploa
 - OTA for every later change: `esphome run firmware\e1002.yaml` and pick
   the OTA target. USB is no longer required.
 
+## Build gotcha on this PC
+
+Run `esphome compile` and `esphome run` from PowerShell. Launched from Git
+Bash (MSYS) the ESP-IDF build silently skips ninja and repackages the old
+binary while still reporting success. `esphome config` is fine from either.
+
 ## Bring-up checklist (Phase 3)
 
 - Boots, log shows Wi-Fi connected and an IP.
@@ -86,3 +92,6 @@ firmware\.venv\Scripts\esphome.exe run firmware\e1002.yaml --device COM3 --uploa
 - `esphome.reterminal_e1002_show_alert` with `duration: 20`, `beep: true`
   sounds the buzzer, shows the alert page, and restores the page after.
 - OTA update works from the ESPHome CLI.
+- Battery mode: unplug USB, expect a descending beep and sleep after 45 s;
+  a button wakes it; the next scheduled hour wakes it; plugging USB back in
+  is noticed on the next wake (rising beep, always-on again).

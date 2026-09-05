@@ -130,3 +130,27 @@ Obsidian access is read only. The vault is mounted read-only in Docker.
 - Any button press causes exactly one panel refresh, and only after the
   download succeeded. On download failure the old image stays on screen
   and a short low beep sounds.
+- Refreshes are queued behind the panel driver: a Spectra 6 cycle takes
+  about 32 s and the driver drops updates while busy, so the firmware waits
+  for the driver to be idle before refreshing.
+- Telemetry: every 5 min (or once per wake on battery) the device POSTs
+  battery, temperature, humidity, Wi-Fi RSSI, uptime, page, power mode,
+  USB presence and charge state to `/api/device/telemetry`.
+
+### Power modes
+
+- Always-on (USB): the behaviour above. Alerts, OTA and the API work.
+- Battery mode: the device deep-sleeps and wakes at the local hours in
+  `wake_hours` (default 08:00, 12:00, 17:00) or on any button. Each wake:
+  Wi-Fi, fetch page, one refresh, one telemetry POST, then sleep after a
+  45 s grace window (hard deadline 150 s, and 25 s if Wi-Fi never joins).
+  Buttons wake the device and act (left previous, right next, green
+  refresh). Alerts and OTA only work while awake.
+- Auto power mode (default on): the SY6974B charger's status register on
+  I2C1 (GPIO39/40, address 0x6B) is polled every 10 s while awake and once
+  on every wake. USB removed switches to battery mode; USB found on a wake
+  switches back to always-on. Overrides: the "Battery mode" and "Auto power
+  mode" switches, and a left-button long press (toggles and pins the mode).
+- Sleep housekeeping: button pads get RTC pull-ups (ext1 ANY_LOW wake),
+  the battery divider enable and LED are pinned off, the buzzer gate is
+  held low, and the panel is never put to sleep mid-cycle.
