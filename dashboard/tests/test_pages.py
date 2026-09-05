@@ -9,7 +9,20 @@ import pytest
 from PIL import Image
 
 from app.adapters.device import build_device_state
-from app.models import AdapterStatus, DashboardState, DeviceBlock, DeviceSample, Task, TasksBlock
+from app.models import (
+    AdapterStatus,
+    DashboardState,
+    DeviceBlock,
+    DeviceSample,
+    HomeBlock,
+    HomeState,
+    ServiceHealth,
+    ServiceStatus,
+    Task,
+    TasksBlock,
+    Weather,
+    WeatherBlock,
+)
 from app.renderer.palette import DISPLAY_SIZE, PALETTE_RGB, assert_palette, palette_violations
 from app.renderer.render import PAGES, Renderer
 from app.telemetry import TelemetrySummary
@@ -165,31 +178,32 @@ def test_system_page_hides_power_row_when_unreported(
     assert "ON BATTERY" not in html
 
 
-#: Measured in the rendered document: where the two halves of the status band
-#: start and end, and whether the window list still fits beside the Wi-Fi
-#: reading at the foot.
-_BAND_GEOMETRY = """(() => {
+#: Measured in the rendered document: does the header's right cluster (the
+#: overdue tell-tale, Wi-Fi, battery and clock) ever run into the weather
+#: reading beside it, and does the footer's window list fit beside its own
+#: right edge.
+_HEADER_GEOMETRY = """(() => {
   const round = value => Math.round(value * 10) / 10;
-  const left = document.querySelector('.cluster-left').getBoundingClientRect();
-  const right = document.querySelector('.cluster-right').getBoundingClientRect();
-  const wins = document.querySelector('.wins').getBoundingClientRect();
-  const foot = document.querySelector('.winbar-right');
+  const weather = document.querySelector('.hdr-weather').getBoundingClientRect();
+  const right = document.querySelector('.hdr-right').getBoundingClientRect();
+  return { weatherEnd: round(weather.right), rightStart: round(right.left) };
+})()"""
+
+_FOOTER_GEOMETRY = """(() => {
+  const wins = Array.from(document.querySelectorAll('.win'));
+  const list = document.querySelector('.win-list').getBoundingClientRect();
   return {
-    leftEnd: round(left.right),
-    rightStart: round(right.left),
-    winsEnd: round(wins.right),
-    footStart: foot ? round(foot.getBoundingClientRect().left) : 800,
-    footHeight: foot ? Math.round(foot.getBoundingClientRect().height) : 0,
+    count: wins.length,
+    names: wins.map(w => w.textContent.trim()),
+    listRight: Math.round(list.right * 10) / 10,
   };
 })()"""
 
 
-def _widest_status_bar(state: DashboardState) -> DashboardState:
-    """The state that makes the top band as wide as it can honestly get.
-
-    A full battery is the widest percentage, a three-digit RSSI the widest
-    Wi-Fi reading, and a fortnight of neglect the widest overdue count.
-    """
+def _widest_header_state(state: DashboardState) -> DashboardState:
+    """The state that makes the header's right cluster as wide as it can
+    honestly get: a full battery, a strong Wi-Fi reading, and a fortnight of
+    neglect for the overdue count."""
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     latest = DeviceSample(
         received_at=now,
@@ -219,24 +233,62 @@ def _widest_status_bar(state: DashboardState) -> DashboardState:
     return state.model_copy(update={"device": device, "tasks": tasks})
 
 
-@pytest.mark.parametrize("page", PAGES)
-def test_status_band_halves_never_collide(
-    renderer: Renderer, state: DashboardState, page: str
-) -> None:
-    """The two halves of the band keep white paper between them."""
-    geometry = run(renderer.probe(page, _widest_status_bar(state), _BAND_GEOMETRY))
-    gap = geometry["rightStart"] - geometry["leftEnd"]
-    assert gap >= 8, f"{page}: band halves {gap} px apart, {geometry}"
+def _all_flags_state(state: DashboardState) -> DashboardState:
+    """The state that flags every flaggable window (agenda, weather, system),
+    for the footer's widest honest width."""
+    late = date(2026, 9, 5) - timedelta(days=1)
+    tasks = TasksBlock(
+        status=AdapterStatus.OK, items=[Task(id="late", title="Late", due=late)]
+    )
+    weather = WeatherBlock(
+        status=AdapterStatus.OK, weather=Weather(condition="Hazy", uv_index=9.5)
+    )
+    home = HomeBlock(
+        status=AdapterStatus.OK,
+        home=HomeState(services=[ServiceStatus(key="nas", name="NAS", health=ServiceHealth.DOWN)]),
+    )
+    return state.model_copy(update={"tasks": tasks, "weather": weather, "home": home})
 
 
 @pytest.mark.parametrize("page", PAGES)
-def test_window_list_fits_beside_the_wifi_reading(
+def test_header_right_cluster_never_overlaps_the_weather_reading(
     renderer: Renderer, state: DashboardState, page: str
 ) -> None:
-    geometry = run(renderer.probe(page, _widest_status_bar(state), _BAND_GEOMETRY))
-    assert geometry["winsEnd"] <= geometry["footStart"], geometry
-    # A taller box would mean the bar overflowed and wrapped onto two lines.
-    assert geometry["footHeight"] in (0, 40), geometry
+    """The header's two halves keep white paper between them."""
+    geometry = run(renderer.probe(page, _widest_header_state(state), _HEADER_GEOMETRY))
+    gap = geometry["rightStart"] - geometry["weatherEnd"]
+    assert gap >= 8, f"{page}: header halves {gap} px apart, {geometry}"
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_footer_window_list_fits_with_every_name_and_flag(
+    renderer: Renderer, state: DashboardState, page: str
+) -> None:
+    geometry = run(renderer.probe(page, _all_flags_state(state), _FOOTER_GEOMETRY))
+    assert geometry["count"] == 5, geometry
+    assert geometry["listRight"] <= 800, geometry
+
+
+#: Every visible element's bounding rect, so nothing on the fully rebuilt
+#: Today page can silently spill outside the 800x480 panel.
+_VIEWPORT_OVERFLOW = """(() => {
+  const bad = [];
+  document.querySelectorAll('body *').forEach(el => {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return;
+    if (r.left < -0.5 || r.top < -0.5 || r.right > 800.5 || r.bottom > 480.5) {
+      bad.push([el.className, Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]);
+    }
+  });
+  return bad;
+})()"""
+
+
+def test_today_has_no_element_overflowing_the_800x480_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    overflow = run(renderer.probe("today", _widest_header_state(state), _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
 
 
 @pytest.mark.parametrize("page", PAGES)

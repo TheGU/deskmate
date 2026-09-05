@@ -1,118 +1,136 @@
 {% extends "base.html" %}
 
 {% block style %}
-.today-left  { flex: 0 0 500px; width: 500px; }
-.today-right { flex: 1 1 auto; }
+.today-left, .today-right { display: flex; flex-direction: column; gap: 8px; }
+.today-left  { flex: 0 0 456px; padding-right: 16px; }
+.today-right { flex: 1 1 auto; padding-left: 16px; }
 
-.pane-pri  { flex: 0 0 198px; }
-.pane-next { flex: 1 1 auto; }
-/* Four rows plus the default 8 px padding overflowed by 2 px and clipped the
-   descenders on the last one. */
-.pane-next .pane-body { padding: 4px 12px; }
-.pane-cap  { flex: 0 0 126px; }
-.pane-note { flex: 1 1 auto; }
+.no-data { font-size: 20px; font-weight: 500; }
 
-/* Priorities: a glyph slot, the task, and the due chip on the right. */
-.pri {
-  display: flex; align-items: center; gap: 10px;
-  height: 48px;
+/* Priorities: a checkbox glyph, the task, and the due state at the right. */
+.pri-list { display: flex; flex-direction: column; }
+.pri-row { display: flex; align-items: center; gap: 10px; height: 40px; flex: 0 0 40px; }
+.pri-mark { font-size: 24px; flex: 0 0 auto; }
+.pri-title { flex: 1 1 auto; font-size: 24px; font-weight: 500; }
+
+/* The day scale: a line, hour ticks, the NOW pointer, event dots and their
+   time/title labels underneath. Positions arrive as percentages already
+   computed in view.py; only the fixed vertical offsets live here. */
+.scale { height: 104px; }
+.scale-line { top: 14px; }
+.scale-tick { top: 15px; }
+.scale-tick-num { top: 35px; }
+.scale-now { top: 2px; }
+.scale-dot { top: 15px; }
+
+.next-list { display: flex; flex-direction: column; gap: 2px; }
+.next-row { display: flex; align-items: baseline; gap: 8px; font-size: 20px; height: 24px; }
+.next-when { font-weight: 700; flex: 0 0 auto; white-space: nowrap; }
+.next-title { flex: 1 1 auto; font-weight: 500; }
+
+/* AI capacity: one block per provider, two readings side by side. */
+.providers-list { display: flex; flex-direction: column; gap: 10px; }
+.prov-block { display: flex; flex-direction: column; gap: 4px; }
+.prov-windows { display: flex; gap: 24px; }
+.prov-col { display: flex; flex-direction: column; gap: 4px; }
+.unit-only { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
+
+.note-text {
+  font-size: 22px; font-weight: 500; line-height: 1.3;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+  overflow: hidden;
 }
-.pri-mark { flex: 0 0 34px; font-size: 30px; }
-.pri-title { flex: 1 1 auto; font-size: 26px; font-weight: 700; line-height: 1.3; min-width: 0; }
-.pri-due { flex: 0 0 auto; }
-
-/* Next: four event rows. The time prints in its calendar's colour, so two
-   feeds are told apart without a label. */
-.evt { display: flex; align-items: center; gap: 10px; height: 34px; }
-.evt-when {
-  flex: 0 0 auto; min-width: 78px;
-  font-size: 24px; font-weight: 900; letter-spacing: 0.01em;
-  white-space: nowrap;
-}
-.evt-title { flex: 1 1 auto; font-size: 24px; font-weight: 700; line-height: 1.3; min-width: 0; }
-
-/* AI capacity: one row per provider, the percentages carrying their own
-   state colour. No meter: the number is the whole message. */
-.today-right .pane-body { padding: 6px 10px; }
-.prov { display: flex; align-items: baseline; gap: 5px; height: 38px; }
-.prov-name { flex: 1 1 auto; font-size: 20px; font-weight: 900; letter-spacing: 0; min-width: 0; }
-.prov-win { flex: 0 0 auto; font-size: 20px; font-weight: 900; letter-spacing: 0; }
-.prov-value { flex: 0 0 auto; font-size: 28px; font-weight: 900; line-height: 1; letter-spacing: -0.01em; }
-
-.note-text { font-size: 24px; font-weight: 600; line-height: 1.3; }
 {% endblock %}
 
 {% block content %}
-<div class="col today-left br">
-  <section class="pane pane-pri bb">
-    <div class="pane-title f-{{ title_accents.priorities }}">
-      <span class="i">{{ icons.CHECKBOX_MARKED }}</span><span>PRIORITIES</span>
+<div class="col today-left">
+  <div class="label">PRIORITIES</div>
+  {% if priorities %}
+  <div class="pri-list">
+    {% for task in priorities %}
+    <div class="pri-row">
+      <span class="i pri-mark">{{ icons.CHECKBOX_BLANK }}</span>
+      <span class="pri-title clip">{{ task.title }}</span>
+      {% if task.due_label %}
+        {% if task.accent == 'red' %}
+        <span class="chip chip-red"><span class="i">{{ icons.FLAG }}</span>{{ task.due_label }}</span>
+        {% elif task.accent == 'yellow' %}
+        <span class="chip chip-yellow">{{ task.due_label }}</span>
+        {% else %}
+        <span class="chip-plain">{{ task.due_label }}</span>
+        {% endif %}
+      {% endif %}
     </div>
-    <div class="pane-body">
-      {% if priorities %}
-        {% for task in priorities %}
-        <div class="pri">
-          <div class="pri-mark i">{{ icons.CHECKBOX_BLANK }}</div>
-          <div class="pri-title clip">{{ task.title }}</div>
-          {% if task.due_label %}
-          <div class="pri-due"><span class="chip chip-{{ task.accent }}">{{ task.due_label }}</span></div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="no-data">{{ tasks_note or "No open tasks" }}</div>
+  {% endif %}
+
+  <div class="rule-h"></div>
+
+  <div class="label">TODAY</div>
+  <div class="scale">
+    <div class="scale-line"></div>
+    {% for hour in scale.hours %}
+    <div class="scale-tick {{ 'scale-tick-tall' if hour.tall else 'scale-tick-short' }}" style="left: {{ hour.pct }}%;"></div>
+    {% if hour.tall %}
+    <div class="scale-tick-num" style="left: {{ hour.pct }}%;">{{ hour.label }}</div>
+    {% endif %}
+    {% endfor %}
+    <div class="scale-now" style="left: {{ scale.now_pct }}%;"></div>
+    {% for marker in scale.markers %}
+    <span class="telltale {{ marker.color }} scale-dot" style="left: {{ marker.pct }}%;"></span>
+    <div class="scale-evt" style="left: {{ marker.label_left }}px; top: {{ 58 + marker.row * 22 }}px;">
+      <span class="t t-{{ marker.color }}">{{ marker.time }}</span> <span class="n">{{ marker.title }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if next_events %}
+  <div class="next-list">
+    {% for row in next_events %}
+    <div class="next-row">
+      <span class="next-when num t-{{ row.color }}">{{ row.when }}</span>
+      <span class="next-title clip">{{ row.title }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="rule-v"></div>
+
+<div class="col today-right">
+  <div class="label">AI CAPACITY</div>
+  {% if providers %}
+  <div class="providers-list">
+    {% for provider in providers %}
+    <div class="prov-block">
+      <div class="label">{{ provider.name }}</div>
+      <div class="prov-windows">
+        {% for window in provider.windows %}
+        <div class="prov-col">
+          {% if window.available %}
+          <span class="reading reading-32"><span class="num t-{{ window.accent }}">{{ window.value }}</span><span class="unit">{{ window.label }}</span></span>
+          <div class="meter" style="width: 120px;"><div class="meter-fill" style="width: {{ (window.fraction * 100) | round(1) }}%;"></div></div>
+          {% else %}
+          <span class="unit-only">{{ window.label }}</span>
+          <div class="hatch" style="width: 40px; height: 20px;"></div>
           {% endif %}
         </div>
         {% endfor %}
-      {% else %}
-        <div class="empty">{{ tasks_note or "No open tasks" }}</div>
-      {% endif %}
+      </div>
     </div>
-  </section>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="no-data">{{ usage_note or "unknown" }}</div>
+  {% endif %}
 
-  <section class="pane pane-next">
-    <div class="pane-title f-{{ title_accents.next }}">
-      <span class="i">{{ icons.CALENDAR_CLOCK }}</span><span>NEXT</span>
-    </div>
-    <div class="pane-body">
-      {% if next_events %}
-        {% for event in next_events[:4] %}
-        <div class="evt">
-          <div class="evt-when num t-{{ event.color }}">{{ event.when }}</div>
-          <div class="evt-title clip">{{ event.title }}</div>
-        </div>
-        {% endfor %}
-      {% else %}
-        <div class="empty">{{ calendar_note or "Nothing scheduled" }}</div>
-      {% endif %}
-    </div>
-  </section>
-</div>
+  <div class="rule-h"></div>
 
-<div class="col today-right">
-  <section class="pane pane-cap bb">
-    <div class="pane-title f-{{ title_accents.capacity }}">
-      <span class="i">{{ icons.ROBOT }}</span><span>AI CAPACITY</span>
-    </div>
-    <div class="pane-body">
-      {% if providers %}
-        {% for provider in providers[:2] %}
-        <div class="prov">
-          <div class="prov-name clip">{{ provider.provider }}</div>
-          <div class="prov-win">5H</div>
-          <div class="prov-value num t-{{ provider.short_accent }}">{{ provider.short }}</div>
-          <div class="prov-win">7D</div>
-          <div class="prov-value num t-{{ provider.weekly_accent }}">{{ provider.weekly }}</div>
-        </div>
-        {% endfor %}
-      {% else %}
-        <div class="empty">{{ usage_note or "unknown" }}</div>
-      {% endif %}
-    </div>
-  </section>
-
-  <section class="pane pane-note">
-    <div class="pane-title f-{{ title_accents.note }}">
-      <span class="i">{{ icons.MESSAGE_TEXT }}</span><span>NOTE</span>
-    </div>
-    <div class="pane-body">
-      <div class="note-text">{{ ai_note.text }}</div>
-    </div>
-  </section>
+  <div class="label">NOTE</div>
+  <div class="note-text">{{ ai_note.text }}</div>
 </div>
 {% endblock %}

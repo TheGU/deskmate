@@ -5,21 +5,23 @@
 .ag-right { flex: 1 1 auto; }
 .pane-then { flex: 1 1 auto; }
 .pane-over { flex: 0 0 80px; }
-.ag-left .pane-body, .ag-right .pane-body { padding: 6px 12px; }
+/* 5px, not 6px: the new frame's header and footer leave 4 px less for the
+   body than the old status band and window list did. */
+.ag-left .pane-body, .ag-right .pane-body { padding: 5px 12px; }
 
 .day + .day { margin-top: 2px; }
 .day-head { display: flex; align-items: center; gap: 8px; height: 26px; }
 .day-chip {
   display: inline-flex; align-items: center; height: 26px; padding: 0 7px;
   background: #000000; color: #FFFFFF;
-  font-size: 20px; font-weight: 900; letter-spacing: 0.02em;
+  font-size: 20px; font-weight: 700; letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.day-label { font-size: 20px; font-weight: 900; letter-spacing: 0.04em; }
+.day-label { font-size: 20px; font-weight: 700; letter-spacing: 0.04em; }
 
 .ln { display: flex; align-items: center; gap: 8px; height: 27px; }
 /* Wide enough for ALL DAY, which must never wrap onto the line below it. */
-.ln-when { flex: 0 0 92px; font-size: 22px; font-weight: 900; white-space: nowrap; }
+.ln-when { flex: 0 0 92px; font-size: 22px; font-weight: 700; white-space: nowrap; }
 /* A due line has no time, so its flag sits in the time column and the titles
    below each other stay on one left edge. */
 .ln-mark { flex: 0 0 92px; font-size: 22px; text-align: right; padding-right: 10px; }

@@ -1,10 +1,10 @@
 """Thai and English mixed content is a product requirement (PRODUCT.md).
 
-The bundled Google Sans Flex carries no Thai, so every Thai codepoint has to
-fall through to Noto Sans Thai per glyph. A page that silently renders tofu
-boxes still passes the size and palette checks, so these tests ask the browser
-itself whether the fallback face loaded, and compare the drawn pixels against
-the same page in Latin.
+Google Sans carries Latin and Thai in the same file, so no separate fallback
+face is involved any more. A page that silently renders tofu boxes still
+passes the size and palette checks, so these tests ask the browser itself
+whether the bundled face actually loaded, and compare the drawn pixels
+against the same page in Latin.
 """
 
 from __future__ import annotations
@@ -69,14 +69,12 @@ def test_thai_page_renders_clean(renderer: Renderer, thai_state: DashboardState)
     assert_palette(image)
 
 
-def test_thai_fallback_font_is_loaded_in_the_rendered_document(
+def test_thai_bundled_font_is_loaded_in_the_rendered_document(
     renderer: Renderer, thai_state: DashboardState
 ) -> None:
-    """Ask the browser, not the pixels: did the Thai face actually load?"""
+    """Ask the browser, not the pixels: did the bundled face actually load?"""
     loaded: Any = run(
-        renderer.probe(
-            "today", thai_state, "document.fonts.check(\"24px 'Noto Sans Thai'\")"
-        )
+        renderer.probe("today", thai_state, "document.fonts.check(\"24px 'Google Sans'\")")
     )
     assert loaded is True
 

@@ -9,17 +9,17 @@
 
 /* NOW */
 .now-glyph { font-size: 88px; line-height: 1; }
-.now-temp { font-size: 120px; font-weight: 900; line-height: 0.92; letter-spacing: -0.03em; margin-top: 6px; }
-.now-unit { font-size: 40px; font-weight: 900; vertical-align: super; letter-spacing: 0; }
-.now-feels { font-size: 22px; font-weight: 800; letter-spacing: 0.03em; margin-top: 10px; }
-.now-cond { font-size: 22px; font-weight: 800; letter-spacing: 0.05em; margin-top: 4px; }
+.now-temp { font-size: 120px; font-weight: 700; line-height: 0.92; letter-spacing: -0.03em; margin-top: 6px; }
+.now-unit { font-size: 40px; font-weight: 700; vertical-align: super; letter-spacing: 0; }
+.now-feels { font-size: 22px; font-weight: 700; letter-spacing: 0.03em; margin-top: 10px; }
+.now-cond { font-size: 22px; font-weight: 700; letter-spacing: 0.05em; margin-top: 4px; }
 
 /* RAIN */
 .wx-right .pane-body { padding: 2px 12px; }
 .rain { display: flex; align-items: center; gap: 16px; }
-.rain-value { flex: 0 0 auto; font-size: 60px; font-weight: 900; line-height: 1; }
+.rain-value { flex: 0 0 auto; font-size: 60px; font-weight: 700; line-height: 1; }
 .rain-side { flex: 1 1 auto; min-width: 0; }
-.rain-when { font-size: 24px; font-weight: 800; letter-spacing: 0.03em; line-height: 1.2; }
+.rain-when { font-size: 24px; font-weight: 700; letter-spacing: 0.03em; line-height: 1.2; }
 .rain-hilo { font-size: 22px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.2; margin-top: 4px; }
 
 /* AIR */
@@ -29,8 +29,8 @@
 .air-cell:first-child { padding-left: 0; }
 .air-top { display: flex; align-items: baseline; gap: 4px; }
 .air-top .i { font-size: 24px; }
-.air-value { font-size: 34px; font-weight: 900; line-height: 1; }
-.air-label { font-size: 20px; font-weight: 900; letter-spacing: 0; line-height: 1; }
+.air-value { font-size: 34px; font-weight: 700; line-height: 1; }
+.air-label { font-size: 20px; font-weight: 700; letter-spacing: 0; line-height: 1; }
 .air-bar { height: 8px; margin-top: 4px; }
 
 /* 5 DAYS */
@@ -41,16 +41,16 @@
 /* The column inner width is about 73 px, so relative day names live only
    where there is room: TODAY fits here, TOMORROW does not and stays on the
    agenda. Everything else is a weekday. */
-.dc-label { font-size: 20px; font-weight: 900; letter-spacing: 0.02em; line-height: 1.1; }
-.dc-date { font-size: 20px; font-weight: 800; letter-spacing: 0; line-height: 1.1; }
-.dc-high { font-size: 30px; font-weight: 900; line-height: 1; }
+.dc-label { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.1; }
+.dc-date { font-size: 20px; font-weight: 700; letter-spacing: 0; line-height: 1.1; }
+.dc-high { font-size: 30px; font-weight: 700; line-height: 1; }
 /* LOW 26 wraps to two lines in a 73 px column unless it is told not to. */
 .dc-low { font-size: 20px; font-weight: 700; line-height: 1.1; white-space: nowrap; }
 /* No umbrella here: at 20 px the glyph quantizes into something that reads as
    an arrow. The blue percentage already says rain is likely. */
-.dc-rain { font-size: 20px; font-weight: 900; line-height: 1.1; }
+.dc-rain { font-size: 20px; font-weight: 700; line-height: 1.1; }
 
-.wx-none { font-size: 32px; font-weight: 900; letter-spacing: 0.02em; }
+.wx-none { font-size: 32px; font-weight: 700; letter-spacing: 0.02em; }
 {% endblock %}
 
 {% block content %}

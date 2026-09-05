@@ -84,9 +84,11 @@ Confirmed:
   preview pages, alert set and clear, device telemetry in and history out.
   Telemetry (battery, temperature, humidity, Wi-Fi, power state, wake cause)
   is stored in SQLite with 30-day retention and charted on the System page.
-- Text: Thai and English mixed content is a requirement. Google Sans Flex
-  carries Latin; Noto Sans Thai is bundled as the per-glyph fallback for Thai.
-  Thai wrapping with real Thai content has not been checked on the panel yet.
+- Text: Thai and English mixed content is a requirement. Google Sans (SIL
+  OFL) carries Latin and Thai in one file, weights 400 to 700; Google Sans
+  Flex and Noto Sans Thai were replaced on 2026-09-05 after the owner asked
+  for one font. Thai wrapping with real Thai content has not been checked on
+  the panel yet.
 - Terminology: hub (server), device or paper (E1002), page, adapter, source
   (fixture or live), fixture, battery mode, always-on, DESK panel (the device
   section of the System page), alert.
@@ -107,11 +109,11 @@ Undecided:
 - Voice: terse and factual. Labels are short uppercase section names; body
   text states facts and times. No exclamation, no filler, no invented
   reassurance.
-- Fonts, pinned by the owner on 2026-09-05: Google Sans Flex (SIL OFL) for all
+- Fonts, pinned by the owner on 2026-09-05: Google Sans (SIL OFL) for all
   text, and Nerd Font symbols for icons, so one glyph can replace a label and
-  save space. Verified fact: the open-source Google Sans Flex (v4.007 release
-  and the Google Fonts hosted build) carries Latin only, no Thai glyphs, so
-  Thai falls through to Noto Sans Thai (SIL OFL) in the font stack.
+  save space. Google Sans carries Latin and Thai in one file, weights 400 to
+  700; Google Sans Flex and Noto Sans Thai were replaced on 2026-09-05 after
+  the owner asked for one font.
 - Color: the spec's white-ground, color-as-accent rule was lifted by the owner
   on 2026-09-05. Color may own whole regions (solid panel fields with white or
   black type). The panel's six colors are still the only colors.

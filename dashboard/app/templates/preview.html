@@ -8,27 +8,22 @@
   /* A developer tool, not a device page: same fonts and the same black on
      white, but it may scroll and it may be wider than 800 px. */
   @font-face {
-    font-family: 'Google Sans Flex'; font-style: normal; font-weight: 300 1000;
+    font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
     font-display: block;
-    src: url('/static/fonts/GoogleSansFlex-wght.ttf') format('truetype');
-  }
-  @font-face {
-    font-family: 'Noto Sans Thai'; font-style: normal; font-weight: 100 900;
-    font-display: block;
-    src: url('/static/fonts/NotoSansThai-wdth-wght.ttf') format('truetype');
+    src: url('/static/fonts/GoogleSans-LatinThai-var.ttf') format('truetype');
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 24px; background: #FFFFFF; color: #000000;
-    font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif;
+    font-family: 'Google Sans', sans-serif;
     font-weight: 600;
   }
-  h1 { font-size: 24px; font-weight: 900; letter-spacing: 0.08em; margin: 0 0 6px 0; }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
   p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
   nav { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
   nav a, nav button {
     display: inline-block; border: 3px solid #000000; background: #FFFFFF; color: #000000;
-    padding: 6px 12px; font: inherit; font-weight: 900; text-decoration: none;
+    padding: 6px 12px; font: inherit; font-weight: 700; text-decoration: none;
     letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
   }
   nav a.active, nav button.active { background: #000000; color: #FFFFFF; }
@@ -37,7 +32,7 @@
      size. */
   .panes { display: flex; flex-wrap: nowrap; gap: 24px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
   .pane { flex: 0 0 auto; }
-  .pane h2 { font-size: 15px; font-weight: 900; letter-spacing: 0.10em; text-transform: uppercase; margin: 0 0 8px 0; }
+  .pane h2 { font-size: 15px; font-weight: 700; letter-spacing: 0.10em; text-transform: uppercase; margin: 0 0 8px 0; }
   .frame { border: 4px solid #000000; }
   /* Never resampled by the browser: both PNG stages are shown either at one
      device pixel per panel pixel, or at exactly two, so what you judge is
@@ -46,7 +41,7 @@
   img.frame { display: block; image-rendering: pixelated; }
   iframe.frame { width: 800px; height: 480px; background: #FFFFFF; }
   .meta { font-size: 14px; font-weight: 600; margin-top: 8px; max-width: 800px; }
-  code { border: 2px solid #000000; padding: 0 4px; font-family: inherit; font-weight: 900; }
+  code { border: 2px solid #000000; padding: 0 4px; font-family: inherit; font-weight: 700; }
 </style>
 </head>
 <body>

@@ -85,16 +85,17 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 Fonts live in `dashboard/app/static/fonts/` and are embedded as base64 data
 URIs by `render.py` `font_css` (the developer preview serves the same files
 from `/static/fonts/` instead). `FONT_FACES` carries a `font-weight` range
-descriptor per face, because the first two are variable fonts:
+descriptor per face, because Google Sans is a variable font:
 
 | File | Family | `font-weight` | Use |
 | --- | --- | --- | --- |
-| `GoogleSansFlex-wght.ttf` | Google Sans Flex | `300 1000` | all text |
-| `NotoSansThai-wdth-wght.ttf` | Noto Sans Thai | `100 900` | Thai fallback |
+| `GoogleSans-LatinThai-var.ttf` | Google Sans | `400 700` | all text |
 | `SymbolsNerdFontMono-Subset.ttf` | Symbols Nerd Font Mono | `400` | icons |
 
-The stack is `'Google Sans Flex', 'Noto Sans Thai', sans-serif`, so Thai
-codepoints fall through to Noto Sans Thai per glyph. The Nerd Font is a
+The stack is `'Google Sans', 'Symbols Nerd Font Mono'`. Google Sans (SIL
+OFL) carries Latin and Thai in one file, so no separate Thai fallback face
+is needed; Google Sans Flex and Noto Sans Thai were replaced on 2026-09-05
+after the owner asked for one font. The Nerd Font is a
 subset: only the codepoints named in `app/icons.py` exist in it, and a test
 reads the font's cmap to prove it. Chromium runs with
 `--font-render-hinting=full` and the pages set no `text-rendering` or

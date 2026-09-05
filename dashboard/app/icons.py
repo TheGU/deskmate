@@ -47,6 +47,9 @@ POWER_PLUG: Final[str] = "\U000f06a5"
 POWER_PLUG_OFF: Final[str] = "\U000f06a6"
 SLEEP: Final[str] = "\U000f04b2"
 WIFI: Final[str] = "\U000f05a9"
+WIFI_STRENGTH_4: Final[str] = "\U000f0922"
+WIFI_STRENGTH_2: Final[str] = "\U000f0920"
+WIFI_STRENGTH_OFF: Final[str] = "\U000f092d"
 
 # --- measurement -----------------------------------------------------------
 THERMOMETER: Final[str] = "\U000f050f"
@@ -168,6 +171,21 @@ def battery_icon(level: float | None, charging: bool | None = False) -> str:
     return BATTERY_ALERT
 
 
+def wifi_icon(rssi: float | None) -> str:
+    """Glyph for a Wi-Fi signal in three levels, no number attached.
+
+    An unreported reading gets the off glyph, the same one a genuinely dead
+    radio would show: "we do not know" and "no signal" both read as "do not
+    trust this link" at a glance, and the header has no room for a fourth
+    state.
+    """
+    if rssi is None or rssi < -80:
+        return WIFI_STRENGTH_OFF
+    if rssi <= -68:
+        return WIFI_STRENGTH_2
+    return WIFI_STRENGTH_4
+
+
 _HEALTH_ICONS: Final[dict[str, str]] = {
     "ok": CHECK,
     "warn": ALERT,
@@ -262,4 +280,5 @@ __all__ = [
     "page_icon",
     "sensor_icon",
     "weather_icon",
+    "wifi_icon",
 ]

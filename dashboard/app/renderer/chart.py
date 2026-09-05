@@ -39,8 +39,8 @@ AXIS_STROKE: Final[int] = 3
 #: The page floor: nothing on the panel is drawn below 20 px.
 LABEL_SIZE: Final[int] = 20
 #: The page stack, unquoted because an SVG presentation attribute takes a bare
-#: font family list. Thai codepoints fall through to Noto Sans Thai per glyph.
-LABEL_FONT: Final[str] = "Google Sans Flex, Noto Sans Thai, sans-serif"
+#: font family list. Google Sans carries Latin and Thai in one file.
+LABEL_FONT: Final[str] = "Google Sans, sans-serif"
 TICK_SIZE: Final[int] = 20
 #: Baselines for the two text rows.
 VALUE_BASELINE: Final[float] = 19.0

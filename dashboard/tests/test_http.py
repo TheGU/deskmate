@@ -105,7 +105,7 @@ def test_preview_html_renders(client: TestClient, page: str) -> None:
     response = client.get(f"/preview/{page}.html")
     assert response.status_code == 200
     assert "<html" in response.text
-    assert "Google Sans Flex" in response.text
+    assert "Google Sans" in response.text
 
 
 def test_preview_html_rejects_an_unknown_page(client: TestClient) -> None:

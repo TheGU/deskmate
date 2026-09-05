@@ -145,8 +145,8 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 - Type floors for a 1-bit panel: row text 24 px weight 700, labels and chips
   20 px weight 900, nothing below 20 px. No gradients, shadows, grays, radius,
   animation or tiny text.
-- Deterministic rendering: bundled Google Sans Flex (variable, OFL) for text,
-  Noto Sans Thai (OFL) as the Thai fallback, and a Symbols Nerd Font subset for
+- Deterministic rendering: bundled Google Sans (variable, OFL), which carries
+  Latin and Thai in one file, for text, and a Symbols Nerd Font subset for
   icons. No system fonts, no network at render time, no clock that changes
   every minute. Every glyph is chosen in `app/icons.py`; templates hold no
   codepoints.

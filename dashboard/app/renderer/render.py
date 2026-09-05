@@ -48,12 +48,12 @@ PAGE_TTL_SECONDS: Final[dict[str, float]] = {
     "alert": 0.0,
 }
 
-#: (family, ``font-weight`` descriptor, filename). The first two are variable
-#: fonts, so the descriptor is a range and one file covers every weight the
-#: pages ask for. Thai codepoints fall through to Noto Sans Thai per glyph.
+#: (family, ``font-weight`` descriptor, filename). Google Sans is a variable
+#: font, so the descriptor is a range and one file covers every weight the
+#: pages ask for; it carries Latin and Thai in the same file, so no separate
+#: Thai fallback face is needed.
 FONT_FACES: Final[tuple[tuple[str, str, str], ...]] = (
-    ("Google Sans Flex", "300 1000", "GoogleSansFlex-wght.ttf"),
-    ("Noto Sans Thai", "100 900", "NotoSansThai-wdth-wght.ttf"),
+    ("Google Sans", "400 700", "GoogleSans-LatinThai-var.ttf"),
     ("Symbols Nerd Font Mono", "400", "SymbolsNerdFontMono-Subset.ttf"),
 )
 

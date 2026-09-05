@@ -11,14 +11,16 @@
 html, body {
   width: 800px; height: 480px;
   background: #FFFFFF; color: #000000;
-  font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif;
+  font-family: 'Google Sans', 'Symbols Nerd Font Mono', sans-serif;
   font-weight: 600;
   overflow: hidden;
 }
 
-/* --- palette ---------------------------------------------------------- */
-/* Only the six panel colors, and a color only ever reports a state. No
-   grays, gradients, shadows, radius, opacity. */
+/* --- palette ------------------------------------------------------------
+   Only the six panel colors, and a color only ever reports a state. No
+   grays, gradients, shadows, radius, opacity. Kept for agenda, weather,
+   brief, system and alert, which still carry the older pane chrome until
+   their own parts rebuild them. */
 .f-white  { background: #FFFFFF; color: #000000; }
 .f-black  { background: #000000; color: #FFFFFF; }
 .f-red    { background: #FF0000; color: #FFFFFF; }
@@ -50,84 +52,31 @@ html, body {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 
-/* --- frame ------------------------------------------------------------ */
-.screen { width: 800px; height: 480px; display: flex; flex-direction: column; }
-
-/* Status band: white paper, black type, entries divided by 4 px rules. The
-   page entry is inverted, the same black block the window list uses. Nothing
-   else is filled unless it carries a state. */
-.statusbar {
-  flex: 0 0 56px; height: 56px;
-  display: flex; align-items: stretch; justify-content: space-between;
-  overflow: hidden;
-}
-.cluster { display: flex; align-items: stretch; min-width: 0; }
-.cluster-right { flex: 0 0 auto; }
-.entry {
-  display: flex; align-items: center; gap: 6px;
-  padding: 0 8px;
-  font-size: 20px; font-weight: 800; letter-spacing: 0.01em;
-  white-space: nowrap; min-width: 0;
-}
-.entry .i { font-size: 22px; }
-.entry + .entry { border-left: 4px solid #000000; }
-/* The context entry is the one that can carry a long location, so it is the
-   one that gives way. */
-.entry-flex { flex: 0 1 auto; min-width: 0; }
-
-/* Body: panes split by 4 px black rules. */
-.body {
-  flex: 1 1 auto; min-height: 0;
-  border-top: 4px solid #000000;
-  display: flex; overflow: hidden;
-}
+/* --- older pane chrome --------------------------------------------------
+   agenda, weather, brief, system and alert are rebuilt in later parts; until
+   then they still render inside this new frame with their own pane, title
+   bar and block-meter system. Left in place unchanged so those five pages
+   keep rendering 800x480 and palette clean; it is fine that they look wrong
+   sitting inside the new header and footer for now. */
 .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .br { border-right: 4px solid #000000; }
 .bb { border-bottom: 4px solid #000000; }
 
-/* Panes: a title bar, then the white reading field. The bar is black unless
-   the pane's own state is the message. */
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .pane-title {
   flex: 0 0 34px; height: 34px;
   display: flex; align-items: center; gap: 9px;
   padding: 0 12px;
-  font-size: 20px; font-weight: 900; letter-spacing: 0.06em;
+  font-size: 20px; font-weight: 700; letter-spacing: 0.06em;
 }
 .pane-title .i { font-size: 23px; }
 .pane-body { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 8px 12px; }
 
-/* Window list: the device's navigation, left button back, right button on. */
-.winbar {
-  flex: 0 0 44px; height: 44px;
-  border-top: 4px solid #000000;
-  display: flex; align-items: stretch; justify-content: space-between;
-  overflow: hidden;
-}
-.wins { display: flex; align-items: stretch; padding-left: 10px; }
-.win {
-  display: flex; align-items: center;
-  padding: 0 7px;
-  font-size: 20px; font-weight: 900; letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-.win + .win { margin-left: 8px; }
-.win-on { background: #000000; color: #FFFFFF; }
-/* A tmux flag: same weight, same colour, set off from the name by a gap. */
-.win-flag { margin-left: 5px; }
-.winbar-right {
-  display: flex; align-items: center; gap: 6px;
-  padding: 0 12px;
-  font-size: 20px; font-weight: 900; white-space: nowrap;
-}
-.winbar-right .i { font-size: 22px; }
-
-/* --- shared blocks ---------------------------------------------------- */
 .chip {
   display: inline-flex; align-items: center;
   border: 3px solid #000000;
   padding: 1px 8px 3px 8px;
-  font-weight: 900;
+  font-weight: 700;
   font-size: 20px;
   line-height: 1.1;
   letter-spacing: 0.02em;
@@ -139,8 +88,6 @@ html, body {
 .chip-green  { background: #00FF00; color: #000000; }
 .chip-blue   { background: #0000FF; color: #FFFFFF; }
 
-/* Block meter: ten cells, filled solid in the semantic color. Never a thin
-   bar, never a ring. */
 .meter { display: flex; gap: 2px; flex: 0 0 auto; }
 .cell { width: 14px; height: 14px; border: 3px solid #000000; background: #FFFFFF; }
 .cell-red    { background: #FF0000; }
@@ -150,64 +97,210 @@ html, body {
 .cell-black  { background: #000000; }
 
 .empty { font-size: 24px; font-weight: 700; letter-spacing: 0.01em; line-height: 1.3; }
+
+/* --- Braun Panel grammar -------------------------------------------------
+   An instrument front panel on paper: every value is a large numeral with a
+   small capital label beneath, fields split by 2 px rules, one scale line
+   where time runs. Written once here; Today is the first page built on it,
+   the header and footer carry it on every page, and later parts build
+   agenda, weather, brief and system on the same grammar. */
+.frame {
+  width: 800px; height: 480px; padding: 0 16px; box-sizing: border-box;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: #FFFFFF; color: #000000;
+}
+
+.rule-h { flex: 0 0 2px; height: 2px; width: 100%; background: #000000; }
+.rule-v { flex: 0 0 2px; width: 2px; align-self: stretch; background: #000000; }
+
+.body { flex: 1 1 auto; min-height: 0; display: flex; overflow: hidden; }
+
+.label {
+  font-size: 16px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: #000000; line-height: 1.2;
+}
+
+.reading { display: inline-flex; align-items: baseline; gap: 4px; }
+.reading .num { font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1; }
+.reading .unit { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
+.reading-w500 .num { font-weight: 500; }
+.reading-32 .num { font-size: 32px; }
+.reading-48 .num { font-size: 48px; }
+.reading-56 .num { font-size: 56px; }
+.reading-72 .num { font-size: 72px; }
+.reading-96 .num { font-size: 96px; }
+
+.telltale { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.telltale.red    { background: #FF0000; }
+.telltale.yellow { background: #FFFF00; }
+.telltale.green  { background: #00FF00; }
+.telltale.blue   { background: #0000FF; }
+
+.chip-plain {
+  display: inline-flex; align-items: center;
+  font-size: 16px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.02em; color: #000000; white-space: nowrap;
+}
+
+.hatch {
+  background-image: repeating-linear-gradient(45deg, #000000 0 2px, #FFFFFF 2px 4px);
+  border: 2px solid #000000;
+  flex: 0 0 auto;
+}
+
+.scale { position: relative; width: 100%; }
+.scale-line { position: absolute; left: 0; right: 0; height: 2px; background: #000000; }
+.scale-tick { position: absolute; width: 2px; background: #000000; transform: translateX(-1px); }
+.scale-tick-short { height: 8px; }
+.scale-tick-tall { height: 16px; }
+.scale-tick-num {
+  position: absolute; font-size: 16px; font-weight: 500;
+  transform: translateX(-50%); white-space: nowrap;
+}
+.scale-now {
+  position: absolute; width: 0; height: 0;
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+  border-top: 12px solid #000000; transform: translateX(-50%);
+}
+.scale-dot { position: absolute; transform: translate(-50%, -50%); }
+/* Left is a clamped pixel offset computed in Python, not a centered percent:
+   a label is wide text, not a point, and must stay on the scale even when
+   its dot sits right at either end. */
+.scale-evt { position: absolute; font-size: 20px; white-space: nowrap; }
+.scale-evt .t { font-weight: 700; }
+.scale-evt .n { font-weight: 500; color: #000000; }
+
+/* The Braun meter: a thin line with a black used-fraction and a white
+   remainder on a black outline. Scoped to Today's own wrappers (see below)
+   so the System page keeps the older ten-cell block meter under the same
+   .meter class name until its own part rebuilds it. */
+.today-left .meter, .today-right .meter {
+  display: block; position: relative; height: 2px; border: 2px solid #000000;
+  background: #FFFFFF; box-sizing: content-box; flex: 0 0 auto;
+}
+.meter-thick { height: 4px; }
+.meter-fill { position: absolute; left: 0; top: 0; height: 100%; background: #000000; }
+
+/* --- header and footer -------------------------------------------------- */
+.hdr { flex: 0 0 64px; height: 64px; display: flex; align-items: baseline; justify-content: space-between; }
+.hdr-left { display: flex; align-items: baseline; min-width: 0; }
+.hdr-right { display: flex; align-items: baseline; gap: 16px; flex: 0 0 auto; }
+.hdr-right .i { font-size: 24px; }
+.hdr-right .num { font-size: 20px; font-weight: 600; }
+.hdr .rule-v { height: 40px; margin: 0 20px; align-self: center; }
+
+/* flex-end, not baseline: the stacked weekday/month pair is two lines, and
+   baseline-aligning its first line against the day numeral pushes its
+   second line below the header box. */
+.hdr-day { display: flex; align-items: flex-end; gap: 10px; }
+.hdr-day-num {
+  font-size: 56px; font-weight: 600; letter-spacing: -0.02em; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.hdr-day-stack {
+  display: flex; flex-direction: column; font-size: 16px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em; line-height: 1.2;
+}
+
+.hdr-weather { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.hdr-wx-temp {
+  font-size: 40px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.hdr-wx-unit { font-size: 16px; font-weight: 600; position: relative; top: -18px; margin-left: 1px; }
+.hdr-wx-icon { font-size: 32px; }
+.hdr-wx-state {
+  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.hdr-wx-hatch { width: 32px; height: 18px; }
+
+.hdr-pill { padding: 2px 6px 3px; }
+.hdr-plain { display: inline-flex; align-items: baseline; gap: 4px; }
+.hdr-clock { font-size: 32px; font-weight: 600; }
+
+.ftr { flex: 0 0 40px; height: 40px; display: flex; align-items: center; }
+.win-list { display: flex; align-items: center; gap: 24px; height: 100%; }
+.win {
+  display: flex; align-items: center;
+  font-size: 20px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  white-space: nowrap;
+}
+.win-active { background: #000000; color: #FFFFFF; height: 32px; padding: 0 8px; }
+.win-flag { margin-left: 5px; }
+
+/* Today's own body content and the shared header/footer use the new chip
+   grammar, scoped so the still-unrebuilt pages above keep the older .chip
+   definition under the same class name. */
+.hdr .chip, .today-left .chip, .today-right .chip {
+  border: none; padding: 2px 6px 3px; font-size: 16px; font-weight: 700; line-height: 1.1;
+}
+
 {% block style %}{% endblock %}
 </style>
 </head>
 <body>
 <!--
-THESIS: the desk paper is the owner's own status line. A tmux session on paper:
-a status band of entries divided by rules, panes split by thick rules with
-title bars, glyphs instead of labels. It refuses the e-ink dashboard default of
-a white page with thin rules and small text.
-OWN-WORLD: white paper ground; six panel colors only; the chrome is neutral,
-a white status band and black pane title bars divided by 4 px black rules, and
-the page entry inverted; a field takes a color only when it carries a state
-(blue rain or a calendar, red overdue urgent down heat, yellow caution due warn
-stale, green healthy done), and healthy is the quiet default; Google Sans Flex
-300-1000 with Noto Sans Thai fallback; Symbols Nerd Font icons; nothing below
-20 px; no gray, no radius, no shadow.
-STORY: one glance answers what matters now; the window list at the foot says
-which page this is and flags the pages that need attention.
-FIRST VIEWPORT: top status band of entries split by 4 px vertical rules (date,
-inverted page name, context left; overdue, battery, time right); two columns of
-panes; window list bar at the foot.
-FORM: Status Line, Impeccable's pick, rank 1 of 7 grounded candidates, seed
-key d365737e.
+THESIS: An instrument front panel on paper. Every value is a large numeral
+with its small capital label beneath; fields split by 2 px rules; one scale
+line where time runs. It refuses the boxed tile with a title bar and the
+page-name band that duplicated the footer.
+OWN-WORLD: Paper white, ink black, Google Sans 400 to 700, Nerd Font glyphs,
+2 px rules, tick scales, tell-tale dots and filled state chips in red,
+yellow, green, blue that appear only for a state, 45 degree hatch for the
+unavailable.
+STORY: The owner reads the numerals first, the labels explain, a tell-tale
+pulls the eye only when something needs it, the footer names the pages.
+FIRST VIEWPORT: 64 px header (day numeral, weather reading, device
+tell-tales, clock); left 456 px priorities and the day scale; right AI
+readings and the note; 40 px footer window list.
+FORM: Braun Panel, candidate 6 of 7, seed 7a009fe2.
 FINISH: unreviewed and undocumented is unfinished; this build ends with the
-finish review, the verdict, DESIGN.md, and every shipping raster carrying its
-provenance.
+finish review, the verdict, DESIGN.md, and every shipping raster carrying
+its provenance.
 -->
-<div class="screen">
-  <header class="statusbar">
-    <div class="cluster cluster-left">
-      {% for item in left_entries %}
-      <div class="entry{% if item.inverted %} f-black{% elif item.field %} f-{{ item.field }}{% endif %}{% if item.ink %} t-{{ item.ink }}{% endif %}{% if loop.last %} entry-flex{% endif %}">
-        {% if item.icon %}<span class="i">{{ item.icon }}</span>{% endif %}<span class="num clip">{{ item.text }}</span>
+<div class="frame">
+  <header class="hdr">
+    <div class="hdr-left">
+      <div class="hdr-day">
+        <span class="hdr-day-num num">{{ header.day }}</span>
+        <span class="hdr-day-stack"><span>{{ header.weekday }}</span><span>{{ header.month }}</span></span>
       </div>
-      {% endfor %}
+      <div class="rule-v"></div>
+      <div class="hdr-weather">
+        {% if header.weather.available %}
+        <span class="hdr-wx-temp num">{{ header.weather.temp }}<span class="hdr-wx-unit">C</span></span>
+        <span class="i hdr-wx-icon">{{ header.weather.icon }}</span>
+        <span class="hdr-wx-state{% if header.weather.color %} t-{{ header.weather.color }}{% endif %}">
+          {% if header.weather.dot %}<span class="telltale {{ header.weather.dot }}"></span>{% endif %}{{ header.weather.label }}
+        </span>
+        {% else %}
+        <span class="hatch hdr-wx-hatch"></span>
+        <span class="hdr-wx-state">UNAVAILABLE</span>
+        {% endif %}
+      </div>
     </div>
-    <div class="cluster cluster-right">
-      {% for item in right_entries %}
-      <div class="entry{% if item.field %} f-{{ item.field }}{% endif %}">
-        {% if item.icon %}<span class="i">{{ item.icon }}</span>{% endif %}<span class="num">{{ item.text }}</span>
-      </div>
-      {% endfor %}
+    <div class="hdr-right">
+      {% if header.overdue_count > 0 %}
+      <span class="chip chip-red hdr-pill"><span class="i">{{ icons.FLAG }}</span><span class="num">{{ header.overdue_count }}</span></span>
+      {% endif %}
+      <span class="i">{{ header.wifi_icon }}</span>
+      {% if header.battery.chip_accent %}
+      <span class="chip chip-{{ header.battery.chip_accent }} hdr-pill"><span class="i">{{ header.battery.icon }}</span><span class="num">{{ header.battery.percent }}</span></span>
+      {% else %}
+      <span class="hdr-plain"><span class="i">{{ header.battery.icon }}</span><span class="num">{{ header.battery.percent }}</span></span>
+      {% endif %}
+      <span class="hdr-clock num">{{ header.clock }}</span>
     </div>
   </header>
-
+  <div class="rule-h"></div>
   <main class="body">{% block content %}{% endblock %}</main>
-
-  <footer class="winbar">
-    <div class="wins">
-      {% for window in windows %}
-      <div class="win{% if window.active %} win-on{% endif %}"><span class="num">{{ window.index }}</span>&nbsp;{{ window.name }}{% if window.flag %}<span class="win-flag">!</span>{% endif %}</div>
+  <div class="rule-h"></div>
+  <footer class="ftr">
+    <div class="win-list">
+      {% for window in footer.windows %}
+      <span class="win{% if window.active %} win-active{% endif %}"><span class="num">{{ window.index }}</span>&nbsp;{{ window.name }}{% if window.flag %}<span class="win-flag">!</span>{% endif %}</span>
       {% endfor %}
     </div>
-    {% if device_badge.available %}
-    <div class="winbar-right">
-      <span class="i">{{ icons.WIFI }}</span><span class="num">{{ device_badge.wifi_short }}</span>
-    </div>
-    {% endif %}
   </footer>
 </div>
 </body>
