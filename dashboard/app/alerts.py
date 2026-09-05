@@ -76,6 +76,7 @@ class AlertStore:
             created_at=now_local(self._timezone),
             duration_seconds=request.duration_seconds,
             beep=request.beep,
+            source=request.source,
         )
         existing = self._alert
         if (

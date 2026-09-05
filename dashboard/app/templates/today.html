@@ -1,91 +1,118 @@
 {% extends "base.html" %}
 
 {% block style %}
-.col-left  { flex: 0 0 516px; width: 516px; border-right: 4px solid #000000; padding: 12px 16px 8px 22px; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
-.col-right { flex: 1 1 auto; padding: 12px 22px 8px 18px; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.today-left  { flex: 0 0 500px; width: 500px; }
+.today-right { flex: 1 1 auto; }
 
-.task { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; }
-.task-num { flex: 0 0 22px; font-size: 23px; font-weight: 900; line-height: 1.1; }
-.task-title { flex: 1 1 auto; font-size: 22px; font-weight: 700; line-height: 1.15; min-width: 0; }
-.task-due { flex: 0 0 auto; }
+.pane-pri  { flex: 0 0 198px; }
+.pane-next { flex: 1 1 auto; }
+/* Four rows plus the default 8 px padding overflowed by 2 px and clipped the
+   descenders on the last one. */
+.pane-next .pane-body { padding: 4px 12px; }
+.pane-cap  { flex: 0 0 126px; }
+.pane-note { flex: 1 1 auto; }
 
-.event { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
-.event-when { flex: 0 0 154px; font-size: 19px; font-weight: 900; letter-spacing: 0.02em; white-space: nowrap; }
-.event-title { flex: 1 1 auto; font-size: 20px; font-weight: 700; min-width: 0; }
+/* Priorities: a glyph slot, the task, and the due chip on the right. */
+.pri {
+  display: flex; align-items: center; gap: 10px;
+  height: 48px;
+}
+.pri-mark { flex: 0 0 34px; font-size: 30px; }
+.pri-title { flex: 1 1 auto; font-size: 26px; font-weight: 700; line-height: 1.3; min-width: 0; }
+.pri-due { flex: 0 0 auto; }
 
-.provider { margin-bottom: 13px; }
-.provider-name { font-size: 21px; font-weight: 900; letter-spacing: 0.06em; margin-bottom: 3px; }
-.quota { display: flex; align-items: baseline; gap: 9px; margin-bottom: 2px; }
-.quota-window { flex: 0 0 34px; font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
-.quota-value { font-size: 32px; font-weight: 900; line-height: 1.05; }
-.quota-tag { font-size: 15px; font-weight: 700; letter-spacing: 0.06em; }
-{% endblock %}
+/* Next: four event rows. The time prints in its calendar's colour, so two
+   feeds are told apart without a label. */
+.evt { display: flex; align-items: center; gap: 10px; height: 34px; }
+.evt-when {
+  flex: 0 0 auto; min-width: 78px;
+  font-size: 24px; font-weight: 900; letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.evt-title { flex: 1 1 auto; font-size: 24px; font-weight: 700; line-height: 1.3; min-width: 0; }
 
-{% block header_right %}
-  <div class="big">{{ weather_summary.temp }}</div>
-  <div class="sub {% if weather_summary.accent == 'blue' %}t-blue{% endif %}">{{ weather_summary.detail }}</div>
+/* AI capacity: one row per provider, the percentages carrying their own
+   state colour. No meter: the number is the whole message. */
+.today-right .pane-body { padding: 6px 10px; }
+.prov { display: flex; align-items: baseline; gap: 5px; height: 38px; }
+.prov-name { flex: 1 1 auto; font-size: 20px; font-weight: 900; letter-spacing: 0; min-width: 0; }
+.prov-win { flex: 0 0 auto; font-size: 20px; font-weight: 900; letter-spacing: 0; }
+.prov-value { flex: 0 0 auto; font-size: 28px; font-weight: 900; line-height: 1; letter-spacing: -0.01em; }
+
+.note-text { font-size: 24px; font-weight: 600; line-height: 1.3; }
 {% endblock %}
 
 {% block content %}
-<div class="col-left">
-  <div class="section-title">TODAY'S PRIORITIES</div>
-  {% if priorities %}
-    {% for task in priorities %}
-    <div class="task">
-      <div class="task-num">{{ loop.index }}</div>
-      <div class="task-title clip">{{ task.title }}</div>
-      {% if task.due_label %}
-      <div class="task-due"><span class="chip chip-{{ task.accent }}">{{ task.due_label }}</span></div>
+<div class="col today-left br">
+  <section class="pane pane-pri bb">
+    <div class="pane-title f-{{ title_accents.priorities }}">
+      <span class="i">{{ icons.CHECKBOX_MARKED }}</span><span>PRIORITIES</span>
+    </div>
+    <div class="pane-body">
+      {% if priorities %}
+        {% for task in priorities %}
+        <div class="pri">
+          <div class="pri-mark i">{{ icons.CHECKBOX_BLANK }}</div>
+          <div class="pri-title clip">{{ task.title }}</div>
+          {% if task.due_label %}
+          <div class="pri-due"><span class="chip chip-{{ task.accent }}">{{ task.due_label }}</span></div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty">{{ tasks_note or "No open tasks" }}</div>
       {% endif %}
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty">{{ tasks_note or "No open tasks" }}</div>
-  {% endif %}
+  </section>
 
-  <div class="rule"></div>
-
-  <div class="section-title">NEXT</div>
-  {% if next_events %}
-    {% for event in next_events[:4] %}
-    <div class="event">
-      <div class="event-when">{{ event.when }}</div>
-      <div class="event-title clip">{{ event.title }}</div>
+  <section class="pane pane-next">
+    <div class="pane-title f-{{ title_accents.next }}">
+      <span class="i">{{ icons.CALENDAR_CLOCK }}</span><span>NEXT</span>
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty">{{ calendar_note or "Nothing scheduled" }}</div>
-  {% endif %}
+    <div class="pane-body">
+      {% if next_events %}
+        {% for event in next_events[:4] %}
+        <div class="evt">
+          <div class="evt-when num t-{{ event.color }}">{{ event.when }}</div>
+          <div class="evt-title clip">{{ event.title }}</div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty">{{ calendar_note or "Nothing scheduled" }}</div>
+      {% endif %}
+    </div>
+  </section>
 </div>
 
-<div class="col-right">
-  <div class="section-title">AI CAPACITY</div>
-  {% if providers %}
-    {% for provider in providers %}
-    <div class="provider">
-      <div class="provider-name">{{ provider.provider }}</div>
-      <div class="quota">
-        <div class="quota-window">5H</div>
-        <div class="quota-value">{{ provider.short }}</div>
-        <div class="quota-tag">LEFT</div>
-      </div>
-      <div class="quota">
-        <div class="quota-window">7D</div>
-        <div class="quota-value">{{ provider.weekly }}</div>
-        <div class="quota-tag">LEFT</div>
-      </div>
+<div class="col today-right">
+  <section class="pane pane-cap bb">
+    <div class="pane-title f-{{ title_accents.capacity }}">
+      <span class="i">{{ icons.ROBOT }}</span><span>AI CAPACITY</span>
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty">{{ usage_note or "unknown" }}</div>
-  {% endif %}
-</div>
-{% endblock %}
+    <div class="pane-body">
+      {% if providers %}
+        {% for provider in providers[:2] %}
+        <div class="prov">
+          <div class="prov-name clip">{{ provider.provider }}</div>
+          <div class="prov-win">5H</div>
+          <div class="prov-value num t-{{ provider.short_accent }}">{{ provider.short }}</div>
+          <div class="prov-win">7D</div>
+          <div class="prov-value num t-{{ provider.weekly_accent }}">{{ provider.weekly }}</div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty">{{ usage_note or "unknown" }}</div>
+      {% endif %}
+    </div>
+  </section>
 
-{% block footer %}
-<div class="footer">
-  <span class="chip chip-black">AI NOTE</span>
-  <div class="footer-text">{{ ai_note.text }}</div>
-  <div class="footer-updated">UPDATED {{ updated_label }}</div>
+  <section class="pane pane-note">
+    <div class="pane-title f-{{ title_accents.note }}">
+      <span class="i">{{ icons.MESSAGE_TEXT }}</span><span>NOTE</span>
+    </div>
+    <div class="pane-body">
+      <div class="note-text">{{ ai_note.text }}</div>
+    </div>
+  </section>
 </div>
 {% endblock %}

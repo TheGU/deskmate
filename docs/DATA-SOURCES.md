@@ -93,6 +93,8 @@ Normalized fields: `id`, `title`, `due`, `priority`, `completed`, `source`,
 ```sh
 CALENDAR_SOURCE=ics
 CALENDAR_ICS_URLS=https://example.com/basic.ics,/data/work.ics
+CALENDAR_NAMES=work,personal
+CALENDAR_COLORS=blue,green
 ```
 
 Comma separated. Each entry is either an `http(s)` URL or a local file path.
@@ -101,7 +103,24 @@ back, three weeks forward, at most 50 occurrences per event); `EXDATE` is
 honoured. All-day events keep `all_day: true`.
 
 Normalized fields: `id`, `title`, `start`, `end`, `all_day`, `location`,
-`source`.
+`source`, `calendar`.
+
+### Naming and colouring the feeds
+
+`CALENDAR_NAMES` and `CALENDAR_COLORS` are comma lists in the same order as
+`CALENDAR_ICS_URLS`, and both are optional:
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `CALENDAR_NAMES` | the URL host, else `calendar N` | Goes into `Event.calendar` and is what the agenda legend prints. |
+| `CALENDAR_COLORS` | cycles blue, green, yellow | One of `blue`, `green`, `yellow`, `red`, `black` per feed. |
+
+The agenda and the Today NEXT pane print each event's time in its calendar's
+colour, and the agenda's status bar entry is the legend that says which name
+is which colour. Red and yellow are not handed out by default: they mean
+overdue and caution everywhere else on the panel, and a calendar is not a
+state. The fixture calendar tags every event `work` or `personal`, so the demo
+shows blue and green through the same default cycle.
 
 ---
 
@@ -409,7 +428,8 @@ Content-Type: application/json
   "message": "Someone is at the door",
   "priority": "doorbell",
   "duration_seconds": 90,
-  "beep": true
+  "beep": true,
+  "source": "Front door"
 }
 ```
 
@@ -420,6 +440,7 @@ Content-Type: application/json
 | `priority` | `critical`, `doorbell`, `important`, `normal` | Default `normal`. |
 | `duration_seconds` | int, 5 to 600 | Default 90. How long the device shows it. |
 | `beep` | bool | Default true. Whether the device buzzes. |
+| `source` | string, up to 48 chars | Optional. What raised the alert, in your own words. Shown in the alert page title bar; without it the bar shows the priority class. |
 
 Responses: `201` with `{"accepted": true, "alert": {...}}`, or `409` with
 `{"accepted": false, ...}` when a higher priority alert is still active
@@ -439,7 +460,7 @@ rest_command:
     payload: >-
       {"title": "{{ title }}", "message": "{{ message }}",
        "priority": "{{ priority }}", "duration_seconds": {{ duration }},
-       "beep": {{ beep | lower }}}
+       "beep": {{ beep | lower }}, "source": "{{ source }}"}
 ```
 
 Script that pushes the alert to the hub and then tells the device to show it.
@@ -465,6 +486,8 @@ script:
           number: { min: 5, max: 600, unit_of_measurement: s }
       beep:
         selector: { boolean: }
+      source:
+        selector: { text: }
     sequence:
       # 1. The hub renders the alert page first.
       - action: rest_command.deskmate_alert
@@ -474,6 +497,7 @@ script:
           priority: "{{ priority | default('normal') }}"
           duration: "{{ duration | default(90) | int }}"
           beep: "{{ beep | default(true) }}"
+          source: "{{ source | default('') }}"
         response_variable: hub
       # 2. Only then does the device download and show it, and only while it
       #    is always-on. In battery mode it sleeps for hours between wakes and
@@ -502,6 +526,7 @@ automation:
           priority: doorbell
           duration: 90
           beep: true
+          source: Front door
 ```
 
 The device shows `/display/alert.png`, keeps it for `duration` seconds, then

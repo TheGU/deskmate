@@ -26,21 +26,25 @@ BLACK: Final[str] = "#000000"
 WHITE: Final[str] = "#FFFFFF"
 
 CHART_WIDTH: Final[int] = 344
-CHART_HEIGHT: Final[int] = 168
+CHART_HEIGHT: Final[int] = 170
 
 #: Room left of the plot for nothing at all; the value labels sit above it.
 PLOT_LEFT: Final[float] = 7.0
 PLOT_RIGHT: Final[float] = CHART_WIDTH - 7.0
-PLOT_TOP: Final[float] = 26.0
-PLOT_BOTTOM: Final[float] = CHART_HEIGHT - 28.0
+PLOT_TOP: Final[float] = 30.0
+PLOT_BOTTOM: Final[float] = CHART_HEIGHT - 34.0
 
 SERIES_STROKE: Final[int] = 4
 AXIS_STROKE: Final[int] = 3
-LABEL_SIZE: Final[int] = 15
-TICK_SIZE: Final[int] = 15
+#: The page floor: nothing on the panel is drawn below 20 px.
+LABEL_SIZE: Final[int] = 20
+#: The page stack, unquoted because an SVG presentation attribute takes a bare
+#: font family list. Thai codepoints fall through to Noto Sans Thai per glyph.
+LABEL_FONT: Final[str] = "Google Sans Flex, Noto Sans Thai, sans-serif"
+TICK_SIZE: Final[int] = 20
 #: Baselines for the two text rows.
-VALUE_BASELINE: Final[float] = 15.0
-TICK_BASELINE: Final[float] = CHART_HEIGHT - 6.0
+VALUE_BASELINE: Final[float] = 19.0
+TICK_BASELINE: Final[float] = CHART_HEIGHT - 8.0
 
 #: Smallest span each axis is stretched to, so a flat day is not amplified
 #: into a mountain range by autoscaling.
@@ -82,6 +86,7 @@ class Chart:
     plot_bottom: float = PLOT_BOTTOM
     axis_stroke: int = AXIS_STROKE
     series_stroke: int = SERIES_STROKE
+    label_font: str = LABEL_FONT
     series: list[ChartSeries] = field(default_factory=list)
     labels: list[ChartText] = field(default_factory=list)
     has_data: bool = False

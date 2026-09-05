@@ -131,10 +131,22 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 
 - Exactly 800x480, landscape, quantized to white, black, red, yellow, green and
   blue with no dithering.
-- Swiss information-dashboard style: white ground, bold black type, thick
-  dividers, color used only as a semantic accent. No gradients, shadows, grays,
+- Status Line: the page reads as a terminal status line on paper. A white top
+  band of entries divided by 4 px black rules with the page name inverted, a
+  body of panes split by 4 px black rules, and a window list bar at the foot
+  that names the five pages the buttons walk through and flags the ones that
+  want attention.
+- Color reports state, it never decorates. The chrome is black on white; a
+  field turns blue, red, yellow or green only when it carries that state, and
+  healthy is the quiet default. Calendars are the one exception: each feed
+  gets a color and the agenda prints a legend.
+- Type floors for a 1-bit panel: row text 24 px weight 700, labels and chips
+  20 px weight 900, nothing below 20 px. No gradients, shadows, grays, radius,
   animation or tiny text.
-- Deterministic rendering: bundled Inter (OFL), no system fonts, no network at
-  render time, no clock that changes every minute.
+- Deterministic rendering: bundled Google Sans Flex (variable, OFL) for text,
+  Noto Sans Thai (OFL) as the Thai fallback, and a Symbols Nerd Font subset for
+  icons. No system fonts, no network at render time, no clock that changes
+  every minute. Every glyph is chosen in `app/icons.py`; templates hold no
+  codepoints.
 - Data is never invented. An adapter that is unset or broken makes the page say
   `unknown` or `unavailable`.

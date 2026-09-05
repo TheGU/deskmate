@@ -110,6 +110,10 @@ class Event(BaseModel):
     all_day: bool = False
     location: str | None = None
     source: str = "fixture"
+    #: Which feed the event came from ("work", "personal", an ICS feed name).
+    #: The pages colour the event's time by this, so two calendars are told
+    #: apart without a label. ``None`` means one unnamed calendar.
+    calendar: str | None = Field(default=None, max_length=32)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +304,10 @@ class Alert(BaseModel):
     #: Seconds the device should keep the alert on screen.
     duration_seconds: int = 90
     beep: bool = True
-    source: str = "api"
+    #: What raised the alert, in the sender's own words ("Front door"). The
+    #: alert page puts it in the title bar. Optional: a caller that does not
+    #: send one gets the priority class there instead.
+    source: str | None = Field(default=None, max_length=48)
 
     @property
     def rank(self) -> int:
@@ -315,6 +322,7 @@ class AlertRequest(BaseModel):
     priority: AlertPriority = AlertPriority.NORMAL
     duration_seconds: int = Field(default=90, ge=5, le=600)
     beep: bool = True
+    source: str | None = Field(default=None, max_length=48)
 
 
 # ---------------------------------------------------------------------------

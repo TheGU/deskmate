@@ -105,7 +105,7 @@ def test_preview_html_renders(client: TestClient, page: str) -> None:
     response = client.get(f"/preview/{page}.html")
     assert response.status_code == 200
     assert "<html" in response.text
-    assert "Inter" in response.text
+    assert "Google Sans Flex" in response.text
 
 
 def test_preview_html_rejects_an_unknown_page(client: TestClient) -> None:
@@ -147,6 +147,43 @@ def test_alert_round_trip_changes_the_alert_page(client: TestClient) -> None:
     assert cleared.status_code == 200
     assert cleared.json()["cleared"] is True
     assert client.get("/api/state").json()["alert"] is None
+
+
+def test_alert_source_round_trips_and_reaches_the_page(client: TestClient) -> None:
+    """The optional source names what raised the alert, in the sender's words."""
+    client.delete("/api/alert")
+    created = client.post(
+        "/api/alert",
+        json={
+            "title": "Doorbell",
+            "message": "Someone is at the door",
+            "priority": "doorbell",
+            "source": "Front door",
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["alert"]["source"] == "Front door"
+    assert client.get("/api/state").json()["alert"]["source"] == "Front door"
+
+    html = client.get("/preview/alert.html").text
+    assert "FRONT DOOR" in html
+
+    assert client.get("/display/alert.png").status_code == 200
+    client.delete("/api/alert")
+
+
+def test_alert_without_a_source_falls_back_to_the_priority(client: TestClient) -> None:
+    client.delete("/api/alert")
+    created = client.post(
+        "/api/alert",
+        json={"title": "Laundry done", "priority": "normal", "duration_seconds": 30},
+    )
+    assert created.status_code == 201
+    assert created.json()["alert"]["source"] is None
+
+    html = client.get("/preview/alert.html").text
+    assert "NORMAL" in html
+    client.delete("/api/alert")
 
 
 def test_alert_rejects_a_lower_priority_while_one_is_active(client: TestClient) -> None:

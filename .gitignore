@@ -26,3 +26,5 @@ firmware/run-compile.ps1
 # Local logs
 *.log
 firmware/ota-on-wake.ps1
+.impeccable/review/
+.impeccable/questions/

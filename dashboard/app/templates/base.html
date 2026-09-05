@@ -11,27 +11,126 @@
 html, body {
   width: 800px; height: 480px;
   background: #FFFFFF; color: #000000;
-  font-family: 'Inter', sans-serif;
-  font-weight: 400;
-  -webkit-font-smoothing: none;
-  text-rendering: geometricPrecision;
+  font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif;
+  font-weight: 600;
   overflow: hidden;
 }
 
 /* --- palette ---------------------------------------------------------- */
-/* Only the six panel colors. No grays, no gradients, no shadows. */
+/* Only the six panel colors, and a color only ever reports a state. No
+   grays, gradients, shadows, radius, opacity. */
+.f-white  { background: #FFFFFF; color: #000000; }
+.f-black  { background: #000000; color: #FFFFFF; }
+.f-red    { background: #FF0000; color: #FFFFFF; }
+.f-yellow { background: #FFFF00; color: #000000; }
+.f-green  { background: #00FF00; color: #000000; }
+.f-blue   { background: #0000FF; color: #FFFFFF; }
+
+.t-black { color: #000000; }
+.t-white { color: #FFFFFF; }
 .t-red   { color: #FF0000; }
 .t-blue  { color: #0000FF; }
-.t-black { color: #000000; }
+.t-green { color: #00FF00; }
+.t-yellow { color: #FFFF00; }
 
+.bar-black  { background: #000000; }
+.bar-red    { background: #FF0000; }
+.bar-yellow { background: #FFFF00; }
+.bar-green  { background: #00FF00; }
+.bar-blue   { background: #0000FF; }
+
+/* --- type helpers ----------------------------------------------------- */
+/* Icons come only from the bundled Nerd Font subset, never from Unicode
+   symbols standing in for an icon system. */
+.i { font-family: 'Symbols Nerd Font Mono'; font-weight: 400; line-height: 1; }
+.num { font-variant-numeric: tabular-nums; }
+.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.clamp2 {
+  overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+
+/* --- frame ------------------------------------------------------------ */
+.screen { width: 800px; height: 480px; display: flex; flex-direction: column; }
+
+/* Status band: white paper, black type, entries divided by 4 px rules. The
+   page entry is inverted, the same black block the window list uses. Nothing
+   else is filled unless it carries a state. */
+.statusbar {
+  flex: 0 0 56px; height: 56px;
+  display: flex; align-items: stretch; justify-content: space-between;
+  overflow: hidden;
+}
+.cluster { display: flex; align-items: stretch; min-width: 0; }
+.cluster-right { flex: 0 0 auto; }
+.entry {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 8px;
+  font-size: 20px; font-weight: 800; letter-spacing: 0.01em;
+  white-space: nowrap; min-width: 0;
+}
+.entry .i { font-size: 22px; }
+.entry + .entry { border-left: 4px solid #000000; }
+/* The context entry is the one that can carry a long location, so it is the
+   one that gives way. */
+.entry-flex { flex: 0 1 auto; min-width: 0; }
+
+/* Body: panes split by 4 px black rules. */
+.body {
+  flex: 1 1 auto; min-height: 0;
+  border-top: 4px solid #000000;
+  display: flex; overflow: hidden;
+}
+.col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.br { border-right: 4px solid #000000; }
+.bb { border-bottom: 4px solid #000000; }
+
+/* Panes: a title bar, then the white reading field. The bar is black unless
+   the pane's own state is the message. */
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.pane-title {
+  flex: 0 0 34px; height: 34px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 12px;
+  font-size: 20px; font-weight: 900; letter-spacing: 0.06em;
+}
+.pane-title .i { font-size: 23px; }
+.pane-body { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 8px 12px; }
+
+/* Window list: the device's navigation, left button back, right button on. */
+.winbar {
+  flex: 0 0 44px; height: 44px;
+  border-top: 4px solid #000000;
+  display: flex; align-items: stretch; justify-content: space-between;
+  overflow: hidden;
+}
+.wins { display: flex; align-items: stretch; padding-left: 10px; }
+.win {
+  display: flex; align-items: center;
+  padding: 0 7px;
+  font-size: 20px; font-weight: 900; letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.win + .win { margin-left: 8px; }
+.win-on { background: #000000; color: #FFFFFF; }
+/* A tmux flag: same weight, same colour, set off from the name by a gap. */
+.win-flag { margin-left: 5px; }
+.winbar-right {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 12px;
+  font-size: 20px; font-weight: 900; white-space: nowrap;
+}
+.winbar-right .i { font-size: 22px; }
+
+/* --- shared blocks ---------------------------------------------------- */
 .chip {
-  display: inline-block;
+  display: inline-flex; align-items: center;
   border: 3px solid #000000;
   padding: 1px 8px 3px 8px;
   font-weight: 900;
-  font-size: 17px;
+  font-size: 20px;
   line-height: 1.1;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 .chip-black  { background: #FFFFFF; color: #000000; }
@@ -40,81 +139,76 @@ html, body {
 .chip-green  { background: #00FF00; color: #000000; }
 .chip-blue   { background: #0000FF; color: #FFFFFF; }
 
-.bar-red    { background: #FF0000; }
-.bar-yellow { background: #FFFF00; }
-.bar-green  { background: #00FF00; }
-.bar-blue   { background: #0000FF; }
-.bar-black  { background: #000000; }
+/* Block meter: ten cells, filled solid in the semantic color. Never a thin
+   bar, never a ring. */
+.meter { display: flex; gap: 2px; flex: 0 0 auto; }
+.cell { width: 14px; height: 14px; border: 3px solid #000000; background: #FFFFFF; }
+.cell-red    { background: #FF0000; }
+.cell-yellow { background: #FFFF00; }
+.cell-green  { background: #00FF00; }
+.cell-blue   { background: #0000FF; }
+.cell-black  { background: #000000; }
 
-/* --- frame ------------------------------------------------------------ */
-.screen { width: 800px; height: 480px; display: flex; flex-direction: column; }
-
-.hdr {
-  height: 68px; flex: 0 0 68px;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 22px;
-  border-bottom: 4px solid #000000;
-}
-.hdr-date { font-size: 30px; font-weight: 900; letter-spacing: 0.02em; }
-.hdr-title {
-  font-size: 30px; font-weight: 900; letter-spacing: 0.10em;
-  border-bottom: 6px solid #000000; padding-bottom: 2px;
-}
-.hdr-right { font-size: 26px; font-weight: 700; text-align: right; letter-spacing: 0.02em; }
-.hdr-right .big { font-size: 32px; font-weight: 900; }
-.hdr-right .sub { font-size: 19px; font-weight: 700; letter-spacing: 0.06em; }
-
-.body { flex: 1 1 auto; display: flex; min-height: 0; }
-
-.footer {
-  flex: 0 0 58px; height: 58px;
-  border-top: 4px solid #000000;
-  display: flex; align-items: center; gap: 14px;
-  padding: 0 22px;
-  overflow: hidden;
-}
-.footer-text {
-  font-size: 19px; font-weight: 700; line-height: 1.2;
-  flex: 1 1 auto;
-  max-height: 46px;
-  overflow: hidden;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-}
-.footer-updated {
-  font-size: 18px; font-weight: 700; letter-spacing: 0.06em; white-space: nowrap;
-}
-
-/* --- shared blocks ---------------------------------------------------- */
-.section-title {
-  font-size: 19px; font-weight: 900; letter-spacing: 0.12em;
-  padding-bottom: 4px; border-bottom: 3px solid #000000;
-  margin-bottom: 9px;
-}
-.rule { height: 3px; background: #000000; margin: 10px 0; }
-.rule-thick { height: 4px; background: #000000; }
-
-.row { display: flex; align-items: baseline; gap: 10px; }
-.muted-note {
-  font-size: 18px; font-weight: 700; letter-spacing: 0.04em;
-}
-.empty {
-  font-size: 20px; font-weight: 700; letter-spacing: 0.04em;
-}
-.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { font-size: 24px; font-weight: 700; letter-spacing: 0.01em; line-height: 1.3; }
 {% block style %}{% endblock %}
 </style>
 </head>
 <body>
+<!--
+THESIS: the desk paper is the owner's own status line. A tmux session on paper:
+a status band of entries divided by rules, panes split by thick rules with
+title bars, glyphs instead of labels. It refuses the e-ink dashboard default of
+a white page with thin rules and small text.
+OWN-WORLD: white paper ground; six panel colors only; the chrome is neutral,
+a white status band and black pane title bars divided by 4 px black rules, and
+the page entry inverted; a field takes a color only when it carries a state
+(blue rain or a calendar, red overdue urgent down heat, yellow caution due warn
+stale, green healthy done), and healthy is the quiet default; Google Sans Flex
+300-1000 with Noto Sans Thai fallback; Symbols Nerd Font icons; nothing below
+20 px; no gray, no radius, no shadow.
+STORY: one glance answers what matters now; the window list at the foot says
+which page this is and flags the pages that need attention.
+FIRST VIEWPORT: top status band of entries split by 4 px vertical rules (date,
+inverted page name, context left; overdue, battery, time right); two columns of
+panes; window list bar at the foot.
+FORM: Status Line, Impeccable's pick, rank 1 of 7 grounded candidates, seed
+key d365737e.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the
+finish review, the verdict, DESIGN.md, and every shipping raster carrying its
+provenance.
+-->
 <div class="screen">
-{% block screen %}
-  <header class="hdr">
-    <div class="hdr-date">{{ date_label }}</div>
-    <div class="hdr-title">{{ page_title }}</div>
-    <div class="hdr-right">{% block header_right %}{% endblock %}</div>
+  <header class="statusbar">
+    <div class="cluster cluster-left">
+      {% for item in left_entries %}
+      <div class="entry{% if item.inverted %} f-black{% elif item.field %} f-{{ item.field }}{% endif %}{% if item.ink %} t-{{ item.ink }}{% endif %}{% if loop.last %} entry-flex{% endif %}">
+        {% if item.icon %}<span class="i">{{ item.icon }}</span>{% endif %}<span class="num clip">{{ item.text }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="cluster cluster-right">
+      {% for item in right_entries %}
+      <div class="entry{% if item.field %} f-{{ item.field }}{% endif %}">
+        {% if item.icon %}<span class="i">{{ item.icon }}</span>{% endif %}<span class="num">{{ item.text }}</span>
+      </div>
+      {% endfor %}
+    </div>
   </header>
+
   <main class="body">{% block content %}{% endblock %}</main>
-  {% block footer %}{% endblock %}
-{% endblock %}
+
+  <footer class="winbar">
+    <div class="wins">
+      {% for window in windows %}
+      <div class="win{% if window.active %} win-on{% endif %}"><span class="num">{{ window.index }}</span>&nbsp;{{ window.name }}{% if window.flag %}<span class="win-flag">!</span>{% endif %}</div>
+      {% endfor %}
+    </div>
+    {% if device_badge.available %}
+    <div class="winbar-right">
+      <span class="i">{{ icons.WIFI }}</span><span class="num">{{ device_badge.wifi_short }}</span>
+    </div>
+    {% endif %}
+  </footer>
 </div>
 </body>
 </html>

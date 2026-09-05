@@ -11,6 +11,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -78,6 +79,12 @@ class Settings(BaseSettings):
     calendar_source: CalendarSource = Field(default="fixture", alias="CALENDAR_SOURCE")
     #: Comma separated list of ICS URLs or local file paths.
     calendar_ics_urls: str = Field(default="", alias="CALENDAR_ICS_URLS")
+    #: Names for those feeds, in the same order. Blank falls back to the URL
+    #: host, then to "calendar N".
+    calendar_names: str = Field(default="", alias="CALENDAR_NAMES")
+    #: Panel colours for those feeds, in the same order: blue, green, yellow,
+    #: red or black. Anything unnamed cycles blue, green, yellow.
+    calendar_colors: str = Field(default="", alias="CALENDAR_COLORS")
 
     # -- weather --------------------------------------------------------
     weather_source: WeatherSource = Field(default="fixture", alias="WEATHER_SOURCE")
@@ -157,6 +164,22 @@ class Settings(BaseSettings):
     @property
     def ics_sources(self) -> list[str]:
         return [item.strip() for item in self.calendar_ics_urls.split(",") if item.strip()]
+
+    @property
+    def calendar_name_list(self) -> list[str]:
+        return [item.strip() for item in self.calendar_names.split(",") if item.strip()]
+
+    @property
+    def calendar_color_list(self) -> list[str]:
+        return [item.strip().lower() for item in self.calendar_colors.split(",") if item.strip()]
+
+    def ics_calendar_name(self, index: int, reference: str) -> str:
+        """Name for one ICS feed: configured, else its host, else its number."""
+        names = self.calendar_name_list
+        if index < len(names):
+            return names[index]
+        host = urlparse(reference).hostname
+        return host or f"calendar {index + 1}"
 
     @property
     def ha_entities(self) -> dict[str, str]:

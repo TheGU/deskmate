@@ -41,17 +41,22 @@ PAGE_TTL_SECONDS: Final[dict[str, float]] = {
     "alert": 0.0,
 }
 
-FONT_FACES: Final[tuple[tuple[str, int, str], ...]] = (
-    ("Inter", 400, "Inter-Regular.ttf"),
-    ("Inter", 700, "Inter-Bold.ttf"),
-    ("Inter", 900, "Inter-Black.ttf"),
+#: (family, ``font-weight`` descriptor, filename). The first two are variable
+#: fonts, so the descriptor is a range and one file covers every weight the
+#: pages ask for. Thai codepoints fall through to Noto Sans Thai per glyph.
+FONT_FACES: Final[tuple[tuple[str, str, str], ...]] = (
+    ("Google Sans Flex", "300 1000", "GoogleSansFlex-wght.ttf"),
+    ("Noto Sans Thai", "100 900", "NotoSansThai-wdth-wght.ttf"),
+    ("Symbols Nerd Font Mono", "400", "SymbolsNerdFontMono-Subset.ttf"),
 )
 
 _BROWSER_ARGS: Final[list[str]] = [
     "--force-device-scale-factor=1",
     "--hide-scrollbars",
     "--disable-lcd-text",
-    "--font-render-hinting=none",
+    # Full hinting snaps stems to the pixel grid. The panel is 1-bit after
+    # quantization, so an unhinted stem lands as a smear of half-tones.
+    "--font-render-hinting=full",
     "--disable-gpu",
 ]
 
@@ -61,7 +66,7 @@ def font_css(fonts_dir: str, embed: bool) -> str:
     """``@font-face`` rules; embedded as data URIs for the offline renderer."""
     directory = Path(fonts_dir)
     rules: list[str] = []
-    for family, weight, filename in FONT_FACES:
+    for family, weight_range, filename in FONT_FACES:
         path = directory / filename
         if not path.is_file():
             log(logger, logging.WARNING, "bundled font missing", path=str(path))
@@ -73,7 +78,7 @@ def font_css(fonts_dir: str, embed: bool) -> str:
             source = f"url('/static/fonts/{filename}') format('truetype')"
         rules.append(
             "@font-face{"
-            f"font-family:'{family}';font-style:normal;font-weight:{weight};"
+            f"font-family:'{family}';font-style:normal;font-weight:{weight_range};"
             f"font-display:block;src:{source};"
             "}"
         )
@@ -132,6 +137,32 @@ class Renderer:
         context["embed_fonts"] = embed_fonts
         template = self._env.get_template(f"{page}.html")
         return template.render(**context)
+
+    async def probe(self, page: str, state: DashboardState, expression: str) -> Any:
+        """Evaluate a JavaScript expression against a rendered page.
+
+        The display path never calls this. It exists so a check that only the
+        browser can answer, such as whether a bundled font really loaded for
+        the glyphs on the page, can be made against the same HTML and the same
+        Chromium flags the PNG is screenshotted with.
+        """
+        html = self.render_html(page, state, embed_fonts=True)
+        async with self._lock:
+            browser = await self._ensure_browser()
+            context = await browser.new_context(
+                viewport={"width": DISPLAY_SIZE[0], "height": DISPLAY_SIZE[1]},
+                device_scale_factor=1,
+                color_scheme="light",
+                reduced_motion="reduce",
+                forced_colors="none",
+            )
+            try:
+                browser_page = await context.new_page()
+                await browser_page.set_content(html, wait_until="load")
+                await browser_page.evaluate("document.fonts.ready")
+                return await browser_page.evaluate(expression)
+            finally:
+                await context.close()
 
     # -- png -------------------------------------------------------------
     async def render_png(self, page: str, state: DashboardState) -> bytes:

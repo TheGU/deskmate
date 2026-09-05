@@ -88,8 +88,17 @@ class IcsCalendarAdapter:
         window_end = window_start + timedelta(days=WINDOW_BEFORE_DAYS + WINDOW_AFTER_DAYS)
 
         events: list[Event] = []
-        for reference, text in texts:
-            events.extend(parse_ics(text, reference, timezone_name, window_start, window_end))
+        for index, (reference, text) in enumerate(texts):
+            events.extend(
+                parse_ics(
+                    text,
+                    reference,
+                    timezone_name,
+                    window_start,
+                    window_end,
+                    calendar_name=self._settings.ics_calendar_name(index, reference),
+                )
+            )
         events.sort(key=lambda item: (item.start, item.title))
         log(logger, logging.INFO, "ics parsed", sources=len(sources), events=len(events))
         return events
@@ -121,12 +130,13 @@ def parse_ics(
     timezone_name: str,
     window_start: datetime,
     window_end: datetime,
+    calendar_name: str | None = None,
 ) -> list[Event]:
     """Parse one ICS document into normalized events inside the window."""
-    calendar = ICalendar.from_ical(text)
+    document = ICalendar.from_ical(text)
     label = hashlib.sha256(reference.encode("utf-8")).hexdigest()[:8]
     events: list[Event] = []
-    for component in calendar.walk("VEVENT"):
+    for component in document.walk("VEVENT"):
         dtstart = component.get("DTSTART")
         if dtstart is None:
             continue
@@ -162,6 +172,7 @@ def parse_ics(
                     all_day=all_day,
                     location=location,
                     source="ics",
+                    calendar=calendar_name,
                 )
             )
     return events

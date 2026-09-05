@@ -4,6 +4,7 @@
   "events": [
     {
       "id": "fix-ev-1",
+      "calendar": "work",
       "title": "Daily standup",
       "start": "2026-09-04T09:30:00",
       "end": "2026-09-04T09:45:00",
@@ -12,6 +13,7 @@
     },
     {
       "id": "fix-ev-2",
+      "calendar": "work",
       "title": "Design sync - reTerminal kiosk",
       "start": "2026-09-04T11:00:00",
       "end": "2026-09-04T12:00:00",
@@ -20,6 +22,7 @@
     },
     {
       "id": "fix-ev-3",
+      "calendar": "work",
       "title": "1:1 with Nan",
       "start": "2026-09-04T14:00:00",
       "end": "2026-09-04T14:30:00",
@@ -28,6 +31,7 @@
     },
     {
       "id": "fix-ev-4",
+      "calendar": "work",
       "title": "Client demo - Siam Piwat",
       "start": "2026-09-04T16:30:00",
       "end": "2026-09-04T17:30:00",
@@ -36,6 +40,7 @@
     },
     {
       "id": "fix-ev-5",
+      "calendar": "personal",
       "title": "Muay Thai class",
       "start": "2026-09-04T19:00:00",
       "end": "2026-09-04T20:30:00",
@@ -44,6 +49,7 @@
     },
     {
       "id": "fix-ev-6",
+      "calendar": "work",
       "title": "Sprint planning",
       "start": "2026-09-07T09:30:00",
       "end": "2026-09-07T11:00:00",
@@ -52,6 +58,7 @@
     },
     {
       "id": "fix-ev-7",
+      "calendar": "personal",
       "title": "Dentist - Sukhumvit 21",
       "start": "2026-09-08T10:00:00",
       "end": "2026-09-08T11:00:00",
@@ -60,6 +67,7 @@
     },
     {
       "id": "fix-ev-8",
+      "calendar": "work",
       "title": "Team lunch at EmQuartier",
       "start": "2026-09-08T12:00:00",
       "end": "2026-09-08T13:30:00",
@@ -68,6 +76,7 @@
     },
     {
       "id": "fix-ev-9",
+      "calendar": "personal",
       "title": "Flight BKK to CNX",
       "start": "2026-09-10T07:05:00",
       "end": "2026-09-10T08:30:00",
@@ -76,6 +85,7 @@
     },
     {
       "id": "fix-ev-10",
+      "calendar": "personal",
       "title": "Chiang Mai offsite",
       "start": "2026-09-10T00:00:00",
       "end": "2026-09-11T00:00:00",
@@ -84,6 +94,7 @@
     },
     {
       "id": "fix-ev-11",
+      "calendar": "work",
       "title": "Quarterly business review",
       "start": "2026-09-09T13:00:00",
       "end": "2026-09-09T15:00:00",
@@ -92,6 +103,7 @@
     },
     {
       "id": "fix-ev-12",
+      "calendar": "personal",
       "title": "Condo fire drill",
       "start": "2026-09-05T18:00:00",
       "end": "2026-09-05T18:45:00",

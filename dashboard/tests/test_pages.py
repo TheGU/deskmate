@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 import pytest
 from PIL import Image
 
 from app.adapters.device import build_device_state
-from app.models import AdapterStatus, DashboardState, DeviceBlock, DeviceSample
+from app.models import AdapterStatus, DashboardState, DeviceBlock, DeviceSample, Task, TasksBlock
 from app.renderer.palette import DISPLAY_SIZE, PALETTE_RGB, assert_palette, palette_violations
 from app.renderer.render import PAGES, Renderer
 from app.telemetry import TelemetrySummary
@@ -36,6 +36,20 @@ def test_page_is_palette_constrained(rendered: dict[str, bytes], page: str) -> N
     image = open_png(rendered[page])
     assert palette_violations(image) == set()
     assert_palette(image)
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_page_uses_at_least_one_panel_color(rendered: dict[str, bytes], page: str) -> None:
+    """The world commits to color: a page that is only black on white is a bug.
+
+    Every page carries at least a colored status bar segment, a chip, a meter
+    or a title bar, so a page rendering in pure monochrome means an accent was
+    dropped somewhere between ``view.py`` and the template.
+    """
+    image = open_png(rendered[page]).convert("RGB")
+    monochrome = {(255, 255, 255), (0, 0, 0)}
+    colors = {color for _count, color in (image.getcolors(maxcolors=1 << 24) or [])}
+    assert colors - monochrome, f"{page} renders without a single colored pixel"
 
 
 @pytest.mark.parametrize("page", PAGES)
@@ -141,6 +155,101 @@ def test_system_page_hides_power_row_when_unreported(
     html = renderer.render_html("system", unreported, embed_fonts=False)
     assert "ON USB" not in html
     assert "ON BATTERY" not in html
+
+
+#: Measured in the rendered document: where the two halves of the status band
+#: start and end, and whether the window list still fits beside the Wi-Fi
+#: reading at the foot.
+_BAND_GEOMETRY = """(() => {
+  const round = value => Math.round(value * 10) / 10;
+  const left = document.querySelector('.cluster-left').getBoundingClientRect();
+  const right = document.querySelector('.cluster-right').getBoundingClientRect();
+  const wins = document.querySelector('.wins').getBoundingClientRect();
+  const foot = document.querySelector('.winbar-right');
+  return {
+    leftEnd: round(left.right),
+    rightStart: round(right.left),
+    winsEnd: round(wins.right),
+    footStart: foot ? round(foot.getBoundingClientRect().left) : 800,
+    footHeight: foot ? Math.round(foot.getBoundingClientRect().height) : 0,
+  };
+})()"""
+
+
+def _widest_status_bar(state: DashboardState) -> DashboardState:
+    """The state that makes the top band as wide as it can honestly get.
+
+    A full battery is the widest percentage, a three-digit RSSI the widest
+    Wi-Fi reading, and a fortnight of neglect the widest overdue count.
+    """
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    latest = DeviceSample(
+        received_at=now,
+        device="reterminal-e1002",
+        temperature=32.0,
+        humidity=55.0,
+        battery_level=100.0,
+        wifi_rssi=-100.0,
+        usb_present=True,
+        charge_state="charged",
+    )
+    device = DeviceBlock(
+        status=AdapterStatus.OK,
+        source="store",
+        device=build_device_state(
+            latest=latest,
+            history=[latest],
+            summary=TelemetrySummary(sample_count=1, oldest=now, newest=now),
+            now=now,
+        ),
+    )
+    late = date(2026, 9, 5) - timedelta(days=3)
+    tasks = TasksBlock(
+        status=AdapterStatus.OK,
+        items=[Task(id=str(n), title=f"Overdue {n}", due=late) for n in range(12)],
+    )
+    return state.model_copy(update={"device": device, "tasks": tasks})
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_status_band_halves_never_collide(
+    renderer: Renderer, state: DashboardState, page: str
+) -> None:
+    """The two halves of the band keep white paper between them."""
+    geometry = run(renderer.probe(page, _widest_status_bar(state), _BAND_GEOMETRY))
+    gap = geometry["rightStart"] - geometry["leftEnd"]
+    assert gap >= 8, f"{page}: band halves {gap} px apart, {geometry}"
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_window_list_fits_beside_the_wifi_reading(
+    renderer: Renderer, state: DashboardState, page: str
+) -> None:
+    geometry = run(renderer.probe(page, _widest_status_bar(state), _BAND_GEOMETRY))
+    assert geometry["winsEnd"] <= geometry["footStart"], geometry
+    # A taller box would mean the bar overflowed and wrapped onto two lines.
+    assert geometry["footHeight"] in (0, 40), geometry
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_no_pane_overflows_its_own_box(
+    renderer: Renderer, state: DashboardState, page: str
+) -> None:
+    """Nothing is clipped by a pane that was not sized for it.
+
+    Rows that truncate opt in with ``clip`` or ``clamp2``; anything else whose
+    content scrolls is a layout that no longer fits.
+    """
+    overflow = run(
+        renderer.probe(
+            page,
+            state,
+            """Array.from(document.querySelectorAll('.pane-body')).filter(
+                 e => e.scrollHeight > e.clientHeight + 1
+               ).map(e => [e.parentElement.className, e.scrollHeight, e.clientHeight])""",
+        )
+    )
+    assert overflow == [], f"{page}: {overflow}"
 
 
 def test_pages_cover_the_documented_set() -> None:

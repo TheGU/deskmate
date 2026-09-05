@@ -9,11 +9,13 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+from app import icons
 from app.config import Settings
 from app.models import (
     AdapterStatus,
     Alert,
     AlertPriority,
+    BriefMode,
     DashboardState,
     DeviceState,
     DeviceStatus,
@@ -21,6 +23,7 @@ from app.models import (
     PRIORITY_RANK,
     Priority,
     Task,
+    Weather,
 )
 from app.renderer.chart import build_chart
 from app.timeutil import to_local, zone
@@ -36,6 +39,22 @@ PAGE_TITLES: dict[str, str] = {
     "system": "HOME AND SYSTEM",
     "alert": "ALERT",
 }
+
+#: What the status bar and the window list call each page. Short enough to sit
+#: in a segment; the window list is the device's navigation, so the order is
+#: the button order in PRODUCT.md.
+PAGE_NAMES: dict[str, str] = {
+    "today": "TODAY",
+    "agenda": "AGENDA",
+    "weather": "WEATHER",
+    "brief": "BRIEF",
+    "system": "SYSTEM",
+    "alert": "ALERT",
+}
+
+#: The five pages the left and right buttons walk through. Alert is not in the
+#: list: it interrupts and then hands the previous page back.
+WINDOW_PAGES: tuple[str, ...] = ("today", "agenda", "weather", "brief", "system")
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +147,13 @@ def task_accent(task: Task, today: date) -> str:
 
 
 def upcoming_events(
-    state: DashboardState, reference: datetime, limit: int
+    state: DashboardState,
+    reference: datetime,
+    limit: int,
+    colors: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     today = reference.date()
+    colors = colors or {}
     events = [event for event in state.calendar.items if _event_end(event) >= reference]
     events.sort(key=lambda event: event.start)
     rows: list[dict[str, Any]] = []
@@ -143,7 +166,14 @@ def upcoming_events(
         else:
             prefix = day.strftime("%a").upper()
             when = prefix if event.all_day else f"{prefix} {event.start.strftime('%H:%M')}"
-        rows.append({"when": when, "title": event.title, "location": event.location or ""})
+        rows.append(
+            {
+                "when": when,
+                "title": event.title,
+                "location": event.location or "",
+                "color": event_color(event, colors),
+            }
+        )
     return rows
 
 
@@ -154,17 +184,246 @@ def _event_end(event: Event) -> datetime:
 # ---------------------------------------------------------------------------
 # page contexts
 # ---------------------------------------------------------------------------
+def entry(
+    icon: str,
+    text: str,
+    *,
+    field: str = "",
+    ink: str = "",
+    inverted: bool = False,
+) -> dict[str, Any]:
+    """One status bar entry.
+
+    The band is white and the entries are divided by rules, so an entry is
+    neutral unless it has something to report: ``field`` fills it with a state
+    colour, ``ink`` colours only the type, and ``inverted`` is the black block
+    that marks the page you are on, the same mark the window list uses.
+    """
+    return {"icon": icon, "text": text, "field": field, "ink": ink, "inverted": inverted}
+
+
+#: Colours handed out to calendars nobody named, in the order the calendars
+#: first appear. Red and yellow are left out: they mean overdue and caution
+#: everywhere else and a calendar is not a state.
+DEFAULT_CALENDAR_COLORS: tuple[str, ...] = ("blue", "green", "yellow")
+
+
+def calendar_colors(state: DashboardState, settings: Settings) -> dict[str, str]:
+    """Colour per calendar name, configured first, then the default cycle."""
+    mapping: dict[str, str] = {}
+    configured = settings.calendar_color_list
+    for index, name in enumerate(settings.calendar_name_list):
+        mapping[name.lower()] = (
+            configured[index]
+            if index < len(configured)
+            else DEFAULT_CALENDAR_COLORS[index % len(DEFAULT_CALENDAR_COLORS)]
+        )
+    unnamed = 0
+    for event in state.calendar.items:
+        key = (event.calendar or "").lower()
+        if not key or key in mapping:
+            continue
+        mapping[key] = DEFAULT_CALENDAR_COLORS[unnamed % len(DEFAULT_CALENDAR_COLORS)]
+        unnamed += 1
+    return mapping
+
+
+def event_color(event: Event, colors: dict[str, str]) -> str:
+    """The colour an event's time prints in. Black when it has no calendar."""
+    return colors.get((event.calendar or "").lower(), "black")
+
+
+def calendar_legend(state: DashboardState, settings: Settings) -> list[dict[str, str]]:
+    """One legend item per calendar actually present, in first-seen order."""
+    colors = calendar_colors(state, settings)
+    seen: list[str] = []
+    for event in state.calendar.items:
+        key = (event.calendar or "").lower()
+        if key and key not in seen:
+            seen.append(key)
+    return [{"name": key.upper(), "color": colors[key]} for key in seen]
+
+
+#: Worst first. A pane title bar carries the most urgent thing under it, so a
+#: single red row colours the whole title even when the rest is green.
+ACCENT_ORDER: tuple[str, ...] = ("red", "yellow", "green")
+
+
+def worst_accent(accents: Any) -> str:
+    """The loudest accent in a group, or black when the group says nothing."""
+    seen = set(accents)
+    for accent in ACCENT_ORDER:
+        if accent in seen:
+            return accent
+    return "black"
+
+
+def meter_cells(value: float | None, filled: bool = True) -> list[bool]:
+    """Ten block meter cells, one per ten percent.
+
+    An unknown quantity is ten empty cells, never a guessed fill.
+    """
+    if value is None or not filled:
+        return [False] * 10
+    lit = int(round(max(0.0, min(100.0, float(value))) / 10.0))
+    return [index < lit for index in range(10)]
+
+
+def overdue_tasks(state: DashboardState, today: date) -> list[Task]:
+    if not state.tasks.usable:
+        return []
+    return [
+        task
+        for task in sorted(open_tasks(state), key=lambda item: (item.due or today, item.title))
+        if task.due is not None and task.due < today
+    ]
+
+
+def device_badge(state: DashboardState) -> dict[str, Any]:
+    """Battery and Wi-Fi as the top bar and the window list bar need them.
+
+    Every page carries these, not just System: the paper can be on battery
+    anywhere, and a flat device is the one thing that stops all six pages.
+    """
+    device: DeviceState | None = state.device.device
+    if not state.device.usable or device is None or not device.has_reading:
+        return {
+            "available": False,
+            "battery_percent": "",
+            "battery_accent": "black",
+            "battery_icon": icons.BATTERY,
+            "battery_level": None,
+            "battery_cells": meter_cells(None),
+            "charging": False,
+            "wifi": "",
+            "wifi_short": "",
+            "wifi_accent": "black",
+        }
+    level = device.battery_level
+    charging = device.charge_state == "charging"
+    return {
+        "available": True,
+        "battery_percent": fmt_number(level, digits=0, suffix="%"),
+        "battery_accent": battery_accent(level),
+        "battery_icon": icons.battery_icon(level, charging),
+        "battery_level": level,
+        "battery_cells": meter_cells(level),
+        "charging": charging,
+        "wifi": fmt_number(device.wifi_rssi, digits=0, suffix=" dBm"),
+        # The window list bar has no room for the unit and the glyph beside it
+        # already says what the number is.
+        "wifi_short": fmt_number(device.wifi_rssi, digits=0),
+        "wifi_accent": wifi_accent(device.wifi_rssi),
+    }
+
+
+def window_flags(state: DashboardState, overdue_count: int) -> set[str]:
+    """Pages the window list marks with a "!".
+
+    tmux flags a window that wants attention, and a flag on everything is a
+    flag on nothing, so the bar is deliberately hard to set: something has to
+    be late, broken or unhealthy, not merely worth reading. Rain is not a flag
+    because the status bar already carries it on every page.
+    """
+    flagged: set[str] = set()
+    if overdue_count > 0:
+        flagged.add("agenda")
+
+    home = state.home.home
+    if state.home.usable and home is not None:
+        # A degraded service is on the System page already; only a service
+        # that is actually down is worth sending the owner there.
+        if any(service.health.value == "down" for service in home.services):
+            flagged.add("system")
+
+    device = state.device.device
+    if state.device.usable and device is not None and device.status is DeviceStatus.STALE:
+        flagged.add("system")
+
+    weather = state.weather.weather
+    if state.weather.usable and weather is not None:
+        air = (
+            uv_accent(weather.uv_index),
+            pm25_accent(weather.pm2_5),
+            aqi_accent(weather.aqi),
+        )
+        if "red" in air:
+            flagged.add("weather")
+    return flagged
+
+
+def status_clusters(context: dict[str, Any]) -> None:
+    """Fill the two halves of the top band.
+
+    The band is white with black type and 4 px rules; only two things are
+    allowed to fill an entry. The page entry is inverted, the same black block
+    the window list uses for the page you are on, and an entry that carries a
+    state takes that state's colour. Everything else stays neutral.
+    """
+    left: list[dict[str, Any]] = [
+        # No glyph on the date or the clock: the value says what it is,
+        # and six glyph-led entries do not fit an 800 px band.
+        entry("", context["date_label"]),
+        entry(context["page_icon"], context["page_name"], inverted=True)
+        if not context["page_field"]
+        else entry(context["page_icon"], context["page_name"], field=context["page_field"]),
+    ]
+    left.extend(context["context_entries"])
+
+    right: list[dict[str, Any]] = []
+    if context["overdue_label"]:
+        # Overdue is a state, so the flag entry is the one red field up here.
+        right.append(entry(icons.FLAG, context["overdue_label"], field="red"))
+    badge = context["device_badge"]
+    if badge["available"]:
+        # A healthy battery is not news; only caution and empty fill the field.
+        fill = badge["battery_accent"] if badge["battery_accent"] in ("yellow", "red") else ""
+        right.append(entry(badge["battery_icon"], badge["battery_percent"], field=fill))
+    right.append(entry("", context["updated_label"]))
+
+    context["left_entries"] = left
+    context["right_entries"] = right
+
+
 def base_context(state: DashboardState, settings: Settings, page: str) -> dict[str, Any]:
     reference = to_local(state.updated_at, state.timezone)
+    today = reference.date()
+    overdue = overdue_tasks(state, today)
+    flagged = window_flags(state, len(overdue))
     return {
         "page": page,
         "page_title": PAGE_TITLES.get(page, page.upper()),
+        "page_name": PAGE_NAMES.get(page, page.upper()),
+        "page_icon": icons.page_icon(page),
+        # The page entry is inverted by default; only the alert page fills it
+        # with a colour, because there the priority is the state.
+        "page_field": "",
         "state": state,
         "settings": settings,
-        "today": reference.date(),
+        "today": today,
         "reference": reference,
         "date_label": fmt_long_date(reference),
         "updated_label": reference.strftime("%H:%M"),
+        # Named constants for the fixed glyphs; the chosen ones are per row.
+        "icons": icons,
+        "overdue_count": len(overdue),
+        "overdue_label": f"{len(overdue)} LATE" if overdue else "",
+        "device_badge": device_badge(state),
+        "windows": [
+            {
+                "index": index,
+                "name": PAGE_NAMES[name],
+                # Set here, drawn inside the entry in the entry's own weight
+                # and colour: a tmux flag, never a second coloured element.
+                "flag": name in flagged,
+                "active": name == page,
+            }
+            for index, name in enumerate(WINDOW_PAGES, start=1)
+        ],
+        # Each page builder replaces this with its own trailing entries.
+        "context_entries": [],
+        # Each page builder fills this with one accent per pane title bar.
+        "title_accents": {},
     }
 
 
@@ -180,31 +439,90 @@ def today_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     )
     context["tasks_note"] = block_note(state.tasks.status, "tasks")
     context["next_events"] = (
-        upcoming_events(state, reference, 4) if state.calendar.usable else []
+        upcoming_events(state, reference, 4, calendar_colors(state, settings))
+        if state.calendar.usable
+        else []
     )
     context["calendar_note"] = block_note(state.calendar.status, "calendar")
-    context["weather_summary"] = weather_summary(state)
+    summary = weather_summary(state)
+    context["weather_summary"] = summary
     context["providers"] = usage_rows(state)
     context["usage_note"] = block_note(state.ai_usage.status, "AI quota")
     context["ai_note"] = brief_note(state)
+    # The weather entry is the one place the sky reports itself: blue when
+    # rain is coming, red when it is dangerously hot, neutral otherwise.
+    context["context_entries"] = [
+        entry(summary["icon"], summary["short"], field=summary["field"])
+    ]
+    context["title_accents"] = {
+        # Every bar here is neutral. What is late is said by the red flag in
+        # the status band, by the red due chip, and by the red percentage.
+        "priorities": "black",
+        "next": "black",
+        "capacity": "black",
+        "note": "black",
+    }
     return context
 
 
 def weather_summary(state: DashboardState) -> dict[str, str]:
+    """The one weather line the Today page carries in its status bar.
+
+    ``short`` is the segment text and ``icon`` its glyph; ``detail`` stays the
+    long form other callers already read.
+    """
     weather = state.weather.weather
     if not state.weather.usable or weather is None:
-        return {"temp": "--", "detail": UNAVAILABLE, "accent": "black"}
+        return {
+            "temp": "--",
+            "detail": UNAVAILABLE,
+            "accent": "black",
+            "field": "",
+            "short": f"WEATHER {UNAVAILABLE.upper()}",
+            "icon": icons.WEATHER_PARTLY_CLOUDY,
+        }
     temp = fmt_number(weather.temperature_c, suffix="C")
     if weather.rain_from:
         detail = f"RAIN FROM {weather.rain_from}"
         accent = "blue"
+        short = f"{temp} RAIN {weather.rain_from}"
     elif weather.rain_probability_percent is not None:
         detail = f"RAIN {weather.rain_probability_percent}%"
         accent = "black"
+        short = f"{temp} {detail}"
     else:
         detail = weather.condition.upper()
         accent = "black"
-    return {"temp": temp, "detail": detail, "accent": accent}
+        short = f"{temp} {detail}"
+    # Heat outranks rain: a 40 degree feel is the thing to know first.
+    if is_heat(weather):
+        field = "red"
+    elif accent == "blue":
+        field = "blue"
+    else:
+        field = ""
+    return {
+        "temp": temp,
+        "detail": detail,
+        "accent": accent,
+        "field": field,
+        "short": short,
+        "icon": icons.weather_icon(weather.condition),
+    }
+
+
+#: The panel is read in Bangkok, where 36 C in the shade or a 40 C feel is the
+#: difference between walking and taking a taxi.
+HEAT_TEMPERATURE_C: float = 36.0
+HEAT_FEELS_LIKE_C: float = 40.0
+
+
+def is_heat(weather: Weather | None) -> bool:
+    if weather is None:
+        return False
+    return (weather.temperature_c or 0.0) >= HEAT_TEMPERATURE_C or (
+        weather.feels_like_c or 0.0
+    ) >= HEAT_FEELS_LIKE_C
 
 
 def usage_rows(state: DashboardState) -> list[dict[str, Any]]:
@@ -229,13 +547,18 @@ def usage_rows(state: DashboardState) -> list[dict[str, Any]]:
 
 
 def percent_accent(value: int | None, healthy: bool) -> str:
+    """Colour for a percentage that is running out.
+
+    Never green: plenty of quota left is not news, and a page where the
+    healthy case is coloured teaches the eye to ignore colour.
+    """
     if not healthy or value is None:
         return "black"
     if value <= 15:
         return "red"
     if value <= 35:
         return "yellow"
-    return "green"
+    return "black"
 
 
 def brief_note(state: DashboardState) -> dict[str, str]:
@@ -263,6 +586,7 @@ def agenda_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     today: date = context["today"]
     tz = zone(state.timezone)
 
+    colors = calendar_colors(state, settings)
     days: list[dict[str, Any]] = []
     for offset in range(settings.agenda_days):
         day = today + timedelta(days=offset)
@@ -272,6 +596,7 @@ def agenda_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
             {
                 "when": "ALL DAY" if event.all_day else event.start.strftime("%H:%M"),
                 "title": event.title,
+                "color": event_color(event, colors),
             }
             for event in sorted(state.calendar.items, key=lambda item: item.start)
             if start <= event.start < end
@@ -281,26 +606,37 @@ def agenda_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
             for task in sorted(open_tasks(state), key=lambda item: item.title)
             if task.due == day
         ]
+        label = relative_day_label(day, today)
         days.append(
             {
                 "day": day,
-                "label": relative_day_label(day, today),
+                "label": label,
                 "date_label": day.strftime("%d %b").upper(),
+                # The chip already spells the weekday, so the label beside it
+                # only earns its space while it says something else.
+                "chip_label": day.strftime("%a %d").upper(),
+                "head_label": label if label in ("TODAY", "TOMORROW") else "",
                 "events": events,
                 "due": due,
                 "empty": not events and not due,
             }
         )
 
-    overdue = [
-        {"title": task.title, "label": due_label(task.due, today)}
-        for task in sorted(open_tasks(state), key=lambda item: (item.due or today, item.title))
-        if task.due is not None and task.due < today
-    ]
     context["days"] = days
-    context["overdue"] = overdue
+    context["overdue"] = [
+        {"title": task.title, "label": due_label(task.due, today)}
+        for task in overdue_tasks(state, today)
+    ]
     context["calendar_note"] = block_note(state.calendar.status, "calendar")
     context["tasks_note"] = block_note(state.tasks.status, "tasks")
+    # The legend is the context entry: one entry per calendar in play, its
+    # name in its own colour, so the coloured times below need no labels.
+    legend = calendar_legend(state, settings)
+    context["legend"] = legend
+    context["context_entries"] = [
+        entry("", item["name"], ink=item["color"]) for item in legend
+    ] or [entry(icons.CALENDAR_CHECK, f"{settings.agenda_days} DAYS")]
+    context["title_accents"] = {"days": "black", "then": "black"}
     return context
 
 
@@ -313,10 +649,19 @@ def weather_context(state: DashboardState, settings: Settings) -> dict[str, Any]
         context["daily"] = []
         context["metrics"] = []
         context["location"] = UNKNOWN
+        context["condition_icon"] = icons.WEATHER_PARTLY_CLOUDY
+        context["context_entries"] = [entry(icons.MAP_MARKER, UNKNOWN.upper())]
+        context["title_accents"] = {"weather": "black"}
         return context
 
     context["weather"] = weather
     context["location"] = weather.location_name or UNKNOWN
+    # The page's own glyph is the sky it is describing.
+    context["condition_icon"] = icons.weather_icon(weather.condition)
+    context["page_icon"] = context["condition_icon"]
+    context["context_entries"] = [
+        entry(icons.MAP_MARKER, (weather.location_name or UNKNOWN).upper())
+    ]
     context["temp"] = fmt_number(weather.temperature_c)
     context["feels"] = fmt_number(weather.feels_like_c)
     context["condition"] = weather.condition.upper()
@@ -340,24 +685,32 @@ def weather_context(state: DashboardState, settings: Settings) -> dict[str, Any]
         else "black"
     )
 
+    # Labels are one short word: the cells are about 96 px wide and the type
+    # floor is 20 px, so HUMIDITY does not fit and the glyph carries the rest.
     context["metrics"] = [
         {
-            "label": "HUMIDITY",
+            "label": "HUMID",
+            "icon": icons.WATER_PERCENT,
             "value": fmt_percent(weather.humidity_percent),
             "accent": "black",
         },
         {
-            "label": "UV INDEX",
+            "label": "UV",
+            "icon": icons.WHITE_BALANCE_SUNNY,
             "value": fmt_number(weather.uv_index, digits=1),
             "accent": uv_accent(weather.uv_index),
         },
         {
             "label": "PM2.5",
+            "icon": icons.SMOG,
             "value": fmt_number(weather.pm2_5, digits=0),
             "accent": pm25_accent(weather.pm2_5),
         },
         {
-            "label": "AQI " + (weather.aqi_label.upper() if weather.aqi_label else UNKNOWN.upper()),
+            # The qualitative word would not fit the cell and the accent bar
+            # under the number already carries it.
+            "label": "AQI",
+            "icon": icons.GAUGE,
             "value": fmt_number(weather.aqi),
             "accent": aqi_accent(weather.aqi),
         },
@@ -365,7 +718,7 @@ def weather_context(state: DashboardState, settings: Settings) -> dict[str, Any]
 
     context["daily"] = [
         {
-            "label": relative_day_label(item.day, today),
+            "label": strip_day_label(item.day, today),
             "date_label": item.day.strftime("%d %b").upper(),
             "high": fmt_number(item.high_c),
             "low": fmt_number(item.low_c),
@@ -374,7 +727,28 @@ def weather_context(state: DashboardState, settings: Settings) -> dict[str, Any]
         }
         for item in weather.daily[:5]
     ]
+    air = worst_accent(metric["accent"] for metric in context["metrics"])
+    context["title_accents"] = {
+        # Heat is the state the NOW pane can carry; the rest is just weather.
+        "now": "red" if is_heat(weather) else "black",
+        "rain": context["rain_accent"],
+        # Green air is not news, so a clean day leaves the bar black.
+        "air": air if air in ("red", "yellow") else "black",
+        "days": "black",
+    }
     return context
+
+
+def strip_day_label(day: date, today: date) -> str:
+    """Day label for the five column forecast strip.
+
+    Weekday names throughout, because a column is about 73 px wide inside its
+    padding and TOMORROW needs 122 px at the 18 px legibility floor. Inventing
+    a shorter word for it would put a second abbreviation in the world for no
+    reason, so only TODAY, which fits, gets a relative name here. The agenda
+    has the room and keeps TODAY and TOMORROW.
+    """
+    return "TODAY" if day == today else day.strftime("%a").upper()
 
 
 def uv_accent(value: float | None) -> str:
@@ -417,16 +791,41 @@ def brief_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
         context["mode_label"] = UNKNOWN.upper()
         context["headline"] = f"AI brief {UNAVAILABLE}"
         context["generated_label"] = UNKNOWN
+        context["context_entries"] = [
+            entry(icons.NOTE_TEXT, f"BRIEF {UNAVAILABLE.upper()}")
+        ]
+        context["title_accents"] = {"brief": "black"}
         return context
     context["brief"] = brief
     context["mode_label"] = brief.mode.value.upper()
     context["headline"] = brief.headline or "No headline"
     context["generated_label"] = fmt_time(brief.generated_at, state.timezone)
+    # Morning is a sun on yellow, evening a moon on blue: the segment says
+    # which of the two daily briefs this is before the headline is read.
+    morning = brief.mode is BriefMode.MORNING
+    context["context_entries"] = [
+        entry(
+            icons.WHITE_BALANCE_SUNNY if morning else icons.WEATHER_NIGHT,
+            f"WRITTEN {context['generated_label'].upper()}",
+        )
+    ]
     # "lines", not "items": a Jinja dict lookup would hit dict.items instead.
+    # Only a section that names a risk earns a colour, and only when it has
+    # something in it. Everything else is a heading, not a state.
     context["sections"] = [
-        {"title": section.title.upper(), "lines": section.items[:4]}
+        {
+            "title": section.title.upper(),
+            "icon": icons.brief_icon(section.title),
+            "accent": (
+                "red"
+                if icons.brief_accent(section.title) == "red" and section.items
+                else "black"
+            ),
+            "lines": section.items[:4],
+        }
         for section in brief.sections[:4]
     ]
+    context["title_accents"] = {"brief": "black"}
     return context
 
 
@@ -504,9 +903,10 @@ def age_label(age_seconds: float | None) -> str:
 def device_panel(state: DashboardState, settings: Settings) -> dict[str, Any]:
     """Everything the DESK panel draws, including the chart geometry."""
     device: DeviceState | None = state.device.device
+    badge = device_badge(state)
     if not state.device.usable or device is None or not device.has_reading:
         return {
-            "available": False,
+            **badge,
             "note": block_note(state.device.status, "device") or NO_DEVICE_DATA,
             "empty_label": NO_DEVICE_DATA,
             "chart": build_chart([], state.timezone, note=NO_DEVICE_DATA),
@@ -514,18 +914,17 @@ def device_panel(state: DashboardState, settings: Settings) -> dict[str, Any]:
     level = device.battery_level
     power_text, power_accent = power_label(device.usb_present, device.charge_state)
     return {
-        "available": True,
+        **badge,
         "name": (device.device or UNKNOWN).upper(),
         "temperature": fmt_number(device.temperature, digits=1),
         "humidity": fmt_number(device.humidity, digits=0, suffix="%"),
         "power_label": power_text,
         "power_accent": power_accent,
-        "battery_percent": fmt_number(level, digits=0, suffix="%"),
+        "power_icon": (
+            icons.POWER_PLUG_OFF if device.usb_present is False else icons.USB
+        ),
         # Clamped only for the bar width; the printed number stays as reported.
         "battery_fill": 0 if level is None else int(max(0.0, min(100.0, level))),
-        "battery_accent": battery_accent(level),
-        "wifi": fmt_number(device.wifi_rssi, digits=0, suffix=" dBm"),
-        "wifi_accent": wifi_accent(device.wifi_rssi),
         "status_label": (
             age_label(device.age_seconds)
             if device.status is DeviceStatus.OK
@@ -538,11 +937,21 @@ def device_panel(state: DashboardState, settings: Settings) -> dict[str, Any]:
     }
 
 
+def desk_accent(state: DashboardState) -> str:
+    """DESK title bar: yellow once the paper stops reporting, else neutral."""
+    device: DeviceState | None = state.device.device
+    if not state.device.usable or device is None or not device.has_reading:
+        return "black"
+    return "black" if device.status is DeviceStatus.OK else "yellow"
+
+
 def system_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     context = base_context(state, settings, "system")
     home = state.home.home
     context["home_note"] = block_note(state.home.status, "home")
     context["device"] = device_panel(state, settings)
+    context["context_entries"] = [entry(icons.HOME, "HOME")]
+    context["title_accents"] = {"desk": desk_accent(state), "home": "black", "services": "black"}
     if not state.home.usable or home is None:
         context["sensors"] = []
         context["services"] = []
@@ -550,6 +959,7 @@ def system_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     context["sensors"] = [
         {
             "name": sensor.name.upper(),
+            "icon": icons.sensor_icon(sensor.key),
             "value": sensor_value(sensor.value, sensor.unit),
             "accent": {"ok": "green", "warn": "yellow", "alert": "red"}.get(
                 sensor.severity, "black"
@@ -565,12 +975,20 @@ def system_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
             "accent": {"ok": "green", "warn": "yellow", "down": "red"}.get(
                 service.health.value, "black"
             ),
+            "icon": icons.health_icon(service.health.value),
             "mark": {"ok": "OK", "warn": "WARN", "down": "DOWN"}.get(
                 service.health.value, "UNKNOWN"
             ),
         }
         for service in home.services
     ]
+    # Green is the quiet default up here: a bar only lights for a warning.
+    home = worst_accent(sensor["accent"] for sensor in context["sensors"])
+    services = worst_accent(service["accent"] for service in context["services"])
+    context["title_accents"]["home"] = home if home in ("red", "yellow") else "black"
+    context["title_accents"]["services"] = (
+        services if services in ("red", "yellow") else "black"
+    )
     return context
 
 
@@ -579,26 +997,36 @@ def alert_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     alert: Alert | None = state.alert
     context["alert"] = alert
     if alert is None:
-        context["alert_kicker"] = "DESKMATE"
+        context["alert_bar_label"] = ""
         context["alert_title"] = "NO ACTIVE ALERT"
         context["alert_message"] = "The hub has nothing to show right now."
         context["alert_time"] = context["updated_label"]
         context["alert_accent"] = "black"
         return context
     context["alert_title"] = alert.title.upper()
-    # Do not repeat the title as its own kicker ("DOORBELL" over "DOORBELL").
+    # What the bar says, best first: where the alert came from, else the
+    # priority class, and nothing at all when that would only repeat the
+    # title. It is never the product name over its own heading.
     priority_label = alert.priority.value.upper()
-    context["alert_kicker"] = (
-        "DESKMATE ALERT" if priority_label == context["alert_title"] else priority_label
-    )
+    if alert.source:
+        bar_label = alert.source.upper()
+    elif priority_label != context["alert_title"]:
+        bar_label = priority_label
+    else:
+        bar_label = ""
+    context["alert_bar_label"] = bar_label
     context["alert_message"] = alert.message
     context["alert_time"] = to_local(alert.created_at, state.timezone).strftime("%H:%M")
-    context["alert_accent"] = {
+    accent = {
         AlertPriority.CRITICAL: "red",
         AlertPriority.DOORBELL: "red",
         AlertPriority.IMPORTANT: "yellow",
         AlertPriority.NORMAL: "blue",
     }[alert.priority]
+    context["alert_accent"] = accent
+    # The page entry itself carries the alert colour, so the top band says how
+    # loud this is before the pane is read. It is the one page that fills it.
+    context["page_field"] = accent
     return context
 
 
@@ -616,4 +1044,8 @@ def build_context(page: str, state: DashboardState, settings: Settings) -> dict[
     builder = CONTEXT_BUILDERS.get(page)
     if builder is None:
         raise KeyError(f"unknown page {page!r}")
-    return builder(state, settings)
+    context = builder(state, settings)
+    # The third left segment is page specific, so the clusters can only be
+    # ordered once the page builder has had its say.
+    status_clusters(context)
+    return context

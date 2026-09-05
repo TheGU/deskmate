@@ -71,8 +71,74 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
    `renderer/palette.py` quantizes to the six-color palette with
    `Image.quantize(palette=..., dither=NONE)` and saves an 8-bit RGB,
    non-interlaced PNG (ESPHome's PNG decoder needs non-interlaced).
-3. Determinism: bundled fonts only (Inter, OFL), no system fonts, no
-   animations, no timestamps other than the state `updated_at`.
+3. Determinism: bundled fonts only, no system fonts, no animations, no
+   timestamps other than the state `updated_at`. `view.py` turns the state
+   into a flat context and `icons.py` chooses every glyph, so the templates
+   hold no logic and no codepoints.
+
+Fonts live in `dashboard/app/static/fonts/` and are embedded as base64 data
+URIs by `render.py` `font_css` (the developer preview serves the same files
+from `/static/fonts/` instead). `FONT_FACES` carries a `font-weight` range
+descriptor per face, because the first two are variable fonts:
+
+| File | Family | `font-weight` | Use |
+| --- | --- | --- | --- |
+| `GoogleSansFlex-wght.ttf` | Google Sans Flex | `300 1000` | all text |
+| `NotoSansThai-wdth-wght.ttf` | Noto Sans Thai | `100 900` | Thai fallback |
+| `SymbolsNerdFontMono-Subset.ttf` | Symbols Nerd Font Mono | `400` | icons |
+
+The stack is `'Google Sans Flex', 'Noto Sans Thai', sans-serif`, so Thai
+codepoints fall through to Noto Sans Thai per glyph. The Nerd Font is a
+subset: only the codepoints named in `app/icons.py` exist in it, and a test
+reads the font's cmap to prove it. Chromium runs with
+`--font-render-hinting=full` and the pages set no `text-rendering` or
+`-webkit-font-smoothing` override, because the panel is 1-bit after
+quantization and an unhinted stem lands as a smear of half-tones.
+
+### Page design: Status Line
+
+The six pages share one frame, described in full in the direction contract at
+the top of `templates/base.html`. It reads as a terminal status line on paper:
+
+**Color reports state, it never decorates.** The chrome is neutral: a white
+status band with black type, black pane title bars, 4 px black rules. A field
+takes a color only when it carries a state, and the color is that state's
+meaning: blue for rain or a calendar, red for overdue, urgent, down or heat,
+yellow for caution, due today, warn or stale, green for healthy or charged.
+Healthy is the quiet default, so a page with nothing to report has almost no
+color on it. `view.py` decides every one of those accents; the templates only
+print the class name.
+
+- A 56 px top status band, white, with entries divided by 4 px black vertical
+  rules. Left: date, the page name inverted (the same black block the window
+  list uses), then a page-specific context entry. Right: overdue count (red,
+  it is a state), device battery (filled only when yellow or red), updated
+  time. The date and the clock carry no glyph: six glyph-led entries do not
+  fit an 800 px band and those two values name themselves.
+- A 380 px body of panes split by 4 px black rules. Every pane has a 34 px
+  title bar carrying a glyph and an uppercase title. The bar is black unless
+  the pane's own state is the message: weather NOW red in a heat wave, RAIN
+  blue when rain today is 50 percent or more, AIR red or yellow with the air,
+  agenda OVERDUE red (green when there is nothing overdue), system DESK yellow
+  when the device is stale, HOME and SERVICES red or yellow with the worst
+  thing under them, brief risk sections red when they have items.
+- Calendars are told apart by color, not by a label. `Event.calendar` names
+  the feed, `CALENDAR_NAMES` and `CALENDAR_COLORS` map feeds to panel colors
+  (see docs/DATA-SOURCES.md), and the agenda's context entry is the legend.
+- A 44 px window list bar at the foot: the five button-reachable pages as
+  numbered entries with the active one inverted, plus the device Wi-Fi RSSI.
+  A page that wants attention carries a `!` in its entry, tmux style, and the
+  bar is deliberately hard to set: AGENDA when a task is overdue, SYSTEM when
+  a service is down or the device has gone stale, WEATHER when a UV, PM2.5 or
+  AQI reading is in the red. Rain never raises a flag because the status band
+  already carries it on every page.
+- Type floors, because the panel is 1 bit per color at 125 ppi and stair-step
+  edges scale with the ratio of pixel size to stroke width: row text 24 px
+  weight 700, labels and chips 20 px weight 900, and nothing anywhere below
+  20 px. Copy is re-fitted by shortening a label or dropping a row, never by
+  shrinking type.
+- Quantities that are not a single number are block meters of ten bordered
+  cells, filled solid in the semantic color. Never a thin bar, never a ring.
 
 Palette (server and device agree on pure primaries; the ESPHome
 epaper_spi driver maps RGB to the nearest of the six panel colors):

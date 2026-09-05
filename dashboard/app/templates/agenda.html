@@ -1,94 +1,104 @@
 {% extends "base.html" %}
 
 {% block style %}
-.agenda { flex: 1 1 auto; display: grid; grid-template-columns: 1fr 4px 1fr; grid-template-rows: repeat(4, 1fr); min-height: 0; }
-.vrule { grid-row: 1 / span 4; background: #000000; }
-.cell { padding: 6px 16px 4px 18px; border-bottom: 3px solid #000000; min-width: 0; overflow: hidden; }
-.cell-right { padding-left: 18px; }
-.cell-last { border-bottom: none; }
+.ag-left  { flex: 0 0 400px; width: 400px; }
+.ag-right { flex: 1 1 auto; }
+.pane-then { flex: 1 1 auto; }
+.pane-over { flex: 0 0 80px; }
+.ag-left .pane-body, .ag-right .pane-body { padding: 6px 12px; }
 
-.cell-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 3px; line-height: 1.1; }
-.cell-day { font-size: 19px; font-weight: 900; letter-spacing: 0.08em; }
-.cell-date { font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
+.day + .day { margin-top: 2px; }
+.day-head { display: flex; align-items: center; gap: 8px; height: 26px; }
+.day-chip {
+  display: inline-flex; align-items: center; height: 26px; padding: 0 7px;
+  background: #000000; color: #FFFFFF;
+  font-size: 20px; font-weight: 900; letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.day-label { font-size: 20px; font-weight: 900; letter-spacing: 0.04em; }
 
-.line { display: flex; align-items: baseline; gap: 9px; margin-bottom: 1px; line-height: 1.15; }
-.line-when { flex: 0 0 78px; font-size: 18px; font-weight: 900; }
-.line-title { flex: 1 1 auto; font-size: 18px; font-weight: 700; min-width: 0; }
-.line-due { flex: 0 0 78px; font-size: 18px; font-weight: 900; letter-spacing: 0.04em; }
-.cell-empty { font-size: 18px; font-weight: 700; line-height: 1.15; }
-
-.overdue-title { font-size: 19px; font-weight: 900; letter-spacing: 0.08em; margin-bottom: 3px; }
-.overdue-line { font-size: 18px; font-weight: 700; margin-bottom: 1px; display: flex; gap: 8px; line-height: 1.15; }
-.overdue-line .mark { flex: 0 0 14px; font-weight: 900; }
+.ln { display: flex; align-items: center; gap: 8px; height: 27px; }
+/* Wide enough for ALL DAY, which must never wrap onto the line below it. */
+.ln-when { flex: 0 0 92px; font-size: 22px; font-weight: 900; white-space: nowrap; }
+/* A due line has no time, so its flag sits in the time column and the titles
+   below each other stay on one left edge. */
+.ln-mark { flex: 0 0 92px; font-size: 22px; text-align: right; padding-right: 10px; }
+.ln-mark-tight { flex: 0 0 28px; font-size: 22px; text-align: left; padding-right: 0; }
+.ln-title { flex: 1 1 auto; font-size: 24px; font-weight: 700; min-width: 0; }
+.day-empty { font-size: 24px; font-weight: 700; height: 27px; line-height: 27px; }
 {% endblock %}
 
-{% block header_right %}
-  <div class="sub">UPDATED {{ updated_label }}</div>
-{% endblock %}
+{% macro day_block(day, lines) %}
+{% set events = day.events[:lines] %}
+{% set due = day.due[:lines - events|length] %}
+<div class="day">
+  <div class="day-head">
+    <span class="day-chip">{{ day.chip_label }}</span>
+    {% if day.head_label %}<span class="day-label">{{ day.head_label }}</span>{% endif %}
+  </div>
+  {% for event in events %}
+  <div class="ln">
+    <div class="ln-when num t-{{ event.color }}">{{ event.when }}</div>
+    <div class="ln-title clip">{{ event.title }}</div>
+  </div>
+  {% endfor %}
+  {% for task in due %}
+  <div class="ln">
+    <div class="ln-mark i t-red">{{ icons.FLAG }}</div>
+    <div class="ln-title clip">{{ task.title }}</div>
+  </div>
+  {% endfor %}
+  {% if day.empty %}
+  <div class="day-empty">Nothing scheduled</div>
+  {% endif %}
+</div>
+{% endmacro %}
 
 {% block content %}
-<div class="agenda">
-  {% for day in days[:4] %}
-  <div class="cell {% if loop.last %}cell-last{% endif %}" style="grid-column: 1; grid-row: {{ loop.index }};">
-    <div class="cell-head">
-      <span class="cell-day">{{ day.label }}</span>
-      <span class="cell-date">{{ day.date_label }}</span>
+<div class="col ag-left br">
+  <section class="pane">
+    <div class="pane-title f-{{ title_accents.days }}">
+      <span class="i">{{ icons.CALENDAR }}</span><span>NEXT 4 DAYS</span>
     </div>
-    {% for event in day.events[:2] %}
-    <div class="line">
-      <div class="line-when t-blue">{{ event.when }}</div>
-      <div class="line-title clip">{{ event.title }}</div>
+    <div class="pane-body">
+      {% for day in days[:4] %}{{ day_block(day, 3) }}{% endfor %}
     </div>
-    {% endfor %}
-    {% for task in day.due[:1] %}
-    <div class="line">
-      <div class="line-due">DUE</div>
-      <div class="line-title clip">{{ task.title }}</div>
-    </div>
-    {% endfor %}
-    {% if day.empty %}
-    <div class="cell-empty">Nothing scheduled</div>
-    {% endif %}
-  </div>
-  {% endfor %}
+  </section>
+</div>
 
-  <div class="vrule" style="grid-column: 2;"></div>
+<div class="col ag-right">
+  <section class="pane pane-then bb">
+    <div class="pane-title f-{{ title_accents.then }}">
+      <span class="i">{{ icons.CALENDAR_CLOCK }}</span><span>THEN</span>
+    </div>
+    <div class="pane-body">
+      {% for day in days[4:7] %}{{ day_block(day, 2) }}{% endfor %}
+    </div>
+  </section>
 
-  {% for day in days[4:7] %}
-  <div class="cell cell-right" style="grid-column: 3; grid-row: {{ loop.index }};">
-    <div class="cell-head">
-      <span class="cell-day">{{ day.label }}</span>
-      <span class="cell-date">{{ day.date_label }}</span>
+  <section class="pane pane-over">
+    {% if overdue %}
+    <div class="pane-title f-red">
+      <span class="i">{{ icons.ALERT }}</span><span>OVERDUE</span>
     </div>
-    {% for event in day.events[:2] %}
-    <div class="line">
-      <div class="line-when t-blue">{{ event.when }}</div>
-      <div class="line-title clip">{{ event.title }}</div>
+    <div class="pane-body">
+      {% for task in overdue[:1] %}
+      <div class="ln">
+        <div class="ln-mark ln-mark-tight i t-red">{{ icons.ALERT_CIRCLE }}</div>
+        <div class="ln-title clip">{{ task.title }}</div>
+      </div>
+      {% endfor %}
     </div>
-    {% endfor %}
-    {% for task in day.due[:1] %}
-    <div class="line">
-      <div class="line-due">DUE</div>
-      <div class="line-title clip">{{ task.title }}</div>
+    {% else %}
+    <div class="pane-title f-green">
+      <span class="i">{{ icons.CHECK }}</span><span>NOTHING OVERDUE</span>
     </div>
-    {% endfor %}
-    {% if day.empty %}
-    <div class="cell-empty">Nothing scheduled</div>
+    <div class="pane-body">
+      {% if calendar_note or tasks_note %}
+      <div class="day-empty">{{ calendar_note }} {{ tasks_note }}</div>
+      {% endif %}
+    </div>
     {% endif %}
-  </div>
-  {% endfor %}
-
-  <div class="cell cell-right cell-last" style="grid-column: 3; grid-row: 4;">
-    <div class="overdue-title">{% if overdue %}<span class="chip chip-red">OVERDUE</span>{% else %}<span class="chip chip-green">NOTHING OVERDUE</span>{% endif %}</div>
-    {% for task in overdue[:2] %}
-    <div class="overdue-line">
-      <div class="mark t-red">!</div>
-      <div class="line-title clip">{{ task.title }}</div>
-    </div>
-    {% endfor %}
-    {% if calendar_note or tasks_note %}
-    <div class="cell-empty">{{ calendar_note }} {{ tasks_note }}</div>
-    {% endif %}
-  </div>
+  </section>
 </div>
 {% endblock %}

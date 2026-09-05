@@ -1,56 +1,80 @@
 {% extends "base.html" %}
 
 {% block style %}
-.brief { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
-.brief-headline {
-  flex: 0 0 auto; padding: 9px 22px 9px 22px;
-  border-bottom: 4px solid #000000;
-  font-size: 26px; font-weight: 900; line-height: 1.12; letter-spacing: 0.01em;
-  max-height: 76px;
+.brief { flex: 1 1 auto; min-width: 0; }
+/* The headline is the page's own voice, so it takes a pane with no title bar
+   rather than a band with a label above it. */
+.brief-head {
+  flex: 0 0 52px; height: 52px;
+  display: flex; align-items: center;
+  padding: 0 12px;
+  font-size: 28px; font-weight: 800; line-height: 1.2; letter-spacing: 0.01em;
   overflow: hidden;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
-.brief-grid { flex: 1 1 auto; display: grid; grid-template-columns: 1fr 3px 1fr; grid-template-rows: 1fr 3px 1fr; min-height: 0; }
-.brief-cell { padding: 9px 16px 5px 22px; min-width: 0; overflow: hidden; }
-.brief-title { font-size: 19px; font-weight: 900; letter-spacing: 0.10em; margin-bottom: 5px; line-height: 1.15; }
-.brief-item { display: flex; gap: 9px; margin-bottom: 3px; font-size: 18px; font-weight: 700; line-height: 1.15; }
-.brief-item .mark { flex: 0 0 10px; font-weight: 900; }
-.brief-item .text { flex: 1 1 auto; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.hsep { background: #000000; }
-.vsep { background: #000000; }
-.brief-none { padding: 40px 22px; font-size: 28px; font-weight: 900; }
-{% endblock %}
+.brief-row { display: flex; min-height: 0; }
+.brief-row-1 { flex: 0 0 164px; }
+.brief-row-2 { flex: 1 1 auto; }
+.brief-row > .pane { flex: 1 1 0; }
+.brief .pane-title { letter-spacing: 0.04em; }
+.brief .pane-body { padding: 5px 12px; }
 
-{% block header_right %}
-  <div class="sub">{{ mode_label }} &middot; WRITTEN {{ generated_label }}</div>
+.bullet { display: flex; gap: 6px; font-size: 24px; font-weight: 700; line-height: 1.15; }
+.bullet + .bullet { margin-top: 2px; }
+.bullet .i { flex: 0 0 22px; font-size: 22px; line-height: 1.15; }
+.bullet-text { flex: 1 1 auto; min-width: 0; }
+
+.brief-none { font-size: 32px; font-weight: 900; }
 {% endblock %}
 
 {% block content %}
-<div class="brief">
 {% if sections %}
-  <div class="brief-headline">{{ headline }}</div>
-  <div class="brief-grid">
-    {% for section in sections %}
-    <div class="brief-cell" style="grid-column: {{ 1 if loop.index0 % 2 == 0 else 3 }}; grid-row: {{ 1 if loop.index0 < 2 else 3 }};">
-      <div class="brief-title">{{ section.title }}</div>
-      {% for item in section.lines[:3] %}
-      <div class="brief-item"><div class="mark">-</div><div class="text">{{ item }}</div></div>
-      {% endfor %}
-    </div>
+<div class="col brief">
+  <div class="brief-head bb clip">{{ headline }}</div>
+  <div class="brief-row brief-row-1 bb">
+    {% for section in sections[:2] %}
+    <section class="pane{% if loop.first %} br{% endif %}">
+      <div class="pane-title f-{{ section.accent }}">
+        <span class="i">{{ section.icon }}</span><span class="clip">{{ section.title }}</span>
+      </div>
+      <div class="pane-body">
+        {% for line in section.lines[:2] %}
+        <div class="bullet">
+          <span class="i">{{ icons.CHEVRON_RIGHT }}</span>
+          <span class="bullet-text clamp2">{{ line }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
     {% endfor %}
-    <div class="vsep" style="grid-column: 2; grid-row: 1 / span 3;"></div>
-    <div class="hsep" style="grid-column: 1 / span 3; grid-row: 2;"></div>
   </div>
+  <div class="brief-row brief-row-2">
+    {% for section in sections[2:4] %}
+    <section class="pane{% if loop.first %} br{% endif %}">
+      <div class="pane-title f-{{ section.accent }}">
+        <span class="i">{{ section.icon }}</span><span class="clip">{{ section.title }}</span>
+      </div>
+      <div class="pane-body">
+        {% for line in section.lines[:2] %}
+        <div class="bullet">
+          <span class="i">{{ icons.CHEVRON_RIGHT }}</span>
+          <span class="bullet-text clamp2">{{ line }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+</div>
 {% else %}
-  <div class="brief-none">{{ headline }}</div>
+<div class="col brief">
+  <section class="pane">
+    <div class="pane-title f-{{ title_accents.brief }}">
+      <span class="i">{{ icons.ROBOT }}</span><span>AI BRIEF</span>
+    </div>
+    <div class="pane-body">
+      <div class="brief-none">{{ headline }}</div>
+    </div>
+  </section>
+</div>
 {% endif %}
-</div>
-{% endblock %}
-
-{% block footer %}
-<div class="footer">
-  <span class="chip chip-black">{{ mode_label }} BRIEF</span>
-  <div class="footer-text">Pre-generated. Opening this page never calls an AI service.</div>
-  <div class="footer-updated">UPDATED {{ updated_label }}</div>
-</div>
 {% endblock %}
