@@ -475,9 +475,14 @@ script:
           duration: "{{ duration | default(90) | int }}"
           beep: "{{ beep | default(true) }}"
         response_variable: hub
-      # 2. Only then does the device download and show it.
+      # 2. Only then does the device download and show it, and only while it
+      #    is always-on. In battery mode it sleeps for hours between wakes and
+      #    the firmware ignores show_alert, so skip the call instead of
+      #    letting it fail on an unavailable device.
       - condition: template
         value_template: "{{ hub.status in [200, 201] }}"
+      - condition: template
+        value_template: "{{ not states('sensor.reterminal_e1002_power_mode').startswith('battery') }}"
       - action: esphome.reterminal_e1002_show_alert
         data:
           duration: "{{ duration | default(90) | int }}"

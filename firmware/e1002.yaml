@@ -562,12 +562,24 @@ script:
 
   # Full-screen alert: beep, show /display/alert.png, restore previous page
   # after `duration` seconds (0 means the default).
+  # Ignored in battery mode: the device is asleep for hours at a time, so an
+  # alert that happened to land in the short awake window would stay on the
+  # panel until the next scheduled wake. Home Assistant automations should
+  # check the "Power mode" sensor before calling it (docs/DATA-SOURCES.md).
   - id: show_alert
     mode: restart
     parameters:
       duration: int
       beep: bool
     then:
+      - if:
+          condition:
+            lambda: "return id(battery_mode);"
+          then:
+            - logger.log:
+                level: WARN
+                format: "Alert ignored: battery mode, the device would sleep with the alert on screen"
+            - script.stop: show_alert
       - lambda: |-
           if (!id(alert_active)) {
             id(saved_page_index) = id(page_index);
