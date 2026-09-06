@@ -11,11 +11,14 @@ from PIL import Image
 from app.adapters.device import build_device_state
 from app.models import (
     AdapterStatus,
+    Alert,
+    AlertPriority,
     DashboardState,
     DeviceBlock,
     DeviceSample,
     HomeBlock,
     HomeState,
+    HourlyRain,
     ServiceHealth,
     ServiceStatus,
     Task,
@@ -26,6 +29,7 @@ from app.models import (
 from app.renderer.palette import DISPLAY_SIZE, PALETTE_RGB, assert_palette, palette_violations
 from app.renderer.render import PAGES, Renderer
 from app.telemetry import TelemetrySummary
+from app.timeutil import zone
 from tests.conftest import open_png, run
 
 
@@ -86,6 +90,26 @@ def test_rendering_is_deterministic(
 ) -> None:
     again = run(renderer.render_png(page, state))
     assert again == rendered[page], f"{page} is not byte-identical on a second render"
+
+
+def test_system_page_sensor_values_never_truncate(renderer: Renderer, state: DashboardState) -> None:
+    """Neither HOME column truncates for the fixture's own rows (motion's
+    "Clear 41M" included and FRONT DOOR's full name): the value column is
+    sized to its own content (grid, not a fixed width), so the name column
+    never has to give up space it needs."""
+    truncated = run(
+        renderer.probe(
+            "system",
+            state,
+            """Array.from(document.querySelectorAll('.sensor-val, .sensor-row .label')).filter(
+                 e => e.scrollWidth > e.clientWidth + 1
+               ).map(e => [e.textContent, e.scrollWidth, e.clientWidth])""",
+        )
+    )
+    assert truncated == [], truncated
+    html = renderer.render_html("system", state, embed_fonts=False)
+    assert "Clear 41M" in html
+    assert "FRONT DOOR" in html
 
 
 def test_system_page_draws_the_device_chart(renderer: Renderer, state: DashboardState) -> None:
@@ -254,6 +278,17 @@ def _all_flags_state(state: DashboardState) -> DashboardState:
 
 
 @pytest.mark.parametrize("page", PAGES)
+def test_header_overdue_chip_hidden_only_on_pages_with_their_own(
+    renderer: Renderer, state: DashboardState, page: str
+) -> None:
+    """Today and Brief already show the overdue task in their own red 1D
+    LATE chip; the header's own chip renders everywhere else."""
+    html = renderer.render_html(page, _widest_header_state(state), embed_fonts=False)
+    has_chip = 'class="chip chip-red hdr-pill"' in html
+    assert has_chip == (page not in ("today", "brief")), (page, has_chip)
+
+
+@pytest.mark.parametrize("page", PAGES)
 def test_header_right_cluster_never_overlaps_the_weather_reading(
     renderer: Renderer, state: DashboardState, page: str
 ) -> None:
@@ -294,6 +329,25 @@ def test_today_has_no_element_overflowing_the_800x480_box(
     assert overflow == [], overflow
 
 
+def test_today_agenda_time_never_touches_the_title(renderer: Renderer, state: DashboardState) -> None:
+    """The regression: a full "DAY HH:MM" time label ("MON 18:00") filled
+    the fixed time column with no gap to the title beside it."""
+    geometry = run(
+        renderer.probe(
+            "today",
+            state,
+            """Array.from(document.querySelectorAll('.agenda-row')).map(row => {
+                 const t = row.querySelector('.agenda-time').getBoundingClientRect();
+                 const title = row.querySelector('.agenda-title').getBoundingClientRect();
+                 return {when: row.querySelector('.agenda-time').textContent, gap: title.left - t.right};
+               })""",
+        )
+    )
+    assert geometry, "no agenda rows in the fixture"
+    for row in geometry:
+        assert row["gap"] >= 12, row
+
+
 def test_agenda_has_no_element_overflowing_the_800x480_box(
     renderer: Renderer, state: DashboardState
 ) -> None:
@@ -308,11 +362,98 @@ def test_weather_has_no_element_overflowing_the_800x480_box(
     assert overflow == [], overflow
 
 
+def _weather_state_with_hourly_plates(count: int) -> DashboardState:
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 9, 0, tzinfo=tz)
+    hourly = [
+        HourlyRain(at=reference + timedelta(hours=n), probability_percent=20, precipitation_mm=0.0)
+        for n in range(count)
+    ]
+    weather = WeatherBlock(status=AdapterStatus.OK, weather=Weather(condition="Cloudy", hourly_rain=hourly))
+    return DashboardState(generated_at=reference, timezone="Asia/Bangkok", weather=weather)
+
+
+#: Whether the hero+readings group has grown to absorb the column's slack,
+#: and how much gap (if any) is left below the plates, before the rule.
+_WX_NEXT_HOURS_GEOMETRY = """(() => {
+  const group = document.querySelector('.wx-hero-group');
+  const plates = document.querySelector('.wx-plates');
+  const left = document.querySelector('.wx-left');
+  return {
+    groupGrows: group.classList.contains('wx-hero-group-grow'),
+    gapBelowPlates: Math.round((left.getBoundingClientRect().bottom - plates.getBoundingClientRect().bottom) * 10) / 10,
+  };
+})()"""
+
+
+def test_weather_next_hours_collapses_with_fewer_than_four_plates(renderer: Renderer) -> None:
+    """With fewer than four plates the block collapses to its own content
+    height: no gap is left below the plates, the slack moves above the rule
+    (more air around the hero and readings) instead."""
+    geometry = run(renderer.probe("weather", _weather_state_with_hourly_plates(2), _WX_NEXT_HOURS_GEOMETRY))
+    assert geometry["groupGrows"] is True
+    assert geometry["gapBelowPlates"] <= 1, geometry
+
+
+def test_weather_next_hours_keeps_its_shape_with_four_or_more_plates(renderer: Renderer) -> None:
+    """With four or more plates the block is as it is: the hero and readings
+    do not grow to absorb any slack."""
+    geometry = run(renderer.probe("weather", _weather_state_with_hourly_plates(4), _WX_NEXT_HOURS_GEOMETRY))
+    assert geometry["groupGrows"] is False
+
+    geometry = run(renderer.probe("weather", _weather_state_with_hourly_plates(6), _WX_NEXT_HOURS_GEOMETRY))
+    assert geometry["groupGrows"] is False
+
+
+_WX_BASELINE_GEOMETRY = """(() => {
+  const baseline = document.querySelector('.wx-baseline').getBoundingClientRect();
+  const plates = Array.from(document.querySelectorAll('.wx-plate'));
+  const last = plates[plates.length - 1].getBoundingClientRect();
+  return {
+    baselineRight: Math.round(baseline.right * 10) / 10,
+    lastPlateRight: Math.round(last.right * 10) / 10,
+  };
+})()"""
+
+
+def test_weather_next_hours_baseline_ends_with_the_last_plate(renderer: Renderer) -> None:
+    """The baseline never advertises hours the block does not have: its
+    right edge tracks the last plate's right edge, not the full block
+    width, whether there are two plates or six."""
+    two = run(renderer.probe("weather", _weather_state_with_hourly_plates(2), _WX_BASELINE_GEOMETRY))
+    assert abs(two["baselineRight"] - two["lastPlateRight"]) <= 2, two
+
+    six = run(renderer.probe("weather", _weather_state_with_hourly_plates(6), _WX_BASELINE_GEOMETRY))
+    assert abs(six["baselineRight"] - six["lastPlateRight"]) <= 2, six
+
+
 def test_brief_has_no_element_overflowing_the_800x480_box(
     renderer: Renderer, state: DashboardState
 ) -> None:
     overflow = run(renderer.probe("brief", _widest_header_state(state), _VIEWPORT_OVERFLOW))
     assert overflow == [], overflow
+
+
+def test_brief_task_titles_never_truncate_mid_word(renderer: Renderer, state: DashboardState) -> None:
+    """Every ``.brief-task-title`` either reads the fixture's real title in
+    full or ends in the single ellipsis character :func:`clip_words` uses;
+    the CSS ellipsis is a safety net only, so it should not be the one
+    actually firing here."""
+    fixture_titles = {task.title for task in state.tasks.items}
+    rows = run(
+        renderer.probe(
+            "brief",
+            state,
+            """Array.from(document.querySelectorAll('.brief-task-title')).map(
+                 e => [e.textContent, e.scrollWidth, e.clientWidth]
+               )""",
+        )
+    )
+    for text, scroll_width, client_width in rows:
+        if text.endswith("…"):
+            continue
+        assert text in fixture_titles, f"unexpected title text: {text}"
+        assert scroll_width <= client_width + 1, f"{text} truncated without an ellipsis"
 
 
 def test_system_has_no_element_overflowing_the_800x480_box(
@@ -343,6 +484,52 @@ def test_alert_has_no_element_overflowing_the_800x480_box(
 ) -> None:
     overflow = run(renderer.probe("alert", _widest_header_state(state), _VIEWPORT_OVERFLOW))
     assert overflow == [], overflow
+
+
+def _doorbell_alert_state(state: DashboardState) -> DashboardState:
+    tz = zone("Asia/Bangkok")
+    alert = Alert(
+        title="Someone at the door",
+        message="Front door camera saw motion.",
+        priority=AlertPriority.DOORBELL,
+        created_at=datetime(2026, 9, 5, 15, 6, tzinfo=tz),
+        source="Front door",
+    )
+    return state.model_copy(update={"alert": alert})
+
+
+@pytest.mark.parametrize(
+    "priority,expected_class",
+    [
+        (AlertPriority.CRITICAL, "alert-band-red"),
+        (AlertPriority.DOORBELL, "alert-band-red"),
+        (AlertPriority.IMPORTANT, "alert-band-yellow"),
+        (AlertPriority.NORMAL, "alert-band-black"),
+    ],
+)
+def test_alert_band_class_matches_priority(
+    renderer: Renderer, state: DashboardState, priority: AlertPriority, expected_class: str
+) -> None:
+    tz = zone("Asia/Bangkok")
+    alert = Alert(title="Test", priority=priority, created_at=datetime(2026, 9, 5, 15, 6, tzinfo=tz))
+    html = renderer.render_html("alert", state.model_copy(update={"alert": alert}), embed_fonts=False)
+    assert f'class="alert-band {expected_class}"' in html
+
+
+def test_alert_band_paints_red_with_white_text_for_a_doorbell_alert(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    """The regression this guards: batch 1 deleted every ``.f-*`` rule from
+    base.html, so a doorbell alert's band rendered black text on white
+    (priority invisible) instead of the red band with white text the
+    priority demands."""
+    png = run(renderer.render_png("alert", _doorbell_alert_state(state)))
+    image = open_png(png).convert("RGB")
+    band = image.crop((0, 66, 800, 122))
+    colors = {color for _count, color in (band.getcolors(maxcolors=1 << 24) or [])}
+    assert (255, 0, 0) in colors, f"no pure red in the band rows: {colors}"
+    assert (255, 255, 255) in colors, f"no white text in the band rows: {colors}"
+    assert (0, 0, 0) not in colors, f"black leaked into the band rows: {colors}"
 
 
 @pytest.mark.parametrize("page", PAGES)

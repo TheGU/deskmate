@@ -14,12 +14,17 @@
 .pri-title { flex: 1 1 auto; font-size: 24px; font-weight: 500; }
 
 /* The agenda: one line per upcoming event, a fixed time column then the
-   title. As many rows as the space below priorities holds; see
-   AGENDA_ROW_LIMIT in view.py for the measured count. */
+   title, with an explicit 12 px gap between them so a full-width time label
+   never touches the title. As many rows as the space below priorities
+   holds; see AGENDA_ROW_LIMIT in view.py for the measured count. */
 .agenda-list { display: flex; flex-direction: column; }
-.agenda-row { display: flex; align-items: center; height: 36px; flex: 0 0 36px; font-size: 24px; font-weight: 500; }
+.agenda-row { display: flex; align-items: center; gap: 12px; height: 36px; flex: 0 0 36px; font-size: 24px; font-weight: 500; }
+/* 132 px: the widest label the grammar produces is a 3-letter weekday plus
+   space plus HH:MM at this weight ("MON 18:00" and "MON 09:30" both
+   measured 131.5 px in Chromium, "Google Sans" 700 at 24px, tabular
+   numerals); rounded up half a pixel for margin. */
 .agenda-time { flex: 0 0 132px; font-weight: 700; }
-.agenda-title { flex: 1 1 auto; }
+.agenda-title { flex: 1 1 auto; min-width: 0; }
 
 /* AI capacity: one block per provider, two readings side by side, the
    percent numeral above its own RESET caption and meter. */

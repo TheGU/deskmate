@@ -42,17 +42,30 @@ from app.view import (
     SCALE_END_HOUR,
     SCALE_START_HOUR,
     ALERT_BAND_ACCENT,
+    BRIEF_CHIP_WIDTH_PX,
+    BRIEF_TITLE_MAX_CHARS,
+    PAGES_WITH_OWN_OVERDUE_CHIP,
+    PRIORITY_TITLE_MAX_CHARS,
+    TODAY_CHIP_WIDTH_PX,
     agenda_route,
     ai_capacity_rows,
     alert_context,
     battery_accent,
     brief_context,
+    brief_due_label,
+    brief_headline_fits_one_line,
     brief_is_risk,
     brief_lines,
+    brief_task_rows,
+    brief_title_budget,
     build_context,
+    cap_duration,
+    clip_words,
     desk_accent,
     device_panel,
+    due_chip_kind,
     due_label,
+    header_context,
     header_weather,
     meter_cells,
     month_grid,
@@ -60,6 +73,7 @@ from app.view import (
     percent_accent,
     power_label,
     priority_tasks,
+    priority_title_budget,
     scale_position,
     sensor_accent,
     sensor_value,
@@ -67,7 +81,6 @@ from app.view import (
     system_context,
     task_accent,
     task_sort_key,
-    today_due_label,
     today_next_rows,
     today_priority_tasks,
     upcoming_events,
@@ -149,25 +162,29 @@ def test_priority_tasks_skips_completed_and_respects_the_limit(settings: Setting
     assert "Done" not in [row["title"] for row in rows]
 
 
-def test_due_labels() -> None:
+def test_due_labels_use_weekday_not_tomorrow() -> None:
+    """The word TOMORROW never appears: a task due tomorrow prints its
+    3-letter weekday instead. due_label is the only due label now, used by
+    both Today and Brief (through :func:`brief_due_label`)."""
     assert due_label(None, TODAY) == ""
     assert due_label(TODAY, TODAY) == "TODAY"
-    assert due_label(TODAY + timedelta(days=1), TODAY) == "TOMORROW"
+    tomorrow = TODAY + timedelta(days=1)
+    assert due_label(tomorrow, TODAY) == tomorrow.strftime("%a").upper() == "SAT"
+    assert "TOMORROW" not in due_label(tomorrow, TODAY)
     assert due_label(TODAY - timedelta(days=1), TODAY) == "1D LATE"
     assert due_label(TODAY - timedelta(days=3), TODAY) == "3D LATE"
     assert due_label(TODAY + timedelta(days=5), TODAY) == "DUE 09 SEP"
 
 
-def test_today_due_label_uses_weekday_not_tomorrow() -> None:
-    """The Today page's own chip: tomorrow's 3-letter weekday, never the
-    word TOMORROW (too long); every other case matches due_label."""
-    assert today_due_label(None, TODAY) == ""
-    assert today_due_label(TODAY, TODAY) == "TODAY"
-    tomorrow = TODAY + timedelta(days=1)
-    assert today_due_label(tomorrow, TODAY) == tomorrow.strftime("%a").upper() == "SAT"
-    assert today_due_label(TODAY - timedelta(days=1), TODAY) == "1D LATE"
-    assert today_due_label(TODAY - timedelta(days=3), TODAY) == "3D LATE"
-    assert today_due_label(TODAY + timedelta(days=5), TODAY) == "DUE 09 SEP"
+def test_brief_due_label_drops_the_due_word() -> None:
+    """Brief's due column is a fixed 84 px with no room for the "DUE " word;
+    every other case matches due_label exactly."""
+    assert brief_due_label(None, TODAY) == ""
+    assert brief_due_label(TODAY, TODAY) == "TODAY"
+    assert brief_due_label(TODAY - timedelta(days=1), TODAY) == "1D LATE"
+    assert brief_due_label(TODAY + timedelta(days=1), TODAY) == "SAT"
+    assert brief_due_label(TODAY + timedelta(days=5), TODAY) == "09 SEP"
+    assert "DUE" not in brief_due_label(TODAY + timedelta(days=5), TODAY)
 
 
 def test_today_priority_tasks_shows_weekday_for_tomorrow(settings: Settings) -> None:
@@ -208,7 +225,8 @@ def test_upcoming_events_labels_and_skips_the_past() -> None:
     rows = upcoming_events(state, now, 5)
     assert [row["title"] for row in rows] == ["Demo", "Drill", "Offsite"]
     assert rows[0]["when"] == "16:30"
-    assert rows[1]["when"] == "TOMORROW 18:00"
+    assert rows[1]["when"] == "SAT 18:00"
+    assert "TOMORROW" not in rows[1]["when"]
     assert rows[2]["when"] == "THU"
 
 
@@ -473,6 +491,56 @@ def test_today_next_rows_empty_calendar_gives_no_rows() -> None:
     assert today_next_rows(state, reference, {}) == []
 
 
+def test_today_next_rows_shows_placeholder_when_nothing_left_today() -> None:
+    """When no remaining event falls today, the first row is a TODAY /
+    Nothing left today placeholder, then future days follow."""
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 20, 0, tzinfo=tz)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            Event(id="past", title="Standup", start=datetime(2026, 9, 4, 9, 30, tzinfo=tz)),
+            Event(id="tomorrow", title="Drill", start=datetime(2026, 9, 5, 18, 0, tzinfo=tz)),
+        ],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    rows = today_next_rows(state, reference, {})
+    assert rows[0] == {"when": "TODAY", "title": "Nothing left today", "color": "black"}
+    assert rows[1]["title"] == "Drill"
+    assert rows[1]["when"] == "SAT 18:00"
+
+
+def test_today_next_rows_no_placeholder_when_today_has_events() -> None:
+    """When today still has a remaining event, no placeholder row appears."""
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 12, 0, tzinfo=tz)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[Event(id="later-today", title="Demo", start=datetime(2026, 9, 4, 16, 30, tzinfo=tz))],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    rows = today_next_rows(state, reference, {})
+    assert all(row["title"] != "Nothing left today" for row in rows)
+    assert rows[0]["title"] == "Demo"
+
+
+def test_today_next_rows_placeholder_counts_against_the_row_limit() -> None:
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 20, 0, tzinfo=tz)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            Event(id=str(n), title=f"Event {n}", start=datetime(2026, 9, 5, 7 + n, 0, tzinfo=tz))
+            for n in range(5)
+        ],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    rows = today_next_rows(state, reference, {}, limit=3)
+    assert len(rows) == 3
+    assert rows[0]["title"] == "Nothing left today"
+    assert [row["title"] for row in rows[1:]] == ["Event 0", "Event 1"]
+
+
 def test_due_chip_accents() -> None:
     """Overdue is red, due today is yellow, anything else is plain black."""
     assert task_accent(Task(id="1", title="x", due=TODAY - timedelta(days=1)), TODAY) == "red"
@@ -688,6 +756,37 @@ def test_header_carries_the_overdue_flag_and_a_neutral_battery(settings: Setting
     assert header["overdue_count"] == 1
     # No device at all: the battery reading is neutral, never a guessed chip.
     assert header["battery"]["chip_accent"] == ""
+    # Today shows the overdue task itself (the red 1D LATE chip), so the
+    # header's own overdue chip would only repeat it.
+    assert header["show_overdue_chip"] is False
+
+
+def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere() -> None:
+    """Today and Brief already show the overdue task in their own red 1D
+    LATE chip; the header's own chip is only for the pages that do not."""
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
+    state = DashboardState(
+        generated_at=reference,
+        timezone="Asia/Bangkok",
+        tasks=TasksBlock(
+            status=AdapterStatus.OK,
+            items=[Task(id="1", title="Late", due=TODAY - timedelta(days=1))],
+        ),
+    )
+    today_date = reference.date()
+    assert header_context(state, today_date, reference, "today")["show_overdue_chip"] is False
+    assert header_context(state, today_date, reference, "brief")["show_overdue_chip"] is False
+    assert PAGES_WITH_OWN_OVERDUE_CHIP == {"today", "brief"}
+    for page in ("agenda", "weather", "system", "alert"):
+        assert header_context(state, today_date, reference, page)["show_overdue_chip"] is True
+
+
+def test_header_overdue_chip_hidden_when_nothing_is_overdue() -> None:
+    tz = zone("Asia/Bangkok")
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
+    assert header_context(state, reference.date(), reference, "agenda")["show_overdue_chip"] is False
 
 
 def test_sensor_value_formatting() -> None:
@@ -695,6 +794,16 @@ def test_sensor_value_formatting() -> None:
     assert sensor_value("Closed", None) == "Closed"
     assert sensor_value("64", "%") == "64%"
     assert sensor_value("27.8", "C") == "27.8 C"
+    # A trailing duration inside free text is capped, matching the panel's
+    # own all-caps numerals and units elsewhere ("41M", not "41m").
+    assert sensor_value("Clear 41m", None) == "Clear 41M"
+
+
+def test_cap_duration_only_touches_a_trailing_duration() -> None:
+    assert cap_duration("Clear 41m") == "Clear 41M"
+    assert cap_duration("Idle") == "Idle"
+    assert cap_duration("Home") == "Home"
+    assert cap_duration("Ready in 3h") == "Ready in 3H"
 
 
 # ---------------------------------------------------------------------------
@@ -960,6 +1069,174 @@ def test_brief_unavailable_message_when_brief_is_missing(settings: Settings) -> 
     context = brief_context(_brief_state(None, status=AdapterStatus.UNAVAILABLE), settings)
     assert context["brief_available"] is False
     assert context["unavailable_message"] == "No brief from the PC yet"
+
+
+def test_brief_headline_fits_one_line_thresholds() -> None:
+    assert brief_headline_fits_one_line("Rent due Friday") is True
+    assert brief_headline_fits_one_line("Two hard deadlines today, storms from 15:00") is False
+
+
+def test_brief_context_headline_drops_to_24px_when_it_does_not_fit_one_line(
+    settings: Settings,
+) -> None:
+    tz = zone("Asia/Bangkok")
+    long_headline = "Two hard deadlines today, storms from 15:00"
+    brief = Brief(mode=BriefMode.MORNING, generated_at=datetime(2026, 9, 4, 7, 0, tzinfo=tz), headline=long_headline)
+    context = brief_context(_brief_state(brief), settings)
+    assert context["headline_large"] is False
+
+    short_headline = "Rent due Friday"
+    brief = Brief(mode=BriefMode.MORNING, generated_at=datetime(2026, 9, 4, 7, 0, tzinfo=tz), headline=short_headline)
+    context = brief_context(_brief_state(brief), settings)
+    assert context["headline_large"] is True
+
+
+def _tasks_state(titles: list[str]) -> DashboardState:
+    tz = zone("Asia/Bangkok")
+    return DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
+        timezone="Asia/Bangkok",
+        tasks=TasksBlock(
+            status=AdapterStatus.OK,
+            items=[
+                Task(id=str(n), title=title, due=None, priority=Priority.LOW)
+                for n, title in enumerate(titles)
+            ],
+        ),
+    )
+
+
+def test_clip_words_returns_text_that_already_fits_unchanged() -> None:
+    assert clip_words("Short title", 20) == "Short title"
+
+
+def test_clip_words_cuts_at_a_word_boundary() -> None:
+    """A title too long for its budget is cut at the last whole word, with
+    a single ellipsis character, never mid-word."""
+    result = clip_words("Send vendor quote answer to K. Somchai", 23)
+    assert result == "Send vendor quote…"
+    assert not result[:-1].endswith(" ")
+
+
+def test_clip_words_cuts_a_single_word_longer_than_the_budget() -> None:
+    """No word boundary to honour, so the one word itself is cut, exactly
+    where ``text-overflow: ellipsis`` would have cut it."""
+    result = clip_words("Supercalifragilisticexpialidocious", 10)
+    assert result == "Supercali…"
+    assert len(result) == 10
+
+
+def test_clip_words_thai_text_with_spaces() -> None:
+    """Thai carries no spaces inside a phrase, so a long phrase is one
+    unbroken token: :func:`clip_words` clips it at the budget, the same
+    single-word fallback a long English word takes, rather than looking
+    forever for a space that is never there."""
+    phrase = "ประชุมทีมการตลาดและการขายประจำเดือนกันยายน"
+    result = clip_words(phrase, 10)
+    assert result == f"{phrase[:9]}…"
+    # A short Thai phrase with real spaces between clauses still wraps at
+    # a word (clause) boundary like any other text.
+    spaced = "ประชุมทีม การตลาด และการขาย"
+    result_spaced = clip_words(spaced, 18)
+    assert result_spaced == "ประชุมทีม การตลาด…"
+
+
+def test_brief_task_rows_single_line_for_short_titles() -> None:
+    tasks = [{"title": "Ship it"}, {"title": "Call mom"}, {"title": "Water plants"}]
+    rows, more = brief_task_rows(tasks)
+    assert more == 0
+    assert len(rows) == 3
+    assert all(row["two_line"] is False for row in rows)
+
+
+def test_brief_task_rows_wraps_only_the_titles_that_need_it() -> None:
+    """Each row decides for itself: a short title stays single-line even
+    beside a long one that needs two, unlike the old all-or-nothing switch."""
+    tasks = [
+        {"title": "Ship it", "chip_kind": "day"},
+        {"title": "Submit August expense claim (BTS and Grab)", "chip_kind": "overdue"},
+    ]
+    rows, more = brief_task_rows(tasks)
+    assert more == 0
+    assert rows[0]["two_line"] is False
+    assert rows[0]["title"] == "Ship it"
+    assert rows[1]["two_line"] is True
+    assert rows[1]["title"] != tasks[1]["title"]
+
+
+def test_brief_task_rows_reports_the_hidden_count_when_the_column_is_full() -> None:
+    """Seven real, long task titles (the fixture's own) do not all fit two
+    lines each in the column: the ones that do not fit are folded into a
+    "+N MORE" count instead of overflowing or shrinking rows further."""
+    long_titles = [
+        "Finish Q3 OKR review deck for Monday",
+        "Send vendor quote answer to K. Somchai",
+        "Review PR 482 auth refactor",
+        "Submit August expense claim (BTS and Grab)",
+        "Renew work permit documents at HR",
+        "Back up NAS photo library to cold storage",
+        "Book dentist appointment near Asok",
+    ]
+    tasks = [{"title": title} for title in long_titles]
+    rows, more = brief_task_rows(tasks)
+    assert len(rows) + more == len(tasks)
+    assert more > 0
+    for row, title in zip(rows, long_titles):
+        if row["title"] != title:
+            # Never a mid-word stem: the kept text plus ellipsis is a clean
+            # prefix of the real title.
+            body = row["title"][:-1]
+            assert title.startswith(body)
+
+
+def test_due_chip_kind_matches_due_labels_own_branching() -> None:
+    today = date(2026, 9, 4)
+    assert due_chip_kind(None, today) == "none"
+    assert due_chip_kind(today - timedelta(days=1), today) == "overdue"
+    assert due_chip_kind(today, today) == "today"
+    assert due_chip_kind(today + timedelta(days=1), today) == "day"
+    assert due_chip_kind(today + timedelta(days=5), today) == "date"
+
+
+def test_priority_title_budget_ordered_by_chip_width() -> None:
+    """A wider chip always leaves a title the same size or narrower budget
+    than a lighter one; the widest chip's budget never dips below the old
+    uniform floor."""
+    kinds = sorted(TODAY_CHIP_WIDTH_PX, key=lambda kind: TODAY_CHIP_WIDTH_PX[kind], reverse=True)
+    budgets = [priority_title_budget(kind) for kind in kinds]
+    assert budgets == sorted(budgets)
+    assert min(budgets) >= PRIORITY_TITLE_MAX_CHARS
+
+
+def test_brief_title_budget_ordered_by_chip_width() -> None:
+    kinds = sorted(BRIEF_CHIP_WIDTH_PX, key=lambda kind: BRIEF_CHIP_WIDTH_PX[kind], reverse=True)
+    budgets = [brief_title_budget(kind) for kind in kinds]
+    assert budgets == sorted(budgets)
+    assert min(budgets) >= BRIEF_TITLE_MAX_CHARS
+
+
+def test_today_priorities_title_beside_a_weekday_chip_is_not_clipped(settings: Settings) -> None:
+    """The fixture's own regression: a title that stemmed beside a narrow
+    "MON" chip under the old uniform budget now reads whole, because that
+    row's own (lighter) chip hands its title the extra room."""
+    today = date(2026, 9, 4)
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
+        timezone="Asia/Bangkok",
+        tasks=TasksBlock(
+            status=AdapterStatus.OK,
+            items=[
+                Task(
+                    id="1",
+                    title="Review PR 482 auth refactor",
+                    due=today + timedelta(days=1),
+                    priority=Priority.HIGH,
+                )
+            ],
+        ),
+    )
+    rows = today_priority_tasks(state, today, 5)
+    assert rows[0]["title"] == "Review PR 482 auth refactor"
 
 
 # ---------------------------------------------------------------------------

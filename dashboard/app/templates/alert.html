@@ -10,6 +10,13 @@
 }
 .alert-band-text { font-size: 20px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
 
+/* Scoped here, not base.html: this is the one page a colour owns a whole
+   region (see ALERT_BAND_ACCENT in view.py), so the band's own three states
+   live beside the markup they colour. */
+.alert-band-red    { background: #FF0000; color: #FFFFFF; }
+.alert-band-yellow { background: #FFFF00; color: #000000; }
+.alert-band-black  { background: #000000; color: #FFFFFF; }
+
 .alert-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding-top: 20px; }
 .alert-title-row { display: flex; align-items: flex-start; gap: 14px; }
 .alert-bell { font-size: 40px; line-height: 1; flex: 0 0 auto; }
@@ -27,7 +34,7 @@
 
 {% block content %}
 <div class="alert-body">
-  <div class="alert-band f-{{ band_accent }}">
+  <div class="alert-band alert-band-{{ band_accent }}">
     <span class="alert-band-text">{{ band_label }}</span>
     <span class="alert-band-text num">{{ band_right }}</span>
   </div>

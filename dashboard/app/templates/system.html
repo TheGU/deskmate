@@ -48,9 +48,13 @@
 .sys-row-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; margin-top: 4px; }
 .sys-none { font-size: 20px; font-weight: 500; margin-top: 4px; }
 
-.sensor-row { flex: 0 0 28px; height: 28px; display: flex; align-items: center; gap: 8px; }
-.sensor-row .label { flex: 1 1 auto; min-width: 0; font-size: 15px; }
-.sensor-val-col { flex: 0 0 96px; min-width: 0; text-align: right; }
+/* Two-column grid, not a fixed value width: the value takes only what its
+   own text needs, the name takes the remainder, so neither column ever has
+   to truncate a name to make room for a value column sized for a wider one. */
+.sensor-row { flex: 0 0 28px; height: 28px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; }
+.sensor-name-col { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sensor-row .label { min-width: 0; font-size: 15px; }
+.sensor-val-col { min-width: 0; text-align: right; }
 .sensor-val-col .sensor-val {
   display: inline-block; max-width: 100%; font-size: 20px; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
@@ -161,8 +165,10 @@
       <div class="sys-row-list">
         {% for sensor in sensors %}
         <div class="sensor-row">
-          {% if sensor.accent %}<span class="telltale {{ sensor.accent }}"></span>{% endif %}
-          <span class="label clip">{{ sensor.name }}</span>
+          <div class="sensor-name-col">
+            {% if sensor.accent %}<span class="telltale {{ sensor.accent }}"></span>{% endif %}
+            <span class="label clip">{{ sensor.name }}</span>
+          </div>
           <span class="sensor-val-col">
             {% if sensor.available %}
             <span class="sensor-val num">{{ sensor.value }}</span>

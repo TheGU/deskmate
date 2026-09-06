@@ -15,10 +15,12 @@
 /* Left: mode + generated time, headline, rule, running-text body. */
 .brief-topline { flex: 0 0 24px; height: 24px; display: flex; align-items: center; justify-content: space-between; }
 .brief-headline {
-  flex: 0 0 76px; height: 76px; margin-top: 4px;
+  flex: 0 0 auto; margin-top: 4px;
   font-size: 28px; font-weight: 600; line-height: 1.35;
+  text-wrap: balance;
   overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
+.brief-headline-small { font-size: 24px; }
 .brief-rule { margin: 9px 0; }
 .brief-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
@@ -32,13 +34,27 @@
 .brief-unavailable .hatch { width: 40px; height: 20px; }
 .brief-unavailable-line { font-size: 20px; font-weight: 500; }
 
-/* Right: task list, same due-state chip grammar as Today. */
+/* Right: task list, same due-state chip grammar as Today. The due chip is
+   content-width, like Today's (not a fixed column): the title's flex-grow
+   takes whatever the chip does not, so a narrow chip ("MON") hands the
+   title real extra room instead of leaving it stranded beside empty space;
+   view.py's brief_task_rows computes each row's own character budget from
+   that same chip width. Each row decides for itself whether its own title
+   fits one line or needs two; the column packs as many rows as actually
+   fit its height, and a "+N MORE" row takes the place of whatever does not. */
 .brief-tasks-head { flex: 0 0 24px; height: 24px; display: flex; align-items: baseline; gap: 8px; }
 .brief-task-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; margin-top: 4px; }
-.brief-task-row { flex: 0 0 32px; height: 32px; display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; }
+.brief-task-row { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; }
+.brief-task-row-1 { flex: 0 0 32px; height: 32px; }
+.brief-task-row-2 { flex: 0 0 52px; height: 52px; }
 .brief-task-title { flex: 1 1 auto; min-width: 0; }
+.brief-task-due { flex: 0 0 auto; display: flex; align-items: center; min-width: 0; }
+.brief-more-row { flex: 0 0 32px; height: 32px; justify-content: flex-end; }
+.brief-more { font-size: 16px; font-weight: 500; text-transform: uppercase; }
 .brief-none { font-size: 20px; font-weight: 500; margin-top: 4px; }
-.brief-tasks .chip { border: none; padding: 2px 6px 3px; font-size: 16px; font-weight: 700; line-height: 1.1; }
+.brief-tasks .chip { border: none; padding: 1px 4px 2px; font-size: 13px; font-weight: 700; line-height: 1.1; gap: 2px; }
+.brief-tasks .chip .i { font-size: 13px; }
+.brief-tasks .chip-plain { font-size: 13px; }
 {% endblock %}
 
 {% block content %}
@@ -49,7 +65,7 @@
       <span class="label">{{ mode_label }}</span>
       <span class="chip-plain">{{ generated_label }}</span>
     </div>
-    <div class="brief-headline">{{ headline }}</div>
+    <div class="brief-headline{% if not headline_large %} brief-headline-small{% endif %}">{{ headline }}</div>
     <div class="rule-h brief-rule"></div>
     <div class="brief-body">
       {% for line in lines %}
@@ -85,9 +101,10 @@
     {% if tasks %}
     <div class="brief-task-list">
       {% for task in tasks %}
-      <div class="brief-task-row">
+      <div class="brief-task-row {% if task.two_line %}brief-task-row-2{% else %}brief-task-row-1{% endif %}">
         <span class="i">{{ icons.CHECKBOX_BLANK }}</span>
-        <span class="brief-task-title clip">{{ task.title }}</span>
+        <span class="brief-task-title{% if task.two_line %} clamp2{% else %} clip{% endif %}">{{ task.title }}</span>
+        <span class="brief-task-due">
         {% if task.due_label %}
           {% if task.accent == 'red' %}
           <span class="chip chip-red"><span class="i">{{ icons.FLAG }}</span>{{ task.due_label }}</span>
@@ -97,8 +114,14 @@
           <span class="chip-plain">{{ task.due_label }}</span>
           {% endif %}
         {% endif %}
+        </span>
       </div>
       {% endfor %}
+      {% if tasks_more_count %}
+      <div class="brief-task-row brief-more-row">
+        <span class="brief-more">+{{ tasks_more_count }} MORE</span>
+      </div>
+      {% endif %}
     </div>
     {% else %}
     <div class="brief-none">No open tasks</div>

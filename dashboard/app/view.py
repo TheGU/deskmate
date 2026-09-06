@@ -6,6 +6,7 @@ Templates stay dumb: no adapter knowledge, no arithmetic, no fallbacks. Every
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -83,13 +84,38 @@ def fmt_long_date(value: datetime) -> str:
     return value.strftime("%a %d %b").upper()
 
 
-def relative_day_label(day: date, today: date) -> str:
-    delta = (day - today).days
-    if delta == 0:
-        return "TODAY"
-    if delta == 1:
-        return "TOMORROW"
-    return day.strftime("%a").upper()
+#: The ellipsis :func:`clip_words` appends: one real character, never the
+#: three ASCII dots CSS ``text-overflow: ellipsis`` draws.
+ELLIPSIS = "…"
+
+
+def clip_words(text: str, budget_chars: int) -> str:
+    """Clip ``text`` to ``budget_chars``, never cutting inside a word.
+
+    Returns ``text`` unchanged when it already fits. Otherwise returns the
+    longest whole-word prefix that still fits the budget with a trailing
+    :data:`ELLIPSIS`, so a title reads "Send vendor quote..." rather than
+    stemming mid-word ("Send vendor quote answ...").
+
+    A single word (or a Thai phrase, which carries no spaces to break a line
+    on) longer than the whole budget is the one exception: there is no word
+    boundary to honour, so it is cut at the budget instead, exactly where
+    ``text-overflow: ellipsis`` would have cut it.
+    """
+    if len(text) <= budget_chars:
+        return text
+    words = text.split(" ")
+    kept: list[str] = []
+    length = 0
+    for word in words:
+        addition = len(word) + (1 if kept else 0)
+        if length + addition + len(ELLIPSIS) > budget_chars:
+            break
+        kept.append(word)
+        length += addition
+    if not kept:
+        return text[: max(budget_chars - len(ELLIPSIS), 0)] + ELLIPSIS
+    return " ".join(kept) + ELLIPSIS
 
 
 # ---------------------------------------------------------------------------
@@ -107,22 +133,32 @@ def task_sort_key(task: Task, today: date) -> tuple[int, int, str]:
 
 
 def priority_tasks(state: DashboardState, today: date, limit: int) -> list[dict[str, Any]]:
+    """Brief's own task list rows: same selection as :func:`today_priority_tasks`,
+    with :func:`brief_due_label` (no "DUE " word) in place of :func:`due_label`.
+    The title itself is clipped later, per row, in :func:`brief_task_rows`,
+    which needs ``chip_kind`` to size that row's own budget."""
     tasks = sorted(open_tasks(state), key=lambda task: task_sort_key(task, today))[:limit]
     rows: list[dict[str, Any]] = []
     for task in tasks:
         rows.append(
             {
                 "title": task.title,
-                "due_label": due_label(task.due, today),
+                "due_label": brief_due_label(task.due, today),
                 "accent": task_accent(task, today),
                 "priority": task.priority.value,
+                "chip_kind": due_chip_kind(task.due, today),
             }
         )
     return rows
 
 
 def due_label(due: date | None, today: date) -> str:
-    """Short enough to sit next to a task title on an 800px screen."""
+    """Short enough to sit next to a task title on an 800px screen.
+
+    The word TOMORROW never appears here (the owner asked for it gone
+    everywhere, not just on Today): a task due tomorrow prints its 3-letter
+    weekday instead.
+    """
     if due is None:
         return ""
     delta = (due - today).days
@@ -131,31 +167,95 @@ def due_label(due: date | None, today: date) -> str:
     if delta == 0:
         return "TODAY"
     if delta == 1:
-        return "TOMORROW"
+        return due.strftime("%a").upper()
     return f"DUE {due.strftime('%d %b').upper()}"
 
 
-def today_due_label(due: date | None, today: date) -> str:
-    """Today's own due chip text: :func:`due_label`, but a task due tomorrow
-    prints its 3-letter weekday instead of the word TOMORROW (too long for
-    the priority row on the Today page). Brief still shows the word, since
-    :func:`due_label` is shared with it and stays unchanged."""
-    if due is not None and (due - today).days == 1:
-        return due.strftime("%a").upper()
-    return due_label(due, today)
+def brief_due_label(due: date | None, today: date) -> str:
+    """Brief's own compact due text: :func:`due_label`, with the leading
+    "DUE " word dropped ("DUE 08 SEP" alone runs past a legible width sooner
+    than the bare date does)."""
+    label = due_label(due, today)
+    return label[len("DUE ") :] if label.startswith("DUE ") else label
+
+
+def due_chip_kind(due: date | None, today: date) -> str:
+    """Which of the five due-chip shapes ``due`` renders as.
+
+    Matches :func:`due_label`/:func:`brief_due_label`'s own branching
+    exactly, so a row's title budget can be sized to that row's own chip
+    instead of assuming every row carries the widest one.
+    """
+    if due is None:
+        return "none"
+    delta = (due - today).days
+    if delta < 0:
+        return "overdue"
+    if delta == 0:
+        return "today"
+    if delta == 1:
+        return "day"
+    return "date"
+
+
+#: PRIORITIES title budget floor: the narrowest a row's title column ever
+#: gets is beside a red overdue chip (icon included), measured at 302.9 px
+#: against the fixture in Chromium ("Google Sans" 500 at 24px). Every row
+#: now gets its own budget from its own chip (see :data:`TODAY_CHIP_WIDTH_PX`
+#: and :func:`priority_title_budget`); this stays the minimum any row can
+#: fall to, so the ragged right edge never grows past what one more word
+#: beyond it would need.
+PRIORITY_TITLE_AVAILABLE_PX: float = 300.0
+#: Measured width per character at that size: "Send vendor..." and "Finish
+#: Q3..." both landed near 11.7 px/char; the higher, denser figure is used so
+#: a borderline title clips a touch early rather than ever overflowing.
+PRIORITY_TITLE_CHAR_PX: float = 12.7
+PRIORITY_TITLE_MAX_CHARS: int = int(PRIORITY_TITLE_AVAILABLE_PX // PRIORITY_TITLE_CHAR_PX)
+#: Chip widths measured directly against the real render (Chromium), one per
+#: shape :func:`due_chip_kind` can return, at the PRIORITIES row's own 16 px
+#: ``.chip`` / ``.chip-plain`` (base.html: no border, 2/6/3 px padding, 16 px
+#: caps at weight 700, 0.02em tracking; the overdue chip also carries the
+#: FLAG glyph ahead of its text). The "date" shape ("DUE 08 SEP") is, despite
+#: looking plain, not the narrowest: its "DUE " prefix makes it about as wide
+#: as the overdue chip.
+TODAY_CHIP_WIDTH_PX: dict[str, float] = {
+    "overdue": 94.0,
+    "today": 68.0,
+    "day": 41.0,
+    "date": 96.0,
+    "none": 0.0,
+}
+#: PRIORITIES row content width (456 px column minus its own 16 px padding)
+#: minus the checkbox glyph and the row's own two 10 px gaps: 440 - 24 - 20.
+#: A row with no due chip at all only pays one gap, not two (no third
+#: element to space from), so this slightly under-counts that one case;
+#: safe, since it only makes that row's budget a touch smaller than the true
+#: maximum, never larger.
+TODAY_TITLE_AND_CHIP_PX: float = 396.0
+
+
+def priority_title_budget(kind: str) -> int:
+    """PRIORITIES per-row title character budget for a chip of ``kind``.
+
+    Never below :data:`PRIORITY_TITLE_MAX_CHARS`: that old uniform figure is
+    the floor every row keeps even beside its own widest possible chip.
+    """
+    title_px = TODAY_TITLE_AND_CHIP_PX - TODAY_CHIP_WIDTH_PX[kind]
+    return max(PRIORITY_TITLE_MAX_CHARS, int(title_px // PRIORITY_TITLE_CHAR_PX))
 
 
 def today_priority_tasks(state: DashboardState, today: date, limit: int) -> list[dict[str, Any]]:
-    """The Today page's own priority rows: same selection as the shared
-    :func:`priority_tasks` (which Brief also calls), with :func:`today_due_label`
-    in place of :func:`due_label`."""
+    """The Today page's own priority rows: same selection and due text as the
+    shared :func:`priority_tasks` (which Brief also calls, through its own
+    :func:`brief_due_label`)."""
     tasks = sorted(open_tasks(state), key=lambda task: task_sort_key(task, today))[:limit]
     rows: list[dict[str, Any]] = []
     for task in tasks:
+        budget = priority_title_budget(due_chip_kind(task.due, today))
         rows.append(
             {
-                "title": task.title,
-                "due_label": today_due_label(task.due, today),
+                "title": clip_words(task.title, budget),
+                "due_label": due_label(task.due, today),
                 "accent": task_accent(task, today),
                 "priority": task.priority.value,
             }
@@ -188,9 +288,9 @@ def upcoming_events(
         day = event.start.date()
         if day == today:
             when = "ALL DAY" if event.all_day else event.start.strftime("%H:%M")
-        elif (day - today).days == 1:
-            when = "TOMORROW" if event.all_day else f"TOMORROW {event.start.strftime('%H:%M')}"
         else:
+            # A later day always prints its 3-letter weekday, including
+            # tomorrow: the word TOMORROW never appears here.
             prefix = day.strftime("%a").upper()
             when = prefix if event.all_day else f"{prefix} {event.start.strftime('%H:%M')}"
         rows.append(
@@ -240,6 +340,12 @@ def _minutes_since_midnight(value: datetime) -> float:
 TODAY_LEFT_HEIGHT_PX: float = 372.0
 AGENDA_ROW_HEIGHT_PX: float = 36.0
 AGENDA_ROW_LIMIT: int = 4
+#: The AGENDA title's own available width: the 440 px row minus the fixed
+#: 132 px time column and its own 12 px gap leaves 296 px (same font as
+#: PRIORITIES: "Google Sans" 500 at 24px), so it reuses that size's per-
+#: character figure.
+AGENDA_TITLE_AVAILABLE_PX: float = 296.0
+AGENDA_TITLE_MAX_CHARS: int = int(AGENDA_TITLE_AVAILABLE_PX // PRIORITY_TITLE_CHAR_PX)
 
 
 def today_next_rows(
@@ -248,6 +354,12 @@ def today_next_rows(
     """One line per upcoming event: today's events that have not ended yet
     first, then later days in start order, capped at the row count the left
     column actually has room for.
+
+    When no event remains today, the first row is a placeholder ("TODAY" /
+    "Nothing left today") so the list never opens straight on a future day
+    with no sign that today itself is clear; it counts against the row
+    budget like any other row. When today still has a remaining event, no
+    placeholder is added.
 
     The word TOMORROW never appears here (the owner asked for it gone): a
     later day always prints as its 3-letter weekday, timed or all-day.
@@ -260,14 +372,22 @@ def today_next_rows(
         key=lambda event: event.start,
     )
     rows: list[dict[str, Any]] = []
-    for event in events[:limit]:
+    if not any(event.start.date() == today for event in events):
+        rows.append({"when": "TODAY", "title": "Nothing left today", "color": "black"})
+    for event in events[: limit - len(rows)]:
         day = event.start.date()
         if day == today:
             when = "ALL DAY" if event.all_day else event.start.strftime("%H:%M")
         else:
             prefix = day.strftime("%a").upper()
             when = prefix if event.all_day else f"{prefix} {event.start.strftime('%H:%M')}"
-        rows.append({"when": when, "title": event.title, "color": event_color(event, colors)})
+        rows.append(
+            {
+                "when": when,
+                "title": clip_words(event.title, AGENDA_TITLE_MAX_CHARS),
+                "color": event_color(event, colors),
+            }
+        )
     return rows
 
 
@@ -423,19 +543,27 @@ def header_weather(state: DashboardState) -> dict[str, Any]:
     }
 
 
-def header_context(state: DashboardState, today: date, reference: datetime) -> dict[str, Any]:
+#: Pages that already show the overdue task themselves, in the red 1D LATE
+#: chip on their own priority row: the header's own overdue chip would only
+#: repeat it, so those pages hide it there.
+PAGES_WITH_OWN_OVERDUE_CHIP: frozenset[str] = frozenset({"today", "brief"})
+
+
+def header_context(state: DashboardState, today: date, reference: datetime, page: str) -> dict[str, Any]:
     """Everything the shared header draws, on every page."""
     device: DeviceState | None = state.device.device
     has_device = state.device.usable and device is not None and device.has_reading
     level = device.battery_level if has_device else None
     rssi = device.wifi_rssi if has_device else None
     charging = has_device and device.charge_state == "charging"
+    overdue_count = len(overdue_tasks(state, today))
     return {
         "day": reference.strftime("%d"),
         "weekday": reference.strftime("%a").upper(),
         "month": reference.strftime("%b").upper(),
         "weather": header_weather(state),
-        "overdue_count": len(overdue_tasks(state, today)),
+        "overdue_count": overdue_count,
+        "show_overdue_chip": overdue_count > 0 and page not in PAGES_WITH_OWN_OVERDUE_CHIP,
         "wifi_icon": icons.wifi_icon(rssi),
         "battery": {
             "icon": icons.battery_icon(level, charging),
@@ -475,7 +603,7 @@ def base_context(state: DashboardState, settings: Settings, page: str) -> dict[s
         "reference": reference,
         # Named constants for the fixed glyphs; the chosen ones are per row.
         "icons": icons,
-        "header": header_context(state, today, reference),
+        "header": header_context(state, today, reference, page),
         "footer": footer_context(state, today, page),
         # Each page builder fills this with one accent per pane title bar.
         # Kept for agenda, weather, brief and system until their own parts
@@ -870,6 +998,12 @@ def weather_readings(weather: Weather | None) -> list[dict[str, Any]]:
     ]
 
 
+#: Matches weather.html's own ``.wx-plate { width: 64px; }``: the NEXT HOURS
+#: baseline is sized in Python from this same figure so it always ends with
+#: the last plate rather than running past whatever the block has.
+WX_PLATE_WIDTH_PX: float = 64.0
+
+
 def weather_hourly_plates(
     weather: Weather | None, reference: datetime, limit: int = 6
 ) -> list[dict[str, Any]]:
@@ -927,6 +1061,7 @@ def weather_context(state: DashboardState, settings: Settings) -> dict[str, Any]
         if context["hourly"]
         else ""
     )
+    context["wx_plates_width_px"] = len(context["hourly"]) * WX_PLATE_WIDTH_PX
     context["daily"] = weather_daily_rows(weather, today)
     return context
 
@@ -937,8 +1072,9 @@ def strip_day_label(day: date, today: date) -> str:
     Weekday names throughout, because a column is about 73 px wide inside its
     padding and TOMORROW needs 122 px at the 18 px legibility floor. Inventing
     a shorter word for it would put a second abbreviation in the world for no
-    reason, so only TODAY, which fits, gets a relative name here. The agenda
-    has the room and keeps TODAY and TOMORROW.
+    reason, so only TODAY, which fits, gets a relative name here. The word
+    TOMORROW never appears anywhere in the product: every other day, near or
+    far, prints its 3-letter weekday instead.
     """
     return "TODAY" if day == today else day.strftime("%a").upper()
 
@@ -981,16 +1117,123 @@ BRIEF_LINE_PX: float = 26.0
 #: the rule between them, measured against brief.html's own row heights.
 BRIEF_BODY_BUDGET_PX: float = 242.0
 BRIEF_MAX_LINES: int = int(BRIEF_BODY_BUDGET_PX // BRIEF_LINE_PX)
-#: Task rows are 32 px each; "about 9" is what the spec asks for and what the
-#: right column actually holds under its own label.
-BRIEF_TASK_ROWS: int = 9
+#: The task column's own body height: the 372 px shared right-column height
+#: minus the 24 px head and its 4 px margin, measured against the real
+#: rendered layout.
+BRIEF_TASK_LIST_HEIGHT_PX: float = 344.0
+#: A title that fits one line renders as a plain 32 px row.
+BRIEF_TASK_ROW_1_PX: float = 32.0
+#: A title that needs two lines: measured against the real clamp-2 box in
+#: Chromium at this font (20px/500, line-height 1.3), a two-line title is
+#: 52 px tall.
+BRIEF_TASK_ROW_2_PX: float = 52.0
+#: The "+N MORE" row, when the list does not have room for every open task:
+#: same height as a plain single-line row.
+BRIEF_MORE_ROW_PX: float = 32.0
+#: The single-line title's own available width floor, measured against the
+#: real 296 px right column (Chromium, "Google Sans" 500 at 20px) beside the
+#: overdue chip, its narrowest case: the checkbox glyph, two 10 px row gaps
+#: and that chip leave 156 px. Every row now gets its own budget from its
+#: own chip (see :data:`BRIEF_CHIP_WIDTH_PX` and :func:`brief_title_budget`);
+#: this stays the minimum, and a two-line title's per-line budget is that
+#: row's own single-line figure used twice (the icon and due chip are the
+#: same in both row heights).
+BRIEF_TITLE_AVAILABLE_PX: float = 156.0
+#: Worst-case measured width per character at that size (real task titles
+#: ran 9.4-10.4 px/char); the higher bound is used so a borderline title
+#: wraps rather than stemming.
+BRIEF_TITLE_CHAR_PX: float = 10.5
+BRIEF_TITLE_MAX_CHARS: int = int(BRIEF_TITLE_AVAILABLE_PX // BRIEF_TITLE_CHAR_PX)
+#: Chip widths measured directly against the real render, one per shape
+#: :func:`due_chip_kind` can return, at Brief's own smaller 13 px chip
+#: override (brief.html: no border, 1/4/2 px padding, 13 px caps at weight
+#: 700, 2 px gap; the overdue chip also carries the FLAG glyph). Brief's own
+#: date shape has no "DUE " prefix (:func:`brief_due_label` drops it), so
+#: unlike Today's table it is genuinely one of the narrower chips.
+BRIEF_CHIP_WIDTH_PX: dict[str, float] = {
+    "overdue": 77.0,
+    "today": 54.0,
+    "day": 34.0,
+    "date": 47.0,
+    "none": 0.0,
+}
+#: Task row content width (296 px column minus its own 16 px padding) minus
+#: the checkbox glyph and the row's own two 10 px gaps: 280 - 20 - 20.
+BRIEF_TITLE_AND_CHIP_PX: float = 240.0
+
+
+def brief_title_budget(kind: str) -> int:
+    """Brief per-row title character budget for a chip of ``kind``.
+
+    Never below :data:`BRIEF_TITLE_MAX_CHARS`, the old uniform figure, kept
+    as the floor for the same reason as :func:`priority_title_budget`.
+    """
+    title_px = BRIEF_TITLE_AND_CHIP_PX - BRIEF_CHIP_WIDTH_PX[kind]
+    return max(BRIEF_TITLE_MAX_CHARS, int(title_px // BRIEF_TITLE_CHAR_PX))
 #: Shown in place of the running text when the PC has never sent a brief.
 BRIEF_UNAVAILABLE_MESSAGE: str = "No brief from the PC yet"
+#: The headline's own available width, measured the same way against the
+#: 456 px left column minus its 16 px padding-right: 440 px at 28px/600.
+BRIEF_HEADLINE_AVAILABLE_PX: float = 440.0
+#: Worst-case measured width per character at that size (9.4-10.4 px/char
+#: measured lower; the sample topped out at ~14.3 px/char), so a headline
+#: this long or longer never reliably fits one line at 28 px and drops to
+#: 24 px instead.
+BRIEF_HEADLINE_CHAR_PX: float = 14.3
+BRIEF_HEADLINE_MAX_CHARS_28: int = int(BRIEF_HEADLINE_AVAILABLE_PX // BRIEF_HEADLINE_CHAR_PX)
 
 
 def brief_is_risk(title: str) -> bool:
     """A section heading belongs to the existing risk keyword group."""
     return icons.brief_accent(title) == "red"
+
+
+def brief_headline_fits_one_line(headline: str) -> bool:
+    """Whether the headline fits one line at 28 px; if not it renders at
+    24 px instead (see :data:`BRIEF_HEADLINE_MAX_CHARS_28`)."""
+    return len(headline) <= BRIEF_HEADLINE_MAX_CHARS_28
+
+
+def brief_task_rows(
+    tasks: list[dict[str, Any]], list_height_px: float = BRIEF_TASK_LIST_HEIGHT_PX
+) -> tuple[list[dict[str, Any]], int]:
+    """Pack ``tasks`` (already sorted, priority order) into the column's
+    fixed height, one row per task, single line where the title fits and
+    two lines where it does not, rather than the old all-or-nothing switch
+    that dropped every row to two lines and five slots the moment one title
+    ran long.
+
+    The character budget comes from that row's own chip, not a uniform
+    figure: a narrow chip ("MON") hands its title real extra room, per
+    :func:`brief_title_budget`. A title too long even for two lines at that
+    budget is clipped at a word boundary with :func:`clip_words`, using the
+    per-line budget twice over: the icon and the chip are identical in both
+    row heights, so the title's real available width does not change
+    between them.
+
+    When every task still does not fit the column, the row that would have
+    overrun is dropped and everything from it on is folded into the hidden
+    count the template prints as "+N MORE"; that row's own 32 px is reserved
+    ahead of time so the more-line itself never has to bump something else.
+    """
+    rows: list[dict[str, Any]] = []
+    used_px = 0.0
+    for index, task in enumerate(tasks):
+        title = task["title"]
+        budget = brief_title_budget(task.get("chip_kind", "none"))
+        if len(title) <= budget:
+            row = {**task, "two_line": False}
+            row_px = BRIEF_TASK_ROW_1_PX
+        else:
+            row = {**task, "title": clip_words(title, budget * 2), "two_line": True}
+            row_px = BRIEF_TASK_ROW_2_PX
+        more_after = index < len(tasks) - 1
+        reserve = BRIEF_MORE_ROW_PX if more_after else 0.0
+        if used_px + row_px + reserve > list_height_px + 0.5:
+            return rows, len(tasks) - index
+        rows.append(row)
+        used_px += row_px
+    return rows, 0
 
 
 def brief_lines(
@@ -1034,6 +1277,7 @@ def brief_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
             else "NOT GENERATED"
         )
         context["headline"] = brief.headline or "No headline"
+        context["headline_large"] = brief_headline_fits_one_line(context["headline"])
         sections = [
             {
                 "title": section.title.upper(),
@@ -1047,13 +1291,31 @@ def brief_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
         context["mode_label"] = "BRIEF"
         context["generated_label"] = ""
         context["headline"] = ""
+        context["headline_large"] = True
         context["lines"] = []
         context["truncated"] = False
 
-    context["tasks"] = priority_tasks(state, today, BRIEF_TASK_ROWS) if state.tasks.usable else []
+    if state.tasks.usable:
+        open_count = len(open_tasks(state))
+        candidates = priority_tasks(state, today, open_count)
+        context["tasks"], context["tasks_more_count"] = brief_task_rows(candidates)
+    else:
+        context["tasks"] = []
+        context["tasks_more_count"] = 0
     context["tasks_open_count"] = len(open_tasks(state)) if state.tasks.usable else 0
     context["tasks_note"] = block_note(state.tasks.status, "tasks")
     return context
+
+
+#: A trailing duration inside a free-text sensor value ("Clear 41m"): the
+#: panel's numerals and units are otherwise always caps ("41M", "3H"), so the
+#: unit letter is capped here rather than left lower-case mid-sentence.
+_DURATION_SUFFIX_RE = re.compile(r"(?<=\d)([hmsd])\b")
+
+
+def cap_duration(value: str) -> str:
+    """Upper-case a trailing "<number><unit>" duration inside ``value``."""
+    return _DURATION_SUFFIX_RE.sub(lambda m: m.group(1).upper(), value)
 
 
 def sensor_value(value: str | None, unit: str | None) -> str:
@@ -1061,7 +1323,7 @@ def sensor_value(value: str | None, unit: str | None) -> str:
     if value is None:
         return UNKNOWN
     if not unit:
-        return value
+        return cap_duration(value)
     if unit in ("%",):
         return f"{value}{unit}"
     return f"{value} {unit}"

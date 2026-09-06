@@ -7,6 +7,15 @@
 .wx-left  { flex: 0 0 456px; padding-right: 16px; }
 .wx-right { flex: 1 1 auto; padding-left: 16px; }
 
+/* The hero and its readings are grouped so that with fewer than four hourly
+   plates below, this group alone can grow to absorb the column's slack: the
+   NEXT HOURS block always collapses to its own content height, and any
+   spare room goes above the rule as more air around the hero and readings,
+   never as a gap below the plates. With four or more plates the group stays
+   its natural (unstretched) size, unchanged from before. */
+.wx-hero-group { display: flex; flex-direction: column; gap: 8px; }
+.wx-hero-group-grow { flex: 1 1 auto; justify-content: center; }
+
 /* Hero: temperature, glyph, condition word and feels-like. */
 .wx-hero { display: flex; align-items: center; gap: 16px; height: 96px; }
 .wx-hero-temp { font-size: 96px; font-weight: 500; line-height: 1; }
@@ -43,7 +52,10 @@
   position: absolute; left: 0; right: 0; text-align: center;
   font-size: 16px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums;
 }
-.wx-baseline { position: absolute; left: 0; right: 0; top: 56px; height: 2px; background: #000000; }
+/* Width set inline per plate count (wx_plates_width_px in view.py): the
+   scale line ends with the last plate, never advertising hours the block
+   does not have. */
+.wx-baseline { position: absolute; left: 0; top: 56px; height: 2px; background: #000000; }
 .wx-plate-hour {
   margin-top: 4px; font-size: 16px; font-weight: 700; text-transform: uppercase;
 }
@@ -64,35 +76,37 @@
 
 {% block content %}
 <div class="wx-left">
-  <div class="wx-hero">
-    {% if hero.available %}
-    <span class="wx-hero-temp num">{{ hero.temp }}<span class="wx-hero-unit">C</span></span>
-    <span class="i wx-hero-icon">{{ hero.icon }}</span>
-    <div class="wx-hero-stack">
-      <span class="wx-hero-cond">
-        {% if hero.dot %}<span class="telltale {{ hero.dot }}"></span>{% endif %}{{ hero.condition }}
-      </span>
-      <span class="wx-hero-feels num">FEELS {{ hero.feels }}</span>
-    </div>
-    {% else %}
-    <span class="hatch wx-hero-hatch"></span>
-    <span class="wx-hero-cond">UNAVAILABLE</span>
-    {% endif %}
-  </div>
-
-  <div class="wx-readings">
-    {% for reading in readings %}
-    <div class="wx-reading-cell">
-      {% if reading.value is not none %}
-      <span class="reading reading-32"><span class="num">{{ reading.value }}</span></span>
-      {% else %}
-      <div class="hatch" style="width: 40px; height: 20px;"></div>
-      {% endif %}
-      <div class="label wx-reading-label">
-        {% if reading.dot %}<span class="telltale {{ reading.dot }}"></span>{% endif %}{{ reading.label }}
+  <div class="wx-hero-group{% if hourly|length < 4 %} wx-hero-group-grow{% endif %}">
+    <div class="wx-hero">
+      {% if hero.available %}
+      <span class="wx-hero-temp num">{{ hero.temp }}<span class="wx-hero-unit">C</span></span>
+      <span class="i wx-hero-icon">{{ hero.icon }}</span>
+      <div class="wx-hero-stack">
+        <span class="wx-hero-cond">
+          {% if hero.dot %}<span class="telltale {{ hero.dot }}"></span>{% endif %}{{ hero.condition }}
+        </span>
+        <span class="wx-hero-feels num">FEELS {{ hero.feels }}</span>
       </div>
+      {% else %}
+      <span class="hatch wx-hero-hatch"></span>
+      <span class="wx-hero-cond">UNAVAILABLE</span>
+      {% endif %}
     </div>
-    {% endfor %}
+
+    <div class="wx-readings">
+      {% for reading in readings %}
+      <div class="wx-reading-cell">
+        {% if reading.value is not none %}
+        <span class="reading reading-32"><span class="num">{{ reading.value }}</span></span>
+        {% else %}
+        <div class="hatch" style="width: 40px; height: 20px;"></div>
+        {% endif %}
+        <div class="label wx-reading-label">
+          {% if reading.dot %}<span class="telltale {{ reading.dot }}"></span>{% endif %}{{ reading.label }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
   </div>
 
   <div class="rule-h"></div>
@@ -103,7 +117,7 @@
   </div>
   {% if hourly %}
   <div class="wx-plates">
-    <div class="wx-baseline"></div>
+    <div class="wx-baseline" style="width: {{ wx_plates_width_px }}px;"></div>
     {% for plate in hourly %}
     <div class="wx-plate">
       <div class="wx-plate-scale">
