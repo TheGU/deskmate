@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-05T00:00:00Z",
+  "generatedAt": "2026-09-06T00:00:00Z",
   "title": "Design System: deskmate",
   "extensions": {
     "colorMeta": {
@@ -9,187 +9,162 @@
         "displayName": "Paper White",
         "canonical": "#FFFFFF",
         "tonalRamp": ["#FFFFFF"],
-        "tonalNote": "The Spectra 6 panel admits no tonal steps. Every ramp is one step by construction; a lighter or darker variant would quantize back to one of the six inks or to noise."
+        "tonalNote": "The Spectra 6 panel admits no tonal steps. Every ramp here is one step by construction; a lighter or darker variant would quantize back to one of the six inks or to noise."
       },
       "ink-black": {
         "role": "primary",
         "displayName": "Ink Black",
         "canonical": "#000000",
         "tonalRamp": ["#000000"],
-        "tonalNote": "Structural color: rules, title bars, inverted blocks, body type. No gray step exists."
+        "tonalNote": "Structural color: rules, numerals, labels, route lines, footer inversion. No gray step exists."
       },
       "alarm-red": {
         "role": "secondary",
         "displayName": "Alarm Red",
         "canonical": "#FF0000",
         "tonalRamp": ["#FF0000"],
-        "tonalNote": "Reserved for the loudest state: overdue, down, urgent, dangerous heat or air."
+        "tonalNote": "The loudest report: overdue, down, urgent, dangerous heat or air, the critical/doorbell alert band."
       },
       "caution-yellow": {
         "role": "secondary",
         "displayName": "Caution Yellow",
         "canonical": "#FFFF00",
         "tonalRamp": ["#FFFF00"],
-        "tonalNote": "The middle state: due today, warn, stale, low battery, quota running out."
+        "tonalNote": "The middle report: due today, warn, stale, low battery, quota running out, the important alert band."
       },
       "healthy-green": {
         "role": "tertiary",
         "displayName": "Healthy Green",
         "canonical": "#00FF00",
         "tonalRamp": ["#00FF00"],
-        "tonalNote": "Reports health on chips, meter cells and state bars only. Never a title bar, never a percentage."
+        "tonalNote": "Confirms a clean/OK reading on a status mark. Never a title, never a percentage."
       },
       "weather-blue": {
         "role": "tertiary",
         "displayName": "Weather Blue",
         "canonical": "#0000FF",
         "tonalRamp": ["#0000FF"],
-        "tonalNote": "Rain, a calendar's identity, and the humidity trace. Not urgent, but its own voice."
+        "tonalNote": "Rain, a calendar's own identity color, and the humidity trace on the desk chart."
       }
     },
     "typographyMeta": {
-      "hero": { "displayName": "Hero", "purpose": "The single number a page exists to show. At most one per page." },
-      "display": { "displayName": "Display", "purpose": "Alert titles, read across a room. Clamped to two lines." },
-      "headline": { "displayName": "Headline", "purpose": "A page's own large reading: desk temperature, rain probability, alert time." },
-      "title": { "displayName": "Title", "purpose": "Numbers inside cells and rows: humidity, air metrics, forecast highs, quota percentages." },
-      "body": { "displayName": "Body", "purpose": "Every reading row on the paper. 24px / 700 is the row standard." },
-      "label": { "displayName": "Label", "purpose": "Pane titles, status entries, window tabs, chips, chart labels. Uppercase, 800 to 900, and the 20px floor of the system." },
-      "icon": { "displayName": "Icon", "purpose": "Bundled Nerd Font subset only, set one to three px larger than the text beside it." }
+      "hero": { "displayName": "Hero", "purpose": "The weather page's own NOW temperature. At most one per page." },
+      "headline": { "displayName": "Headline", "purpose": "A page's own dominant reading or statement: the header day numeral, the device battery percent, the alert title." },
+      "title": { "displayName": "Title", "purpose": "The numbers inside a field: AI capacity, uptime, header weather temperature, desk temperature and humidity." },
+      "body": { "displayName": "Body", "purpose": "Every reading row and running-text line: priorities, agenda, brief text, sensor and service names, the alert message." },
+      "label": { "displayName": "Label", "purpose": "The small caps caption beneath or beside every numeral and every field." },
+      "icon": { "displayName": "Icon", "purpose": "Nerd Font glyphs, sized one to three px larger than the text they sit beside." }
     },
-    "shadows": [],
-    "motion": [],
-    "breakpoints": [
-      { "name": "panel", "value": "800x480" }
-    ],
-    "surface": {
-      "size": "800x480",
-      "quantization": "Exactly six colors, dither NONE, asserted on every rendered page",
-      "refresh": "Full panel refresh, about 32 seconds",
-      "states": "One. No hover, focus, transition, animation or breakpoint exists on this surface.",
-      "strokes": { "structural-rule": "4px", "component-border": "3px", "alert-frame": "10px", "chart-series": "4px", "chart-axis": "3px" },
-      "fonts": [
-        { "family": "Google Sans Flex", "weightRange": "300 1000", "file": "GoogleSansFlex-wght.ttf" },
-        { "family": "Noto Sans Thai", "weightRange": "100 900", "file": "NotoSansThai-wdth-wght.ttf", "purpose": "Per-glyph fallback for Thai codepoints" },
-        { "family": "Symbols Nerd Font Mono", "weightRange": "400", "file": "SymbolsNerdFontMono-Subset.ttf", "purpose": "The only icon source; a glyph outside the subset renders as a blank box" }
-      ]
-    }
+    "breakpoints": []
   },
   "components": [
     {
-      "name": "Status Band",
-      "kind": "nav",
-      "refersTo": "status-entry",
-      "description": "The 56px top band: entries divided by 4px black rules, the page entry inverted, a state entry filled red.",
-      "html": "<header class=\"ds-statusbar\"><div class=\"ds-cluster\"><div class=\"ds-entry\"><span class=\"ds-num\">SAT 05 SEP</span></div><div class=\"ds-entry ds-entry-page\"><span class=\"ds-num\">TODAY</span></div><div class=\"ds-entry ds-entry-state\"><span class=\"ds-num\">1 LATE</span></div></div><div class=\"ds-cluster\"><div class=\"ds-entry\"><span class=\"ds-num\">12:29</span></div></div></header>",
-      "css": ".ds-statusbar { display: flex; align-items: stretch; justify-content: space-between; height: 56px; background: #FFFFFF; color: #000000; font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif; border-bottom: 4px solid #000000; overflow: hidden; } .ds-cluster { display: flex; align-items: stretch; min-width: 0; } .ds-entry { display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 20px; font-weight: 800; letter-spacing: 0.01em; white-space: nowrap; } .ds-entry + .ds-entry { border-left: 4px solid #000000; } .ds-entry-page { background: #000000; color: #FFFFFF; } .ds-entry-state { background: #FF0000; color: #FFFFFF; } .ds-num { font-variant-numeric: tabular-nums; }"
+      "name": "Numeral and Label Field",
+      "kind": "custom",
+      "refersTo": "numeral",
+      "description": "The panel's base grammar: a tabular numeral with its unit, and a small-caps label beneath it.",
+      "html": "<div class=\"ds-field\"><span class=\"ds-numeral\">72<span class=\"ds-unit\">%</span></span><div class=\"ds-label\">BATTERY</div></div>",
+      "css": ".ds-field { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; } .ds-numeral { font-family: 'Google Sans', sans-serif; font-variant-numeric: tabular-nums; font-size: 48px; font-weight: 500; line-height: 1; color: #000000; } .ds-unit { font-size: 16px; font-weight: 700; margin-left: 2px; } .ds-label { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #000000; }"
     },
     {
-      "name": "Pane",
-      "kind": "card",
-      "refersTo": "pane-title",
-      "description": "A 34px title bar over a white reading field. The bar is black at rest and takes the worst state under it.",
-      "html": "<section class=\"ds-pane\"><div class=\"ds-pane-title\"><span>PRIORITIES</span></div><div class=\"ds-pane-body\"><div class=\"ds-row\">Send vendor quote answer</div><div class=\"ds-row\">Finish Q3 OKR review</div></div></section>",
-      "css": ".ds-pane { display: flex; flex-direction: column; background: #FFFFFF; font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif; border: 4px solid #000000; width: 420px; } .ds-pane-title { height: 34px; display: flex; align-items: center; gap: 9px; padding: 0 12px; background: #000000; color: #FFFFFF; font-size: 20px; font-weight: 900; letter-spacing: 0.06em; } .ds-pane-body { padding: 8px 12px; } .ds-row { font-size: 24px; font-weight: 700; line-height: 1.3; color: #000000; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }"
-    },
-    {
-      "name": "Pane Title, Caution",
-      "kind": "card",
-      "refersTo": "pane-title-caution",
-      "description": "The same bar when the worst state beneath it is a warning. Red replaces yellow when anything under it is down or overdue; green never appears here.",
-      "html": "<div class=\"ds-pane-title-caution\"><span>SERVICES</span></div>",
-      "css": ".ds-pane-title-caution { height: 34px; display: flex; align-items: center; gap: 9px; padding: 0 12px; background: #FFFF00; color: #000000; font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif; font-size: 20px; font-weight: 900; letter-spacing: 0.06em; width: 420px; }"
-    },
-    {
-      "name": "Chip",
+      "name": "State Chip (red)",
       "kind": "chip",
-      "refersTo": "chip-neutral",
-      "description": "A 3px bordered value tag for a state belonging to one row: due labels, sensor readings, device power and freshness.",
-      "html": "<span class=\"ds-chip ds-chip-neutral\">TOMORROW</span> <span class=\"ds-chip ds-chip-alarm\">1D LATE</span> <span class=\"ds-chip ds-chip-caution\">TODAY</span> <span class=\"ds-chip ds-chip-healthy\">ON USB, CHARGED</span>",
-      "css": ".ds-chip { display: inline-flex; align-items: center; border: 3px solid #000000; padding: 1px 8px 3px 8px; font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif; font-size: 20px; font-weight: 900; line-height: 1.1; letter-spacing: 0.02em; white-space: nowrap; } .ds-chip-neutral { background: #FFFFFF; color: #000000; } .ds-chip-alarm { background: #FF0000; color: #FFFFFF; } .ds-chip-caution { background: #FFFF00; color: #000000; } .ds-chip-healthy { background: #00FF00; color: #000000; }"
+      "refersTo": "chip-red",
+      "description": "A borderless filled pill reporting an overdue or critical state on a row.",
+      "html": "<span class=\"ds-chip ds-chip-red\">3D LATE</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; padding: 2px 6px 3px; font-size: 16px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap; } .ds-chip-red { background: #FF0000; color: #FFFFFF; }"
     },
     {
-      "name": "Block Meter",
+      "name": "State Chip (yellow)",
+      "kind": "chip",
+      "refersTo": "chip-yellow",
+      "description": "A borderless filled pill reporting a due-today or caution state on a row.",
+      "html": "<span class=\"ds-chip ds-chip-yellow\">TODAY</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; padding: 2px 6px 3px; font-size: 16px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap; } .ds-chip-yellow { background: #FFFF00; color: #000000; }"
+    },
+    {
+      "name": "Chip, plain",
+      "kind": "chip",
+      "refersTo": "chip-plain",
+      "description": "The unfilled default: a due date or caption with no state to report yet.",
+      "html": "<span class=\"ds-chip-plain\">DUE 12 SEP</span>",
+      "css": ".ds-chip-plain { display: inline-flex; align-items: center; font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: #000000; white-space: nowrap; }"
+    },
+    {
+      "name": "Tell-tale",
       "kind": "custom",
-      "refersTo": "meter-cell",
-      "description": "Ten 14px cells, one per ten percent, filled in the level's state color. An unknown quantity is ten empty cells, never a guessed fill.",
-      "html": "<div class=\"ds-meter\"><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell ds-cell-healthy\"></span><span class=\"ds-cell\"></span></div>",
-      "css": ".ds-meter { display: flex; gap: 2px; } .ds-cell { width: 14px; height: 14px; border: 3px solid #000000; background: #FFFFFF; } .ds-cell-healthy { background: #00FF00; } .ds-cell-caution { background: #FFFF00; } .ds-cell-alarm { background: #FF0000; }"
+      "refersTo": "telltale-red",
+      "description": "A small filled circle preceding a word or reading to flag a state without recoloring the reading itself.",
+      "html": "<span class=\"ds-row\"><span class=\"ds-telltale ds-telltale-red\"></span>HEAT</span>",
+      "css": ".ds-row { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; } .ds-telltale { display: inline-block; width: 10px; height: 10px; border-radius: 50%; } .ds-telltale-red { background: #FF0000; }"
     },
     {
-      "name": "State Bar",
+      "name": "Line Meter",
       "kind": "custom",
-      "refersTo": "state-bar",
-      "description": "An 8px solid block under an air metric, carrying the qualitative word that would not fit the cell.",
-      "html": "<div class=\"ds-metric\"><div class=\"ds-metric-value\">7.5</div><div class=\"ds-metric-label\">UV</div><div class=\"ds-state-bar ds-state-bar-caution\"></div></div>",
-      "css": ".ds-metric { width: 96px; font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif; color: #000000; } .ds-metric-value { font-size: 34px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; } .ds-metric-label { font-size: 20px; font-weight: 900; line-height: 1; } .ds-state-bar { height: 8px; margin-top: 4px; background: #000000; } .ds-state-bar-healthy { background: #00FF00; } .ds-state-bar-caution { background: #FFFF00; } .ds-state-bar-alarm { background: #FF0000; }"
+      "refersTo": null,
+      "description": "A thin outlined bar filled from the left for a used fraction; empty means unknown, never a guess.",
+      "html": "<div class=\"ds-meter\"><div class=\"ds-meter-fill\" style=\"width:64%;\"></div></div>",
+      "css": ".ds-meter { position: relative; height: 4px; border: 2px solid #000000; background: #FFFFFF; box-sizing: content-box; } .ds-meter-fill { position: absolute; left: 0; top: 0; height: 100%; background: #000000; }"
     },
     {
-      "name": "Window List",
+      "name": "Hatch (unavailable)",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "A 45 degree black-and-white stripe box standing in for any value that is unknown or unavailable, in place of a numeral.",
+      "html": "<div class=\"ds-hatch\" style=\"width:64px;height:32px;\"></div>",
+      "css": ".ds-hatch { background-image: repeating-linear-gradient(45deg, #000000 0 2px, #FFFFFF 2px 4px); border: 2px solid #000000; }"
+    },
+    {
+      "name": "Window List (footer)",
       "kind": "nav",
-      "refersTo": "window-tab",
-      "description": "The 44px foot bar naming the five pages in physical button order. The current page is inverted; a page that is late, down or stale carries a tmux flag.",
-      "html": "<footer class=\"ds-winbar\"><div class=\"ds-wins\"><div class=\"ds-win\"><span class=\"ds-num\">1</span>&nbsp;TODAY</div><div class=\"ds-win\"><span class=\"ds-num\">2</span>&nbsp;AGENDA<span class=\"ds-win-flag\">!</span></div><div class=\"ds-win ds-win-on\"><span class=\"ds-num\">5</span>&nbsp;SYSTEM</div></div></footer>",
-      "css": ".ds-winbar { display: flex; align-items: stretch; justify-content: space-between; height: 44px; background: #FFFFFF; border-top: 4px solid #000000; font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif; overflow: hidden; } .ds-wins { display: flex; align-items: stretch; padding-left: 10px; } .ds-win { display: flex; align-items: center; padding: 0 7px; color: #000000; font-size: 20px; font-weight: 900; letter-spacing: 0.02em; white-space: nowrap; } .ds-win + .ds-win { margin-left: 8px; } .ds-win-on { background: #000000; color: #FFFFFF; } .ds-win-flag { margin-left: 5px; } .ds-num { font-variant-numeric: tabular-nums; }"
-    },
-    {
-      "name": "Alert Frame",
-      "kind": "custom",
-      "refersTo": "alert-frame",
-      "description": "The interrupt page: a title bar in the alert's priority color and a 10px frame of the same color around a centered white field.",
-      "html": "<section class=\"ds-alert\"><div class=\"ds-alert-bar\"><span>FRONT DOOR</span><span class=\"ds-alert-when\">06:43</span></div><div class=\"ds-alert-inner\"><div class=\"ds-alert-title\">DOORBELL</div><div class=\"ds-alert-message\">Someone is at the door</div><div class=\"ds-alert-time\">06:43</div></div></section>",
-      "css": ".ds-alert { display: flex; flex-direction: column; width: 520px; background: #FFFFFF; font-family: 'Google Sans Flex', 'Noto Sans Thai', sans-serif; color: #000000; } .ds-alert-bar { height: 34px; display: flex; align-items: center; gap: 9px; padding: 0 12px; background: #FF0000; color: #FFFFFF; font-size: 20px; font-weight: 900; letter-spacing: 0.06em; } .ds-alert-when { margin-left: auto; font-weight: 900; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; } .ds-alert-inner { border: 10px solid #FF0000; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px 28px; } .ds-alert-title { font-size: 72px; font-weight: 900; line-height: 1.05; letter-spacing: -0.01em; } .ds-alert-message { font-size: 30px; font-weight: 600; line-height: 1.2; margin-top: 20px; } .ds-alert-time { font-size: 48px; font-weight: 900; margin-top: 20px; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }"
-    },
-    {
-      "name": "Desk Chart",
-      "kind": "custom",
-      "refersTo": "state-bar",
-      "description": "The 24 hour trace: 4px red temperature, 4px blue humidity, 3px black L-axis, 20px labels in the series color. No gridlines, no fill, no legend box.",
-      "html": "<svg class=\"ds-chart\" width=\"344\" height=\"170\" viewBox=\"0 0 344 170\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"0\" y=\"0\" width=\"344\" height=\"170\" fill=\"#FFFFFF\"></rect><polyline points=\"7,110 60,80 120,96 190,60 260,74 337,52\" fill=\"none\" stroke=\"#FF0000\" stroke-width=\"4\" stroke-linejoin=\"round\" stroke-linecap=\"round\"></polyline><polyline points=\"7,60 60,92 120,74 190,108 260,88 337,120\" fill=\"none\" stroke=\"#0000FF\" stroke-width=\"4\" stroke-linejoin=\"round\" stroke-linecap=\"round\"></polyline><path d=\"M 7 30 L 7 136 L 337 136\" fill=\"none\" stroke=\"#000000\" stroke-width=\"3\"></path><text x=\"7\" y=\"19\" fill=\"#FF0000\" text-anchor=\"start\" font-family=\"Google Sans Flex, Noto Sans Thai, sans-serif\" font-size=\"20\" font-weight=\"900\">28.3 TO 32.7 C</text><text x=\"337\" y=\"19\" fill=\"#0000FF\" text-anchor=\"end\" font-family=\"Google Sans Flex, Noto Sans Thai, sans-serif\" font-size=\"20\" font-weight=\"900\">50 TO 63%</text><text x=\"337\" y=\"162\" fill=\"#000000\" text-anchor=\"end\" font-family=\"Google Sans Flex, Noto Sans Thai, sans-serif\" font-size=\"20\" font-weight=\"900\">NOW</text></svg>",
-      "css": ".ds-chart { display: block; background: #FFFFFF; }"
+      "refersTo": "window-tab-active",
+      "description": "The five-page footer navigation, matching the device's physical left/right buttons; the current page inverts to a solid black block.",
+      "html": "<div class=\"ds-winlist\"><span class=\"ds-win\">1 TODAY</span><span class=\"ds-win ds-win-active\">2 AGENDA!</span><span class=\"ds-win\">3 WEATHER</span></div>",
+      "css": ".ds-winlist { display: flex; align-items: center; gap: 24px; height: 40px; font-family: 'Google Sans', sans-serif; } .ds-win { font-size: 20px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #000000; white-space: nowrap; } .ds-win-active { background: #000000; color: #FFFFFF; height: 32px; display: inline-flex; align-items: center; padding: 0 8px; }"
     }
   ],
   "narrative": {
-    "northStar": "The Desk Status Line",
-    "overview": "deskmate is a tmux status line that stopped being a terminal and became paper. A band of entries divided by hard rules sits across the top, panes split by thick black rules fill the middle, and a window list runs along the foot naming the five pages and flagging the ones that want attention. It reads as something the owner already knows how to read, because it borrows the grammar of the tool already open on the monitor beside it.\n\nThe surface is unforgiving and the system is built out of that. Every page is an exact 800x480 still, quantized to six pure colors with no dithering, refreshed in about 32 seconds. There is no motion, no hover, no second state, no breakpoint. Anti-aliased type collapses toward 1-bit at these sizes, so weight and size are the only reliable hierarchy and 20 px is a hard floor rather than a preference. Nothing is gray, nothing is tinted, nothing is translucent, because the panel has no way to show it and quantization turns the attempt into noise.\n\nColor is spent, not decorated. The chrome is deliberately neutral: white band, black rules, black pane title bars, one inverted block marking the page you are on. A field takes a color only at the moment it has a state to report, which means a colored field on this paper is always news. The explicit anti-reference is the e-ink dashboard default of a white page with hairline rules and small polite text; this refuses it at every level, from the 4 px rules to the 120 px temperature.",
+    "northStar": "The Braun Panel",
+    "overview": "deskmate is an instrument front panel rendered on paper. Every value the owner needs is a large numeral with its small capital label sitting beneath it; fields are split by a 2 px rule, not a boxed tile; one vertical scale is where time itself runs, on the agenda page's route. There is no title bar and no page-name band: the page's own name lives once, in the footer window list, so nothing on the page repeats what the footer already says.\n\nThe surface is unforgiving by construction and the system is built out of that. Every page is an exact 800x480 still, quantized to six pure colors with no dithering (tested on the physical panel and rejected), refreshed in about 32 seconds. There is no motion, no hover, no second state, no breakpoint. Weight and size are the only reliable hierarchy at these dimensions, so a numeral is drawn large and its label is drawn heavy rather than drawn small.\n\nColor still reports state, not decoration, everywhere except one page: the alert page is itself a state, so its priority color is allowed to fill the top band the way nothing else on the panel is allowed to. Elsewhere a colored field is always news: a chip, a tell-tale dot, a meter fill, a route line. The explicit anti-reference remains the phone-widget look the owner named directly: rounded app cards, app-store gloss, generic dashboard tiles. Nothing here is rounded except the tell-tale and route dots, which are marks, never containers.",
     "keyCharacteristics": [
-      "Six pure colors, no dithering, no gray, no gradient, no shadow, no radius.",
-      "Neutral chrome; a color appears only where a field reports a state.",
-      "Type floor of 20 px, row text at 24 px / 700, headline weights at 900.",
-      "Structure carried entirely by 4 px black rules and inverted blocks.",
-      "Icons only from the bundled Nerd Font subset, never a Unicode stand-in.",
-      "Fixed 800x480 frame: everything clips or clamps, nothing reflows."
+      "Numeral over small-caps label is the base grammar of the whole panel.",
+      "2 px black rules divide fields; there is no boxed tile and no title bar.",
+      "Six pure colors, no dithering, no gray, no gradient, no shadow.",
+      "A color fills a field only to report a state, with one exception: the alert page's top band, which is the state.",
+      "Tell-tale dots and route/day dots are the panel's only round shapes.",
+      "Icons come only from the bundled Nerd Font subset.",
+      "Fixed 800x480 frame: nothing reflows, overflow clips or two-line clamps."
     ],
     "rules": [
-      { "name": "The State-Or-Nothing Rule", "body": "Chrome is neutral. A field takes a color only at the instant it reports a state: blue for rain or a calendar identity, red for overdue, urgent, down or heat, yellow for caution, due today, warn or stale, green for healthy, charged or done. If a surface is colored for emphasis, grouping, branding or decoration, it is wrong.", "section": "colors" },
-      { "name": "The Worst-First Rule", "body": "A pane title bar carries the loudest state underneath it, ranked red, then yellow, then green. One red row colors the whole bar even when every other row is fine.", "section": "colors" },
-      { "name": "The Quiet-Green Rule", "body": "Healthy is the default and the default is silent. Green may fill a chip, a meter cell or a state bar, but it never colors a pane title bar and never colors a percentage: a bar that lights for good news teaches the eye to ignore color. Title accents demote green to black.", "section": "colors" },
-      { "name": "The Six-Colors-Exactly Rule", "body": "Only the six panel inks may appear in a shipped raster. No gray, no tint, no opacity, no gradient, no anti-aliased edge color that survives quantization. The renderer asserts this on every page and a seventh color is a build failure, not a rounding error.", "section": "colors" },
-      { "name": "The Twenty-Pixel Floor Rule", "body": "Nothing on the panel is drawn below 20 px, in HTML or in SVG. This is a legibility law, not a taste: below it, anti-aliased strokes quantize to 1-bit and the word breaks apart. When a label will not fit at 20 px, shorten the word (HUMID, not HUMIDITY) or let the glyph carry the meaning; never shrink the type.", "section": "typography" },
-      { "name": "The Heavy-At-The-Floor Rule", "body": "Type at or near the floor is set at 800 to 900. Weight, not size, is what survives quantization, so small text is heavy text and uppercase, and long-form reading text is the only place 600 to 700 appears.", "section": "typography" },
-      { "name": "The Uppercase-Chrome Rule", "body": "Every label the system writes is uppercase: page names, pane titles, chips, day labels, status entries. Content the owner or an adapter wrote keeps its own casing and its own script.", "section": "typography" },
-      { "name": "The Thick-Rule Rule", "body": "Every division is a 4 px black rule; internal cell dividers and component borders are 3 px; the alert frame is 10 px. Nothing is ever drawn thinner than 3 px, because a hairline on this panel is a dotted line.", "section": "layout" },
-      { "name": "The Clip-Never-Reflow Rule", "body": "The page cannot get taller, so overflow is resolved by clipping, ellipsis or a two-line clamp, decided in the view layer. A row that would push the last row's descenders out of its pane is a layout bug, not an acceptable overflow.", "section": "layout" },
-      { "name": "The Flat-Paper Rule", "body": "Surfaces are flat, always. Emphasis is inversion (black field, white type) or a heavier rule. Any request for a shadow, a card lift, a frosted layer or an offset block is answered with inversion or a rule.", "section": "elevation" }
+      { "name": "The State-Or-Nothing Rule", "body": "A field takes a color only at the instant it reports a state: red for overdue, down, urgent or dangerous heat/air; yellow for due today, warn, stale, or low; green for a confirmed-healthy reading; blue for rain or a calendar's identity. The one exception in the whole build is the alert page's top band, which is the state and is allowed to fill a whole region in its priority color.", "section": "colors" },
+      { "name": "The Six-Colors-Exactly Rule", "body": "Only the six panel colors may appear in a shipped raster (app/renderer/palette.py:assert_palette). No gray, no tint, no opacity, no gradient. A seventh color is a build failure, not a rounding error.", "section": "colors" },
+      { "name": "The Quiet-Green Rule", "body": "Green confirms; it never leads. It appears on a status mark or a tell-tale, never as a fill behind a percentage or a whole field.", "section": "colors" },
+      { "name": "The Numeral-And-Label Rule", "body": "Every value on the panel is a large numeral (or, on the alert page, a large statement) with its own small-caps label beneath or beside it. A page never shows a bare number without the label that says what it is.", "section": "typography" },
+      { "name": "The Fourteen-Pixel Floor Rule", "body": "Nothing on the panel is drawn below 14 px, in HTML or in SVG; 16 px is the default label size and 14 px is reserved for the three places measured to need it, Brief's own due-chip type included.", "section": "typography" },
+      { "name": "The Heavy-Label Rule", "body": "Labels are set at 700 weight in uppercase; body and numeral type stay at 500 to 600. Weight, not size, is what survives quantization at the label's own small sizes.", "section": "typography" },
+      { "name": "The 456 Rule", "body": "Today, Agenda, Weather and Brief all give their left column exactly 456 px; whatever is left, minus the 2 px rule and its 16 px padding on each side, is the right column's own width.", "section": "layout" },
+      { "name": "The No-Name-Band Rule", "body": "A page's own name appears exactly once, in the footer window list. No page repeats it in a header band, a title bar or a kicker above its own content.", "section": "layout" },
+      { "name": "The Clip-Never-Reflow Rule", "body": "The page cannot get taller or scroll, so overflow is resolved by clipping, ellipsis or a two-line clamp, decided once in the view layer, never left to the template to discover at render time.", "section": "layout" },
+      { "name": "The Flat-Paper Rule", "body": "Surfaces are flat, always. The only emphasis available is a 2 px rule, a 2 px border, or full inversion to black.", "section": "elevation" }
     ],
     "dos": [
-      "Do keep chrome neutral and spend color only where a field reports a state (The State-Or-Nothing Rule).",
-      "Do set every division as a 4 px black rule, component borders at 3 px, and nothing below 3 px (The Thick-Rule Rule).",
-      "Do hold the 20 px floor everywhere, including SVG text, and set anything at the floor in uppercase at 800 to 900 (The Twenty-Pixel Floor Rule).",
-      "Do set reading rows at 24 px / 700 with 1.3 line height.",
-      "Do give a pane title bar the worst state under it, and let green demote to black (The Worst-First Rule, The Quiet-Green Rule).",
-      "Do print an unknown as \"--\", \"unknown\" or an empty meter, and let a broken adapter say so in its pane rather than showing a plausible number.",
-      "Do decide truncation in the view layer and clip or two-line clamp in the template.",
-      "Do take icons only from the bundled Nerd Font subset, and check the glyph survives quantization at its size before using it."
+      "Do pair every numeral with its own small-caps label beneath or beside it (The Numeral-And-Label Rule).",
+      "Do split fields with a 2 px rule; never box a field in a bordered tile.",
+      "Do give Today, Agenda, Weather and Brief a 456 px left column (The 456 Rule).",
+      "Do spend color only to report a state, and remember the alert page's top band is the one field allowed to be colored for its own sake (The State-Or-Nothing Rule).",
+      "Do hold the 14 px floor, default to 16 px, and set label type at 700 weight (The Fourteen-Pixel Floor Rule, The Heavy-Label Rule).",
+      "Do draw an unknown or unavailable value as a hatch box, never as a guessed number.",
+      "Do name a page exactly once, in the footer window list (The No-Name-Band Rule).",
+      "Do decide truncation once in app/view.py and only clip or two-line clamp in the template (The Clip-Never-Reflow Rule)."
     ],
     "donts": [
-      "Don't introduce a seventh color, a gray, a tint, an opacity or a gradient.",
-      "Don't add a shadow, a lift, a card layer or a rounded corner; emphasis is inversion or a heavier rule (The Flat-Paper Rule).",
-      "Don't color a title bar green, or color a healthy percentage at all.",
-      "Don't use a Unicode symbol, an emoji or a text character as a stand-in for an icon the subset does not contain.",
-      "Don't write hover, focus, transition, animation or a media query; the surface has one state and one size.",
-      "Don't shrink type to make a label fit. Shorten the word or let the glyph carry it.",
-      "Don't put an eyebrow, kicker or repeated product name above a heading; the bar above a title carries a source or a state, or it carries nothing.",
-      "Don't flag a page in the window list for anything less than late, down or stale."
+      "Don't introduce a seventh color, a gray, a tint, an opacity or a gradient (The Six-Colors-Exactly Rule).",
+      "Don't add a shadow, a lift, a frosted layer or any depth besides a rule, a 2 px border, or full inversion to black (The Flat-Paper Rule).",
+      "Don't fill a title bar or a whole field with green, or color a healthy percentage at all (The Quiet-Green Rule).",
+      "Don't put a boxed tile, a title bar, or a page-name band above a page's own content; the footer already carries the page's name.",
+      "Don't round a corner on a field, chip, meter or hatch box; the round shapes on this panel are marks (tell-tale and event dots) only.",
+      "Don't use a Unicode symbol, emoji, or plain text character as a stand-in for an icon the bundled Nerd Font subset does not contain.",
+      "Don't write hover, focus, transition, animation or a media query; the panel has one state and one size."
     ]
   }
 }

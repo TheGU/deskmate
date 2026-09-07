@@ -1145,16 +1145,18 @@ BRIEF_TITLE_AVAILABLE_PX: float = 156.0
 BRIEF_TITLE_CHAR_PX: float = 10.5
 BRIEF_TITLE_MAX_CHARS: int = int(BRIEF_TITLE_AVAILABLE_PX // BRIEF_TITLE_CHAR_PX)
 #: Chip widths measured directly against the real render, one per shape
-#: :func:`due_chip_kind` can return, at Brief's own smaller 13 px chip
-#: override (brief.html: no border, 1/4/2 px padding, 13 px caps at weight
-#: 700, 2 px gap; the overdue chip also carries the FLAG glyph). Brief's own
-#: date shape has no "DUE " prefix (:func:`brief_due_label` drops it), so
-#: unlike Today's table it is genuinely one of the narrower chips.
+#: :func:`due_chip_kind` can return, at Brief's own smaller 14 px chip
+#: override (brief.html: no border, 1/4/2 px padding, 14 px caps at weight
+#: 700, 2 px gap; the owner's floor is nothing under 14 px, so this is the
+#: smallest this class may ever go). The overdue chip also carries the FLAG
+#: glyph. Brief's own date shape has no "DUE " prefix (:func:`brief_due_label`
+#: drops it), so unlike Today's table it is genuinely one of the narrower
+#: chips.
 BRIEF_CHIP_WIDTH_PX: dict[str, float] = {
-    "overdue": 77.0,
-    "today": 54.0,
-    "day": 34.0,
-    "date": 47.0,
+    "overdue": 82.0,
+    "today": 58.0,
+    "day": 37.0,
+    "date": 51.0,
     "none": 0.0,
 }
 #: Task row content width (296 px column minus its own 16 px padding) minus
