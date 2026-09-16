@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deskmate setup</title>
+<style>
+  /* A developer/owner tool, viewed in a browser, not a panel page: same
+     fonts and the same black on white as preview.html, but it scrolls and
+     is not fixed to 800x480. */
+  @font-face {
+    font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
+    font-display: block;
+    src: url('/static/fonts/GoogleSans-LatinThai-var.ttf') format('truetype');
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #FFFFFF; color: #000000;
+    font-family: 'Google Sans', sans-serif; font-weight: 600;
+    max-width: 560px;
+  }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
+  p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
+  label {
+    display: block; font-size: 13px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; margin: 16px 0 4px;
+  }
+  input {
+    width: 100%; border: 3px solid #000000; padding: 8px 10px; font: inherit;
+    font-weight: 600; background: #FFFFFF; color: #000000;
+  }
+  button {
+    margin-top: 22px; border: 3px solid #000000; background: #000000; color: #FFFFFF;
+    padding: 10px 16px; font: inherit; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; cursor: pointer;
+  }
+  .hint { font-size: 13px; font-weight: 600; margin-top: 4px; }
+  code { border: 2px solid #000000; padding: 0 4px; font-family: inherit; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>deskmate setup</h1>
+  <p class="sub">
+    This hub is not configured yet. Find the claim code in the container
+    log line starting "Setup needed", then fill in this form.
+  </p>
+  <form method="post" action="/setup">
+    <label for="name">Hub name</label>
+    <input id="name" name="name" value="{{ default_name }}">
+    <label for="base_url">Public base URL</label>
+    <input id="base_url" name="base_url" value="{{ default_base_url }}">
+    <p class="hint">http or https, a host, no path, no query, no credentials.</p>
+    <label for="claim_code">Claim code</label>
+    <input id="claim_code" name="claim_code" placeholder="XXXX-XXXX" autocomplete="off">
+    <button type="submit">Claim this hub</button>
+  </form>
+</body>
+</html>

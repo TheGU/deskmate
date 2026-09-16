@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deskmate</title>
+<style>
+  @font-face {
+    font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
+    font-display: block;
+    src: url('/static/fonts/GoogleSans-LatinThai-var.ttf') format('truetype');
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #FFFFFF; color: #000000;
+    font-family: 'Google Sans', sans-serif; font-weight: 600;
+    max-width: 560px;
+  }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
+  p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
+  .hint { font-size: 13px; font-weight: 600; margin-top: 8px; }
+  code { border: 2px solid #000000; padding: 0 4px; font-family: inherit; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>deskmate is already set up</h1>
+  <p class="sub">
+    Hub <strong>{{ name }}</strong> at <strong>{{ base_url }}</strong>,
+    configured {{ created_at }}.
+  </p>
+  <p class="hint">
+    Lost the token? Stop the container, delete <code>data/hub.json</code>,
+    restart, and open <code>/setup</code> again. There is no edit or
+    regenerate mode.
+  </p>
+</body>
+</html>

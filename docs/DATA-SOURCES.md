@@ -451,11 +451,18 @@ Responses: `201` with `{"accepted": true, "alert": {...}}`, or `409` with
 
 `configuration.yaml`:
 
+`POST` and `DELETE /api/alert` require the hub's bearer token now
+(`Authorization: Bearer <token>`, shown once on `/setup`); keep the real
+token in `secrets.yaml` as `deskmate_token`, never in `configuration.yaml`
+itself.
+
 ```yaml
 rest_command:
   deskmate_alert:
     url: "http://dashboard-hub.lan:8080/api/alert"
     method: POST
+    headers:
+      Authorization: "Bearer !secret deskmate_token"
     content_type: "application/json"
     payload: >-
       {"title": "{{ title }}", "message": "{{ message }}",
@@ -534,7 +541,8 @@ returns to the page it was on. Clear the alert from the hub afterwards if you
 want the page to go back to "no active alert":
 
 ```sh
-curl -X DELETE http://dashboard-hub.lan:8080/api/alert
+curl -X DELETE http://dashboard-hub.lan:8080/api/alert \
+  -H "Authorization: Bearer <token>"
 ```
 
 The `show_alert` ESPHome API action is defined in `firmware/e1002.yaml`

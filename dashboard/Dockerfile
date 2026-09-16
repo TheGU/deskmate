@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir \
         "pydantic-settings>=2.6" \
         "httpx>=0.28" \
         "icalendar>=6.1" \
-        "python-dateutil>=2.9"
+        "python-dateutil>=2.9" \n        "python-multipart>=0.0.32"
 
 COPY dashboard/app /app/dashboard/app
 COPY fixtures /app/fixtures

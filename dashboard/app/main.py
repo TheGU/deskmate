@@ -3,6 +3,9 @@
 Endpoints follow docs/ARCHITECTURE.md::
 
     GET    /healthz
+    GET    /setup
+    POST   /setup
+    GET    /api/hub
     GET    /api/state
     GET    /display/{page}.png
     GET    /preview
@@ -27,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -37,6 +40,13 @@ from app import __version__
 from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
 from app.config import Settings, get_settings
+from app.hub_config import (
+    AlreadyConfigured,
+    HubIdentity,
+    InvalidBaseURL,
+    WrongClaimCode,
+    require_token,
+)
 from app.logging_setup import configure_logging, log
 from app.models import AlertRequest, DashboardState, DeviceSample, DeviceTelemetry
 from app.renderer.palette import to_png_bytes
@@ -46,6 +56,11 @@ from app.telemetry import TelemetrySummary, get_telemetry_store, utc_now
 from app.timeutil import to_local
 
 logger = logging.getLogger("app.main")
+
+#: Matches uvicorn.run's own port in ``main()`` below; there is no
+#: configurable bind host/port setting today, so the claim-code log line
+#: always names 0.0.0.0 with a note to use the LAN address instead.
+DEFAULT_PORT = 8080
 
 
 @dataclass(slots=True)
@@ -65,8 +80,17 @@ class Hub:
         self.telemetry = get_telemetry_store(settings)
         self.state_service = StateService(settings, self.alerts)
         self.renderer = Renderer(settings)
+        self.identity = HubIdentity(settings.hub_config_file)
         self._cache: dict[str, RenderCacheEntry] = {}
         self._cache_lock = asyncio.Lock()
+        if not self.identity.configured:
+            log(
+                logger,
+                logging.WARNING,
+                f"Setup needed: open http://0.0.0.0:{DEFAULT_PORT}/setup and enter "
+                f"claim code {self.identity.claim_code}",
+                note="0.0.0.0 is not reachable from another device; use this machine's LAN address",
+            )
 
     async def state(self, *, force: bool = False) -> DashboardState:
         return await self.state_service.build(force=force)
@@ -214,8 +238,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Cache-Control": "no-cache"},
         )
 
-    # -- alerts ----------------------------------------------------------
-    @app.post("/api/alert")
+    # -- hub identity ------------------------------------------------------
+    @app.get("/api/hub")
+    async def api_hub() -> JSONResponse:
+        hub: Hub = app.state.hub
+        config = hub.identity.config
+        return JSONResponse(
+            {
+                "name": config.name if config else None,
+                "base_url": config.base_url if config else None,
+                "configured": hub.identity.configured,
+                "version": __version__,
+                "timezone": settings.timezone,
+                "sources": {
+                    "ai_usage": settings.ai_usage_source,
+                    "brief": settings.brief_source,
+                    "tasks": settings.tasks_source,
+                },
+            }
+        )
+
+    # -- alerts ------------------------------------------------------------
+    @app.post("/api/alert", dependencies=[Depends(require_token)])
     async def post_alert(payload: AlertRequest) -> JSONResponse:
         hub: Hub = app.state.hub
         alert, accepted = hub.alerts.set(payload)
@@ -228,13 +272,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    @app.delete("/api/alert")
+    @app.delete("/api/alert", dependencies=[Depends(require_token)])
     async def delete_alert() -> JSONResponse:
         hub: Hub = app.state.hub
         cleared = hub.alerts.clear()
         return JSONResponse({"cleared": cleared})
 
     # -- device telemetry ------------------------------------------------
+    # Trade-off, stated in docs/DATA-SOURCES.md: this endpoint stays open
+    # (no require_token) because the E1002 firmware does not send a bearer
+    # token today. firmware/e1002.yaml:363-365 already sends request_headers
+    # on this POST, so adding the token is a two-line firmware change and a
+    # reflash; it is deferred by choice, tracked as a follow-up, not shipped
+    # here.
     @app.post("/api/device/telemetry")
     async def post_device_telemetry(request: Request) -> JSONResponse:
         hub: Hub = app.state.hub
@@ -327,9 +377,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         headers["Content-Length"] = str(len(entry.png))
         return Response(content=entry.png, media_type="image/png", headers=headers)
 
+    # -- setup ------------------------------------------------------------
+    @app.get("/setup", response_class=HTMLResponse)
+    async def get_setup(request: Request) -> HTMLResponse:
+        hub: Hub = app.state.hub
+        if hub.identity.configured:
+            config = hub.identity.config
+            assert config is not None
+            template = hub.renderer.environment.get_template("setup-configured.html")
+            html = template.render(
+                name=config.name,
+                base_url=config.base_url,
+                created_at=to_local(config.created_at, settings.timezone).isoformat(),
+            )
+            return HTMLResponse(html)
+        guessed_base_url = f"{request.url.scheme}://{request.headers.get('host', '')}"
+        template = hub.renderer.environment.get_template("setup.html")
+        html = template.render(default_name="deskmate", default_base_url=guessed_base_url)
+        return HTMLResponse(html)
+
+    @app.post("/setup", response_class=HTMLResponse)
+    async def post_setup(request: Request) -> HTMLResponse:
+        hub: Hub = app.state.hub
+        form = await request.form()
+        name = str(form.get("name", ""))
+        base_url = str(form.get("base_url", ""))
+        claim_code = str(form.get("claim_code", ""))
+        try:
+            token = await hub.identity.claim(
+                submitted_code=claim_code, name=name, base_url=base_url
+            )
+        except AlreadyConfigured as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WrongClaimCode as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except InvalidBaseURL as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        config = hub.identity.config
+        assert config is not None
+        template = hub.renderer.environment.get_template("setup-done.html")
+        html = template.render(
+            name=config.name,
+            base_url=config.base_url,
+            token=token,
+            skill_path="skills/deskmate/SKILL.md",
+        )
+        return HTMLResponse(html)
+
     # -- preview ---------------------------------------------------------
     @app.get("/")
     async def root() -> RedirectResponse:
+        hub: Hub = app.state.hub
+        if not hub.identity.configured:
+            return RedirectResponse("/setup")
         return RedirectResponse("/preview")
 
     @app.get("/preview", response_class=HTMLResponse)
@@ -388,7 +488,9 @@ def main() -> None:  # pragma: no cover - convenience entry point
     import uvicorn
 
     settings = get_settings()
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, log_level=settings.log_level.lower())
+    uvicorn.run(
+        "app.main:app", host="0.0.0.0", port=DEFAULT_PORT, log_level=settings.log_level.lower()
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

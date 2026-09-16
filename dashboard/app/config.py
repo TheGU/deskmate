@@ -158,6 +158,10 @@ class Settings(BaseSettings):
         return self.data_dir / "alert.json"
 
     @property
+    def hub_config_file(self) -> Path:
+        return self.data_dir / "hub.json"
+
+    @property
     def telemetry_db_file(self) -> Path:
         return self.telemetry_db_path or (self.data_dir / "telemetry.sqlite")
 
