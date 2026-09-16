@@ -1,7 +1,7 @@
 """Print the current state of every entity on the reTerminal over the ESPHome API.
 
 Usage:
-    firmware/.venv/Scripts/python.exe scripts/device-state.py --device 192.168.11.23
+    firmware/.venv/Scripts/python.exe scripts/device-state.py --device <device-ip>
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Turn a switch entity on the reTerminal on or off over the ESPHome API.
 
 Usage:
-    firmware/.venv/Scripts/python.exe scripts/device-switch.py --device 192.168.11.23 --name "Battery mode" --state on
+    firmware/.venv/Scripts/python.exe scripts/device-switch.py --device <device-ip> --name "Battery mode" --state on
 """
 
 from __future__ import annotations

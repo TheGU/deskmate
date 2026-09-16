@@ -102,50 +102,43 @@ reads the font's cmap to prove it. Chromium runs with
 `-webkit-font-smoothing` override, because the panel is 1-bit after
 quantization and an unhinted stem lands as a smear of half-tones.
 
-### Page design: Status Line
+### Page design: Braun Panel
 
-The six pages share one frame, described in full in the direction contract at
-the top of `templates/base.html`. It reads as a terminal status line on paper:
+See `DESIGN.md` for the full recorded system.
 
-**Color reports state, it never decorates.** The chrome is neutral: a white
-status band with black type, black pane title bars, 4 px black rules. A field
-takes a color only when it carries a state, and the color is that state's
-meaning: blue for rain or a calendar, red for overdue, urgent, down or heat,
-yellow for caution, due today, warn or stale, green for healthy or charged.
-Healthy is the quiet default, so a page with nothing to report has almost no
-color on it. `view.py` decides every one of those accents; the templates only
-print the class name.
+The six pages share one frame, defined in `templates/base.html`: an 800x480
+still in six pure colors, no dithering, no motion, no hover, no reflow.
 
-- A 56 px top status band, white, with entries divided by 4 px black vertical
-  rules. Left: date, the page name inverted (the same black block the window
-  list uses), then a page-specific context entry. Right: overdue count (red,
-  it is a state), device battery (filled only when yellow or red), updated
-  time. The date and the clock carry no glyph: six glyph-led entries do not
-  fit an 800 px band and those two values name themselves.
-- A 380 px body of panes split by 4 px black rules. Every pane has a 34 px
-  title bar carrying a glyph and an uppercase title. The bar is black unless
-  the pane's own state is the message: weather NOW red in a heat wave, RAIN
-  blue when rain today is 50 percent or more, AIR red or yellow with the air,
-  agenda OVERDUE red (green when there is nothing overdue), system DESK yellow
-  when the device is stale, HOME and SERVICES red or yellow with the worst
-  thing under them, brief risk sections red when they have items.
-- Calendars are told apart by color, not by a label. `Event.calendar` names
-  the feed, `CALENDAR_NAMES` and `CALENDAR_COLORS` map feeds to panel colors
-  (see docs/DATA-SOURCES.md), and the agenda's context entry is the legend.
-- A 44 px window list bar at the foot: the five button-reachable pages as
-  numbered entries with the active one inverted, plus the device Wi-Fi RSSI.
-  A page that wants attention carries a `!` in its entry, tmux style, and the
-  bar is deliberately hard to set: AGENDA when a task is overdue, SYSTEM when
-  a service is down or the device has gone stale, WEATHER when a UV, PM2.5 or
-  AQI reading is in the red. Rain never raises a flag because the status band
-  already carries it on every page.
-- Type floors, because the panel is 1 bit per color at 125 ppi and stair-step
-  edges scale with the ratio of pixel size to stroke width: row text 24 px
-  weight 700, labels and chips 20 px weight 900, and nothing anywhere below
-  20 px. Copy is re-fitted by shortening a label or dropping a row, never by
-  shrinking type.
-- Quantities that are not a single number are block meters of ten bordered
-  cells, filled solid in the semantic color. Never a thin bar, never a ring.
+**Color reports state, it never decorates.** A field takes a color only when
+it carries a state: blue for rain or a calendar's identity, red for overdue,
+urgent, down or dangerous heat, yellow for due today, warn, stale or low,
+green for a confirmed-healthy reading. The one exception is the alert page's
+top band, which is itself the state and is allowed to fill the whole region.
+`view.py` decides every accent; the templates only print the class name.
+
+- A 64 px header (`.hdr`), closed off by a 2 px rule: on the left the day
+  numeral (56 px) and a weekday/month stack, a vertical rule, then the
+  weather reading (a 40 px temperature, its icon, and a state line that
+  carries a tell-tale dot when it has one, or a hatch box when the reading is
+  unavailable); on the right an overdue chip (red, shown only on pages that
+  do not already list the task), the Wi-Fi glyph, the battery reading (a red
+  or yellow chip only below 20 percent, otherwise plain), and the clock.
+- A 372 px body, closed off from the header and footer by 2 px rules and
+  split internally by 2 px vertical and horizontal rules, never a boxed
+  tile. Today, Agenda, Weather and Brief give the left column a fixed 456 px
+  (the 456 Rule); System uses its own row and column widths instead. The
+  grammar throughout is a numeral over its own small-caps label; a missing
+  value is a hatch box, never a guess.
+- Color inside the body is carried only by tell-tale dots (10 px filled
+  circles that precede a word or reading to flag a state) and filled state
+  chips (red, yellow, green or blue; `chip-plain` is the unfilled default for
+  a value with nothing to report). Nothing else in the body is colored for
+  its own sake.
+- A 40 px footer window list: the five button-reachable pages as numbered
+  entries, the current page inverted to a solid black block, and a page that
+  wants attention marked with a trailing "!" rather than a color. A page's
+  own name appears exactly once, here; nothing above the footer repeats it in
+  a band, a title bar or a kicker.
 
 Palette (server and device agree on pure primaries; the ESPHome
 epaper_spi driver maps RGB to the nearest of the six panel colors):

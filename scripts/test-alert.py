@@ -4,7 +4,7 @@
 2. Call the device's ESPHome API action `show_alert` (aioesphomeapi).
 
 Usage (from repo root, with firmware/.venv active or via its python):
-    firmware/.venv/Scripts/python.exe scripts/test-alert.py --device 192.168.11.23 --hub http://127.0.0.1:18080 --duration 20
+    firmware/.venv/Scripts/python.exe scripts/test-alert.py --device <device-ip> --hub http://127.0.0.1:18080 --duration 20
 """
 
 from __future__ import annotations
