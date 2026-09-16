@@ -7,6 +7,11 @@
 
 .no-data { font-size: 20px; font-weight: 500; }
 
+/* A section label with its stale tell-tale and age, exactly the System
+   page's stale BATTERY pattern (.sys-battery-label-row / .sys-age). */
+.today-label-row { display: flex; align-items: center; gap: 6px; }
+.today-stale-age { font-size: 16px; font-weight: 500; }
+
 /* Priorities: a checkbox glyph, the task, and the due state at the right. */
 .pri-list { display: flex; flex-direction: column; }
 .pri-row { display: flex; align-items: center; gap: 10px; height: 40px; flex: 0 0 40px; }
@@ -43,7 +48,11 @@
 
 {% block content %}
 <div class="col today-left">
-  <div class="label">PRIORITIES</div>
+  <div class="today-label-row">
+    {% if priorities_stale %}<span class="telltale yellow"></span>{% endif %}
+    <div class="label">PRIORITIES</div>
+    {% if priorities_stale %}<span class="today-stale-age">{{ priorities_stale }}</span>{% endif %}
+  </div>
   {% if priorities %}
   <div class="pri-list">
     {% for task in priorities %}
@@ -86,7 +95,11 @@
 <div class="rule-v"></div>
 
 <div class="col today-right">
-  <div class="label">AI CAPACITY</div>
+  <div class="today-label-row">
+    {% if capacity_stale %}<span class="telltale yellow"></span>{% endif %}
+    <div class="label">AI CAPACITY</div>
+    {% if capacity_stale %}<span class="today-stale-age">{{ capacity_stale }}</span>{% endif %}
+  </div>
   {% if providers %}
   <div class="providers-list">
     {% for provider in providers %}

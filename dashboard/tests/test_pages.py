@@ -11,8 +11,12 @@ from PIL import Image
 from app.adapters.device import build_device_state
 from app.models import (
     AdapterStatus,
+    AIUsage,
+    AIUsageBlock,
     Alert,
     AlertPriority,
+    Brief,
+    BriefBlock,
     DashboardState,
     DeviceBlock,
     DeviceSample,
@@ -327,6 +331,107 @@ def test_today_has_no_element_overflowing_the_800x480_box(
 ) -> None:
     overflow = run(renderer.probe("today", _widest_header_state(state), _VIEWPORT_OVERFLOW))
     assert overflow == [], overflow
+
+
+def _today_state_with_stale_ai_usage_and_tasks(state: DashboardState) -> DashboardState:
+    """AI CAPACITY and PRIORITIES both past their staleness threshold
+    (AI_USAGE_STALE_SECONDS 21600 s / 6 h, TASKS_STALE_SECONDS 36000 s / 10 h),
+    file-sourced so they are eligible to be marked at all (a fixture never
+    is)."""
+    old_usage = state.generated_at - timedelta(hours=8)
+    old_tasks = state.generated_at - timedelta(hours=12)
+    providers = [p.model_copy(update={"collected_at": old_usage}) for p in state.ai_usage.providers]
+    return state.model_copy(
+        update={
+            "ai_usage": state.ai_usage.model_copy(update={"source": "file", "providers": providers}),
+            "tasks": state.tasks.model_copy(update={"source": "file", "received_at": old_tasks}),
+        }
+    )
+
+
+def test_today_page_fresh_has_no_stale_mark_and_stays_clean(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    """Today, file-sourced but freshly received: no tell-tale, no age text,
+    no DEMO (it is not a fixture), palette clean, nothing overflowing."""
+    fresh = state.model_copy(
+        update={
+            "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
+            "tasks": state.tasks.model_copy(update={"source": "file", "received_at": state.generated_at}),
+        }
+    )
+    html = renderer.render_html("today", fresh, embed_fonts=False)
+    assert 'class="today-stale-age"' not in html
+    assert 'class="ftr-demo"' not in html
+
+    image = open_png(run(renderer.render_png("today", fresh)))
+    assert image.size == DISPLAY_SIZE
+    assert palette_violations(image) == set()
+    assert_palette(image)
+    overflow = run(renderer.probe("today", fresh, _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_today_page_stale_shows_tell_tale_and_age_and_stays_clean(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    """AI CAPACITY and PRIORITIES both carry the yellow tell-tale plus a
+    whole-hour age after the label, the footer flags "today", and the page
+    is still palette-clean with nothing overflowing."""
+    stale = _today_state_with_stale_ai_usage_and_tasks(state)
+    html = renderer.render_html("today", stale, embed_fonts=False)
+    assert html.count('<span class="today-stale-age">') == 2
+    assert "8 H AGO" in html
+    assert "12 H AGO" in html
+
+    flagged_names = run(
+        renderer.probe(
+            "today",
+            stale,
+            """Array.from(document.querySelectorAll('.win'))
+                 .filter(w => w.querySelector('.win-flag'))
+                 .map(w => w.textContent.trim())""",
+        )
+    )
+    assert any("TODAY" in name for name in flagged_names), flagged_names
+
+    image = open_png(run(renderer.render_png("today", stale)))
+    assert image.size == DISPLAY_SIZE
+    assert palette_violations(image) == set()
+    assert_palette(image)
+    overflow = run(renderer.probe("today", stale, _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_today_footer_shows_demo_for_the_default_fixture_state(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    """The shared fixture state's ai_usage/tasks are fixture-sourced (auto
+    resolves to fixture with no DATA_DIR pushes), so a fresh install's
+    footer must say DEMO rather than pass fixture numbers off as real."""
+    assert state.ai_usage.source == "fixture"
+    html = renderer.render_html("today", state, embed_fonts=False)
+    assert '<span class="ftr-demo">DEMO</span>' in html
+
+    image = open_png(run(renderer.render_png("today", state)))
+    assert image.size == DISPLAY_SIZE
+    assert palette_violations(image) == set()
+    assert_palette(image)
+    overflow = run(renderer.probe("today", state, _VIEWPORT_OVERFLOW))
+    assert overflow == [], overflow
+
+
+def test_today_footer_hides_demo_once_the_shown_datasets_are_file_sourced(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    real = state.model_copy(
+        update={
+            "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
+            "tasks": state.tasks.model_copy(update={"source": "file"}),
+        }
+    )
+    html = renderer.render_html("today", real, embed_fonts=False)
+    assert 'class="ftr-demo"' not in html
 
 
 def test_today_agenda_time_never_touches_the_title(renderer: Renderer, state: DashboardState) -> None:

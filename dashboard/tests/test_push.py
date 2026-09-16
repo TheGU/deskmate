@@ -323,12 +323,12 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
     assert tasks.json()["effective_source"] == "fixture"
 
 
-def test_push_tasks_reports_fixture_when_the_selector_is_obsidian(
+def test_push_tasks_warns_and_reports_fixture_when_the_selector_is_obsidian(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """Pushing tasks.json while TASKS_SOURCE=obsidian does not change what
     the panel shows (it still reads the vault), so effective_source must not
-    claim "file"."""
+    claim "file", and the warning must name the actual selector."""
     data_dir = tmp_path_factory.mktemp("push-obsidian")
     settings = Settings(
         _env_file=None,
@@ -342,4 +342,6 @@ def test_push_tasks_reports_fixture_when_the_selector_is_obsidian(
     with TestClient(app) as client:
         obsidian_token = _claim(client)
         response = client.post("/api/tasks", json={"tasks": []}, headers=auth(obsidian_token))
-    assert response.json()["effective_source"] == "fixture"
+    body = response.json()
+    assert body["effective_source"] == "fixture"
+    assert body["warning"] == "TASKS_SOURCE is obsidian; the panel will not show this push"

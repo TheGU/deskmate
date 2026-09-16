@@ -460,7 +460,81 @@ def overdue_tasks(state: DashboardState, today: date) -> list[Task]:
     ]
 
 
-def window_flags(state: DashboardState, overdue_count: int) -> set[str]:
+# ---------------------------------------------------------------------------
+# Staleness (Part 2, DESIGN.md): view-layer only. A dataset a remote agent
+# pushes (ai_usage, brief, tasks) carries its own age, and past a threshold
+# the panel marks it, exactly the System page's stale BATTERY pattern: a
+# yellow tell-tale before the section label, the age in 16 px caps after it.
+# Never serialized onto a model: the state fingerprint (state.py) and the
+# device's PNG 304 path stay untouched. Because pages are cached (Today's
+# TTL is 1800 s, render.py:PAGE_TTL_SECONDS), the mark itself can lag a push
+# by up to one page TTL.
+# ---------------------------------------------------------------------------
+def stale_info(
+    reference: datetime | None, source: str, threshold_seconds: float, now: datetime
+) -> str | None:
+    """None when the age is unknown, the source is a fixture (demo data is
+    never marked stale), or the age is under an hour or under the
+    threshold; otherwise an age label bucketed to whole hours ("6 H AGO").
+    """
+    if source == "fixture" or reference is None:
+        return None
+    age_seconds = (now - reference).total_seconds()
+    if age_seconds < threshold_seconds:
+        return None
+    hours = int(age_seconds // 3600)
+    if hours < 1:
+        return None
+    return f"{hours} H AGO"
+
+
+def ai_usage_stale(state: DashboardState, settings: Settings, now: datetime) -> str | None:
+    """Age source: the oldest provider's ``collected_at``."""
+    block = state.ai_usage
+    collected = [p.collected_at for p in block.providers if p.collected_at is not None]
+    reference = min(collected) if collected else None
+    return stale_info(reference, block.source, settings.ai_usage_stale_seconds, now)
+
+
+def brief_stale(state: DashboardState, settings: Settings, now: datetime) -> str | None:
+    """Age source: ``Brief.generated_at``."""
+    block = state.brief
+    reference = block.brief.generated_at if block.brief is not None else None
+    return stale_info(reference, block.source, settings.brief_stale_seconds, now)
+
+
+def tasks_stale(state: DashboardState, settings: Settings, now: datetime) -> str | None:
+    """Age source: ``TasksBlock.received_at``."""
+    block = state.tasks
+    return stale_info(block.received_at, block.source, settings.tasks_stale_seconds, now)
+
+
+#: Which pushed datasets each page actually shows: what the footer's DEMO
+#: mark (any of them sourced "fixture") and the "!" flag (any of them
+#: stale) are about. Weather/calendar/home/device keep their own
+#: established fixture-fallback story from earlier phases; this is scoped
+#: to the three datasets a remote agent pushes.
+PAGE_PUSH_DATASETS: dict[str, tuple[str, ...]] = {
+    "today": ("ai_usage", "tasks"),
+    "agenda": (),
+    "weather": (),
+    "brief": ("brief", "tasks"),
+    "system": (),
+    "alert": (),
+}
+
+
+def page_shows_demo_data(state: DashboardState, page: str) -> bool:
+    """True when a pushed dataset actually shown on this page is a fixture,
+    so a fresh install (nothing pushed yet) never passes demo numbers off
+    as real."""
+    blocks = {"ai_usage": state.ai_usage, "brief": state.brief, "tasks": state.tasks}
+    return any(blocks[name].source == "fixture" for name in PAGE_PUSH_DATASETS.get(page, ()))
+
+
+def window_flags(
+    state: DashboardState, settings: Settings, reference: datetime, overdue_count: int
+) -> set[str]:
     """Pages the window list marks with a "!".
 
     tmux flags a window that wants attention, and a flag on everything is a
@@ -492,6 +566,11 @@ def window_flags(state: DashboardState, overdue_count: int) -> set[str]:
         )
         if "red" in air:
             flagged.add("weather")
+
+    if ai_usage_stale(state, settings, reference) or tasks_stale(state, settings, reference):
+        flagged.add("today")
+    if brief_stale(state, settings, reference) or tasks_stale(state, settings, reference):
+        flagged.add("brief")
     return flagged
 
 
@@ -574,10 +653,13 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
     }
 
 
-def footer_context(state: DashboardState, today: date, page: str) -> dict[str, Any]:
-    """The window list: the five pages the buttons walk through."""
+def footer_context(
+    state: DashboardState, settings: Settings, today: date, reference: datetime, page: str
+) -> dict[str, Any]:
+    """The window list: the five pages the buttons walk through, plus the
+    DEMO mark at the footer's right end for this page."""
     overdue_count = len(overdue_tasks(state, today))
-    flagged = window_flags(state, overdue_count)
+    flagged = window_flags(state, settings, reference, overdue_count)
     return {
         "windows": [
             {
@@ -588,6 +670,7 @@ def footer_context(state: DashboardState, today: date, page: str) -> dict[str, A
             }
             for index, name in enumerate(WINDOW_PAGES, start=1)
         ],
+        "demo": page_shows_demo_data(state, page),
     }
 
 
@@ -604,7 +687,7 @@ def base_context(state: DashboardState, settings: Settings, page: str) -> dict[s
         # Named constants for the fixed glyphs; the chosen ones are per row.
         "icons": icons,
         "header": header_context(state, today, reference, page),
-        "footer": footer_context(state, today, page),
+        "footer": footer_context(state, settings, today, reference, page),
         # Each page builder fills this with one accent per pane title bar.
         # Kept for agenda, weather, brief and system until their own parts
         # rebuild them off the older pane-title chrome.
@@ -629,6 +712,8 @@ def today_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     context["providers"] = ai_capacity_rows(state)
     context["usage_note"] = block_note(state.ai_usage.status, "AI quota")
     context["ai_note"] = brief_note(state)
+    context["priorities_stale"] = tasks_stale(state, settings, reference)
+    context["capacity_stale"] = ai_usage_stale(state, settings, reference)
     return context
 
 
@@ -1267,7 +1352,9 @@ def brief_lines(
 def brief_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     context = base_context(state, settings, "brief")
     today: date = context["today"]
+    reference: datetime = context["reference"]
     brief = state.brief.brief
+    context["brief_stale"] = brief_stale(state, settings, reference)
     context["brief_note"] = block_note(state.brief.status, "AI brief")
     context["brief_available"] = state.brief.usable and brief is not None
     context["unavailable_message"] = BRIEF_UNAVAILABLE_MESSAGE

@@ -336,14 +336,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         await run_in_threadpool(_write_json_atomic, settings.ai_usage_file, document)
         hub.state_service.ai_usage.invalidate()
+        effective = _effective_source_after_push(settings.ai_usage_source)
         body: dict[str, Any] = {
             "stored": settings.ai_usage_file.name,
             "received_at": to_local(received_at, settings.timezone).isoformat(),
             "count": len(payload.providers),
-            "effective_source": _effective_source_after_push(settings.ai_usage_source),
+            "effective_source": effective,
         }
-        if settings.ai_usage_source == "fixture":
-            body["warning"] = "AI_USAGE_SOURCE is fixture; the panel will not show this push"
+        if effective == "fixture":
+            body["warning"] = (
+                f"AI_USAGE_SOURCE is {settings.ai_usage_source}; the panel will not show this push"
+            )
         return JSONResponse(body)
 
     @app.post("/api/brief", dependencies=[Depends(require_token)])
@@ -362,14 +365,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         target = settings.brief_directory / "current.json"
         await run_in_threadpool(_write_json_atomic, target, document)
         hub.state_service.brief.invalidate()
+        effective = _effective_source_after_push(settings.brief_source)
         body: dict[str, Any] = {
             "stored": target.name,
             "received_at": to_local(received_at, settings.timezone).isoformat(),
             "count": len(payload.sections),
-            "effective_source": _effective_source_after_push(settings.brief_source),
+            "effective_source": effective,
         }
-        if settings.brief_source == "fixture":
-            body["warning"] = "BRIEF_SOURCE is fixture; the panel will not show this push"
+        if effective == "fixture":
+            body["warning"] = (
+                f"BRIEF_SOURCE is {settings.brief_source}; the panel will not show this push"
+            )
         return JSONResponse(body)
 
     @app.post("/api/tasks", dependencies=[Depends(require_token)])
@@ -382,14 +388,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         await run_in_threadpool(_write_json_atomic, settings.tasks_file, document)
         hub.state_service.tasks.invalidate()
+        effective = _effective_source_after_push(settings.tasks_source)
         body: dict[str, Any] = {
             "stored": settings.tasks_file.name,
             "received_at": to_local(received_at, settings.timezone).isoformat(),
             "count": len(payload.tasks),
-            "effective_source": _effective_source_after_push(settings.tasks_source),
+            "effective_source": effective,
         }
-        if settings.tasks_source == "fixture":
-            body["warning"] = "TASKS_SOURCE is fixture; the panel will not show this push"
+        if effective == "fixture":
+            body["warning"] = (
+                f"TASKS_SOURCE is {settings.tasks_source}; the panel will not show this push"
+            )
         return JSONResponse(body)
 
     # -- alerts ------------------------------------------------------------

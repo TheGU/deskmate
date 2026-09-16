@@ -49,6 +49,7 @@ from app.view import (
     TODAY_CHIP_WIDTH_PX,
     agenda_route,
     ai_capacity_rows,
+    ai_usage_stale,
     alert_context,
     battery_accent,
     brief_context,
@@ -56,6 +57,7 @@ from app.view import (
     brief_headline_fits_one_line,
     brief_is_risk,
     brief_lines,
+    brief_stale,
     brief_task_rows,
     brief_title_budget,
     build_context,
@@ -65,11 +67,13 @@ from app.view import (
     device_panel,
     due_chip_kind,
     due_label,
+    footer_context,
     header_context,
     header_weather,
     meter_cells,
     month_grid,
     next_seven_days,
+    page_shows_demo_data,
     percent_accent,
     power_label,
     priority_tasks,
@@ -78,9 +82,12 @@ from app.view import (
     sensor_accent,
     sensor_value,
     service_mark,
+    stale_info,
     system_context,
     task_accent,
     task_sort_key,
+    tasks_stale,
+    today_context,
     today_next_rows,
     today_priority_tasks,
     upcoming_events,
@@ -91,6 +98,7 @@ from app.view import (
     weather_summary,
     wifi_accent,
     wifi_level,
+    window_flags,
     worst_accent,
 )
 
@@ -1399,3 +1407,166 @@ def test_alert_context_without_an_active_alert(settings: Settings) -> None:
     assert context["band_label"] == "ALERT"
     assert context["band_accent"] == "black"
     assert context["title"] == "NO ACTIVE ALERT"
+
+
+# ---------------------------------------------------------------------------
+# Staleness (Part 2)
+# ---------------------------------------------------------------------------
+NOW = datetime(2026, 9, 4, 20, 0, tzinfo=zone("Asia/Bangkok"))
+
+
+def test_stale_info_is_none_when_fresh() -> None:
+    reference = NOW - timedelta(hours=2)
+    assert stale_info(reference, "file", threshold_seconds=21600, now=NOW) is None
+
+
+def test_stale_info_is_none_for_a_fixture_regardless_of_age() -> None:
+    reference = NOW - timedelta(days=30)
+    assert stale_info(reference, "fixture", threshold_seconds=1, now=NOW) is None
+
+
+def test_stale_info_is_none_when_the_reference_is_unknown() -> None:
+    assert stale_info(None, "file", threshold_seconds=1, now=NOW) is None
+
+
+def test_stale_info_is_none_under_one_hour_even_past_the_threshold() -> None:
+    reference = NOW - timedelta(minutes=30)
+    assert stale_info(reference, "file", threshold_seconds=60, now=NOW) is None
+
+
+def test_stale_info_buckets_to_whole_hours() -> None:
+    reference = NOW - timedelta(hours=6, minutes=45)
+    assert stale_info(reference, "file", threshold_seconds=21600, now=NOW) == "6 H AGO"
+
+
+def _empty_state_with(**blocks: Any) -> DashboardState:
+    return DashboardState(generated_at=NOW, timezone="Asia/Bangkok", **blocks)
+
+
+def test_ai_usage_stale_uses_the_oldest_providers_collected_at(settings: Settings) -> None:
+    old = NOW - timedelta(hours=7)
+    newer = NOW - timedelta(hours=1)
+    state = _empty_state_with(
+        ai_usage=AIUsageBlock(
+            status=AdapterStatus.OK,
+            source="file",
+            providers=[
+                AIUsage(provider="claude", collected_at=newer),
+                AIUsage(provider="codex", collected_at=old),
+            ],
+        )
+    )
+    assert ai_usage_stale(state, settings, NOW) == "7 H AGO"
+
+
+def test_ai_usage_stale_is_none_for_a_fixture(settings: Settings) -> None:
+    old = NOW - timedelta(days=10)
+    state = _empty_state_with(
+        ai_usage=AIUsageBlock(
+            status=AdapterStatus.OK,
+            source="fixture",
+            providers=[AIUsage(provider="claude", collected_at=old)],
+        )
+    )
+    assert ai_usage_stale(state, settings, NOW) is None
+
+
+def test_brief_stale_uses_generated_at(settings: Settings) -> None:
+    old = NOW - timedelta(hours=11)
+    state = _empty_state_with(
+        brief=BriefBlock(
+            status=AdapterStatus.OK,
+            source="file",
+            brief=Brief(headline="x", generated_at=old, source="file"),
+        )
+    )
+    assert brief_stale(state, settings, NOW) == "11 H AGO"
+
+
+def test_brief_stale_is_none_without_a_brief(settings: Settings) -> None:
+    state = _empty_state_with(brief=BriefBlock(status=AdapterStatus.UNAVAILABLE, source="file"))
+    assert brief_stale(state, settings, NOW) is None
+
+
+def test_tasks_stale_uses_received_at(settings: Settings) -> None:
+    old = NOW - timedelta(hours=11)
+    state = _empty_state_with(tasks=TasksBlock(status=AdapterStatus.OK, source="file", received_at=old))
+    assert tasks_stale(state, settings, NOW) == "11 H AGO"
+
+
+def test_tasks_stale_is_none_for_a_fixture(settings: Settings) -> None:
+    old = NOW - timedelta(days=5)
+    state = _empty_state_with(tasks=TasksBlock(status=AdapterStatus.OK, source="fixture", received_at=old))
+    assert tasks_stale(state, settings, NOW) is None
+
+
+def test_window_flags_adds_today_when_ai_usage_is_stale(settings: Settings) -> None:
+    old = NOW - timedelta(hours=7)
+    state = _empty_state_with(
+        ai_usage=AIUsageBlock(
+            status=AdapterStatus.OK,
+            source="file",
+            providers=[AIUsage(provider="claude", collected_at=old)],
+        )
+    )
+    assert "today" in window_flags(state, settings, NOW, overdue_count=0)
+
+
+def test_window_flags_adds_brief_when_tasks_is_stale(settings: Settings) -> None:
+    old = NOW - timedelta(hours=11)
+    state = _empty_state_with(tasks=TasksBlock(status=AdapterStatus.OK, source="file", received_at=old))
+    assert "brief" in window_flags(state, settings, NOW, overdue_count=0)
+
+
+def test_window_flags_does_not_flag_today_or_brief_when_nothing_is_stale(settings: Settings) -> None:
+    flagged = window_flags(_empty_state_with(), settings, NOW, overdue_count=0)
+    assert "today" not in flagged
+    assert "brief" not in flagged
+
+
+def test_page_shows_demo_data_checks_only_that_pages_own_datasets(settings: Settings) -> None:
+    state = _empty_state_with(
+        ai_usage=AIUsageBlock(status=AdapterStatus.OK, source="fixture"),
+        brief=BriefBlock(
+            status=AdapterStatus.OK, source="file", brief=Brief(headline="x", source="file")
+        ),
+        tasks=TasksBlock(status=AdapterStatus.OK, source="file"),
+    )
+    assert page_shows_demo_data(state, "today") is True  # ai_usage is fixture
+    assert page_shows_demo_data(state, "brief") is False  # brief and tasks are both file
+    assert page_shows_demo_data(state, "agenda") is False  # agenda has no tracked dataset
+
+
+def test_footer_context_demo_flag(settings: Settings) -> None:
+    state = _empty_state_with(ai_usage=AIUsageBlock(status=AdapterStatus.OK, source="fixture"))
+    footer = footer_context(state, settings, NOW.date(), NOW, "today")
+    assert footer["demo"] is True
+    footer = footer_context(state, settings, NOW.date(), NOW, "agenda")
+    assert footer["demo"] is False
+
+
+def test_today_context_carries_the_stale_labels(settings: Settings) -> None:
+    old = NOW - timedelta(hours=7)
+    state = _empty_state_with(
+        ai_usage=AIUsageBlock(
+            status=AdapterStatus.OK,
+            source="file",
+            providers=[AIUsage(provider="claude", collected_at=old)],
+        )
+    )
+    context = today_context(state, settings)
+    assert context["capacity_stale"] == "7 H AGO"
+    assert context["priorities_stale"] is None
+
+
+def test_brief_context_carries_the_stale_label(settings: Settings) -> None:
+    old = NOW - timedelta(hours=11)
+    state = _empty_state_with(
+        brief=BriefBlock(
+            status=AdapterStatus.OK,
+            source="file",
+            brief=Brief(headline="x", generated_at=old, source="file"),
+        )
+    )
+    context = brief_context(state, settings)
+    assert context["brief_stale"] == "11 H AGO"

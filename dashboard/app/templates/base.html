@@ -189,7 +189,7 @@ html, body {
 .hdr-plain { display: inline-flex; align-items: baseline; gap: 4px; }
 .hdr-clock { font-size: 32px; font-weight: 600; }
 
-.ftr { flex: 0 0 40px; height: 40px; display: flex; align-items: center; }
+.ftr { flex: 0 0 40px; height: 40px; display: flex; align-items: center; justify-content: space-between; }
 .win-list { display: flex; align-items: center; gap: 24px; height: 100%; }
 .win {
   display: flex; align-items: center;
@@ -198,6 +198,8 @@ html, body {
 }
 .win-active { background: #000000; color: #FFFFFF; height: 32px; padding: 0 8px; }
 .win-flag { margin-left: 5px; }
+/* The footer's right end: demo (fixture) data is never passed off as real. */
+.ftr-demo { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #000000; }
 
 {% block style %}{% endblock %}
 </style>
@@ -265,6 +267,7 @@ its provenance.
       <span class="win{% if window.active %} win-active{% endif %}"><span class="num">{{ window.index }}</span>&nbsp;{{ window.name }}{% if window.flag %}<span class="win-flag">!</span>{% endif %}</span>
       {% endfor %}
     </div>
+    {% if footer.demo %}<span class="ftr-demo">DEMO</span>{% endif %}
   </footer>
 </div>
 </body>

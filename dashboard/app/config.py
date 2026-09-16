@@ -126,6 +126,14 @@ class Settings(BaseSettings):
     home_ttl_seconds: float = Field(default=120.0, alias="HOME_TTL_SECONDS")
     device_ttl_seconds: float = Field(default=60.0, alias="DEVICE_TTL_SECONDS")
 
+    # -- staleness thresholds (seconds), pushed datasets only -----------
+    # How old a pushed dataset's own age (AIUsage.collected_at, oldest
+    # provider; Brief.generated_at; TasksBlock.received_at) can get before
+    # view.py marks it stale on the panel. A fixture is never stale.
+    ai_usage_stale_seconds: float = Field(default=21600.0, alias="AI_USAGE_STALE_SECONDS")
+    brief_stale_seconds: float = Field(default=36000.0, alias="BRIEF_STALE_SECONDS")
+    tasks_stale_seconds: float = Field(default=36000.0, alias="TASKS_STALE_SECONDS")
+
     # -- rendering ------------------------------------------------------
     render_timeout_ms: int = Field(default=15000, alias="RENDER_TIMEOUT_MS")
     http_timeout_seconds: float = Field(default=10.0, alias="HTTP_TIMEOUT_SECONDS")

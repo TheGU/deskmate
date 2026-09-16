@@ -13,7 +13,11 @@
 }
 
 /* Left: mode + generated time, headline, rule, running-text body. */
-.brief-topline { flex: 0 0 24px; height: 24px; display: flex; align-items: center; justify-content: space-between; }
+.brief-topline { flex: 0 0 24px; height: 24px; display: flex; align-items: center; justify-content: space-between; min-width: 0; }
+/* The mode label with its stale tell-tale and age, exactly the System
+   page's stale BATTERY pattern. */
+.brief-mode-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.brief-stale-age { font-size: 16px; font-weight: 500; white-space: nowrap; }
 .brief-headline {
   flex: 0 0 auto; margin-top: 4px;
   font-size: 28px; font-weight: 600; line-height: 1.35;
@@ -62,7 +66,11 @@
   <div class="brief-left">
     {% if brief_available %}
     <div class="brief-topline">
-      <span class="label">{{ mode_label }}</span>
+      <span class="brief-mode-group">
+        {% if brief_stale %}<span class="telltale yellow"></span>{% endif %}
+        <span class="label">{{ mode_label }}</span>
+        {% if brief_stale %}<span class="brief-stale-age">{{ brief_stale }}</span>{% endif %}
+      </span>
       <span class="chip-plain">{{ generated_label }}</span>
     </div>
     <div class="brief-headline{% if not headline_large %} brief-headline-small{% endif %}">{{ headline }}</div>
