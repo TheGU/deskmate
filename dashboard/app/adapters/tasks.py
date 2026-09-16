@@ -186,6 +186,9 @@ class FixtureTasksAdapter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
+    def resolve(self) -> str:
+        return self.source
+
     async def fetch(self) -> list[Task]:
         settings = self._settings
         payload = load_fixture(settings.fixtures_dir / "tasks.json")
@@ -214,6 +217,9 @@ class FileTasksAdapter:
         #: Set on every successful fetch: the file's own ``received_at``, or
         #: its mtime. Read by ``CachedAdapter`` for ``TasksBlock.received_at``.
         self.last_received_at: datetime | None = None
+
+    def resolve(self) -> str:
+        return self.source
 
     async def fetch(self) -> list[Task]:
         path = self._settings.tasks_file
@@ -260,6 +266,11 @@ class AutoTasksAdapter:
     def source(self) -> str:
         return self._last_source
 
+    def resolve(self) -> str:
+        """A pure, live check of what the *next* ``fetch()`` would use; see
+        ``AutoAIUsageAdapter.resolve``."""
+        return "file" if self._settings.tasks_file.is_file() else "fixture"
+
     async def fetch(self) -> list[Task]:
         if self._settings.tasks_file.is_file():
             try:
@@ -284,6 +295,9 @@ class ObsidianTasksAdapter:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+
+    def resolve(self) -> str:
+        return self.source
 
     async def fetch(self) -> list[Task]:
         vault = self._settings.obsidian_vault_path

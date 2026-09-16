@@ -323,12 +323,12 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
     assert tasks.json()["effective_source"] == "fixture"
 
 
-def test_push_tasks_warns_and_reports_fixture_when_the_selector_is_obsidian(
+def test_push_tasks_warns_and_reports_obsidian_when_that_is_the_selector(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """Pushing tasks.json while TASKS_SOURCE=obsidian does not change what
-    the panel shows (it still reads the vault), so effective_source must not
-    claim "file", and the warning must name the actual selector."""
+    the panel shows (it still reads the vault): effective_source names the
+    selector verbatim ("obsidian", not "fixture"), and the warning does too."""
     data_dir = tmp_path_factory.mktemp("push-obsidian")
     settings = Settings(
         _env_file=None,
@@ -343,5 +343,30 @@ def test_push_tasks_warns_and_reports_fixture_when_the_selector_is_obsidian(
         obsidian_token = _claim(client)
         response = client.post("/api/tasks", json={"tasks": []}, headers=auth(obsidian_token))
     body = response.json()
-    assert body["effective_source"] == "fixture"
+    assert body["effective_source"] == "obsidian"
     assert body["warning"] == "TASKS_SOURCE is obsidian; the panel will not show this push"
+
+
+def test_hub_info_effective_reflects_a_push_immediately_before_any_fetch(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """GET /api/hub's "effective" is a live check, not the last fetch's
+    delegate: right after a push, before any /api/state or page render has
+    re-fetched tasks, it must already say "file"."""
+    data_dir = tmp_path_factory.mktemp("push-immediate")
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=data_dir,
+        LOG_LEVEL="WARNING",
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        immediate_token = _claim(client)
+        before = client.get("/api/hub").json()["sources"]["tasks"]["effective"]
+        pushed = client.post("/api/tasks", json={"tasks": []}, headers=auth(immediate_token))
+        assert pushed.status_code == 200
+        after = client.get("/api/hub").json()["sources"]["tasks"]["effective"]
+    assert before == "fixture"
+    assert after == "file"

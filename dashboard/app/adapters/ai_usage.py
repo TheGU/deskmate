@@ -42,6 +42,12 @@ class FixtureAIUsageAdapter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
+    def resolve(self) -> str:
+        """The source a fetch would use right now, without fetching. Fixed
+        for this adapter; see :class:`AutoAIUsageAdapter` for the live check.
+        """
+        return self.source
+
     async def fetch(self) -> list[AIUsage]:
         settings = self._settings
         payload = load_fixture(settings.fixtures_dir / "ai_usage.json")
@@ -65,6 +71,9 @@ class FileAIUsageAdapter:
         #: Set on every successful fetch: the file's own ``received_at``, or
         #: its mtime. Read by ``CachedAdapter`` for ``AIUsageBlock.received_at``.
         self.last_received_at: datetime | None = None
+
+    def resolve(self) -> str:
+        return self.source
 
     async def fetch(self) -> list[AIUsage]:
         path = self._settings.ai_usage_file
@@ -116,6 +125,16 @@ class AutoAIUsageAdapter:
     @property
     def source(self) -> str:
         return self._last_source
+
+    def resolve(self) -> str:
+        """A pure, live check of what the *next* ``fetch()`` would use: does
+        not fetch and does not update ``source``/``last_received_at``. Used
+        by ``GET /api/hub``'s "effective", which must reflect a push
+        immediately, before anything re-renders; ``source`` above instead
+        tracks the last actual fetch, which is what the DEMO mark needs
+        (it must match what is currently drawn, not what is about to be).
+        """
+        return "file" if self._settings.ai_usage_file.is_file() else "fixture"
 
     async def fetch(self) -> list[AIUsage]:
         if self._settings.ai_usage_file.is_file():

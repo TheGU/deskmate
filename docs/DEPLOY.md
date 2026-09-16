@@ -92,15 +92,19 @@ you also control access to.
 
 ## What is unauthenticated, on purpose
 
-`/api/state`, `/display/*.png`, `/preview*` and `/api/hub` are readable by
-anyone who can reach the hub, with no token: the e-paper device fetches
-pages without sending a token, so those routes have to stay open for it.
-That means panel content, including whatever an agent has pushed into the
-brief or task list, is readable by anyone on the same network segment or
-allowed through the reverse proxy. `POST /api/device/telemetry` is open too,
-for the same reason (the firmware does not send a token yet; a device token
-is a tracked firmware follow-up, not shipped here). Keep the hub on a
-trusted LAN or behind access control you control, not on the open internet.
+`/healthz`, `GET /setup`, `/api/hub`, `/api/state`, `/display/*.png`,
+`/preview*`, `POST /api/device/telemetry`, `GET /api/device/telemetry` and
+`GET /api/device/history` are all readable by anyone who can reach the hub,
+with no token: the e-paper device fetches pages and posts telemetry without
+sending one, so those routes have to stay open for it. That means panel
+content, including whatever an agent has pushed into the brief or task
+list, and up to 30 days of room climate and device battery history (`GET
+/api/device/history`), are readable by anyone on the same network segment
+or allowed through the reverse proxy. The telemetry endpoints are open for
+the same reason as `POST /api/device/telemetry` itself (the firmware does
+not send a token yet; a device token is a tracked firmware follow-up, not
+shipped here). Keep the hub on a trusted LAN or behind access control you
+control, not on the open internet.
 
 ## Reset
 

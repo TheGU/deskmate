@@ -7,10 +7,10 @@ description: Push AI quota, an AI-written brief, or open tasks to a deskmate das
 
 deskmate is a desk e-paper panel (a Seeed reTerminal E1002) driven by a small
 server called dashboard-hub. The device only downloads PNGs; this hub is what
-you talk to. It renders six pages (today, agenda, weather, brief, system,
-alert) from data it either fetches itself (calendar, weather, Home Assistant)
-or that an agent pushes to it over HTTP: AI usage/quota, an AI-written brief,
-and open tasks.
+you talk to. It renders every page (today, agenda, weather, brief, system,
+alert; see README.md's Pages line for the current list) from data it either
+fetches itself (calendar, weather, Home Assistant) or that an agent pushes to
+it over HTTP: AI usage/quota, an AI-written brief, and open tasks.
 
 ## Connecting
 
@@ -34,9 +34,13 @@ curl -s "$DESKMATE_URL/api/hub"
 Returns `{name, base_url, configured, version, timezone, sources}`, where
 `sources` is `{ai_usage: {configured, effective}, brief: {...}, tasks: {...}}`.
 `configured` is the selector (`fixture`, `file`, `auto`, or `obsidian` for
-tasks); `effective` is what the panel is actually showing right now. If your
-dataset's `effective` stays `fixture` after you push, the selector is pinned
-away from your data; the push response also warns you (see below).
+tasks); `effective` is what the *next* render will use, checked live on
+every call, so it already shows `file` right after you push, before the
+panel has re-rendered anything (the footer's own DEMO mark instead tracks
+what is currently drawn, and only catches up at the panel's own next
+render). If `effective` stays `fixture` or `obsidian` after you push, the
+selector is pinned away from your data; the push response also warns you
+(see below).
 
 **GET `/openapi.json` before posting.** The schema there is the truth: field
 names, types, length caps and examples for every model in this document are
@@ -121,11 +125,14 @@ under `detail` for a 422).
 
 Each pushed dataset has its own staleness threshold
 (`AI_USAGE_STALE_SECONDS` default 21600, `BRIEF_STALE_SECONDS` and
-`TASKS_STALE_SECONDS` default 36000, all in seconds). Past the threshold the
-panel marks the section with a yellow tell-tale and an hour-bucketed age, and
-flags the page's footer entry with `!`. The mark can lag your push by up to
-one page's cache TTL. A fixture-sourced dataset is never marked stale, and
-the footer instead prints DEMO on any page showing one.
+`TASKS_STALE_SECONDS` default 36000, all in seconds; a value under 3600
+never marks anything, since the age is always bucketed to whole hours).
+Past the threshold the panel marks the section with a yellow tell-tale and
+an hour-bucketed age, and flags the page's footer entry with `!`. The mark
+can lag your push by up to one page's cache TTL. A fixture-sourced dataset
+is never marked stale; instead, on the Today and Brief pages (the only
+pages that draw the three pushed datasets), the footer prints DEMO for as
+long as one of them is still fixture-sourced.
 
 ## Alerts
 
@@ -135,10 +142,21 @@ Assistant example.
 
 ## Adding a new dataset
 
-To push a new kind of data: add its pydantic model in `app/models.py`
-(`extra="forbid"`, `schema_version`, length caps, `AwareDatetime` for any
-timestamp); add a `POST /api/<name>` endpoint in `app/main.py` that writes
-atomically and calls the matching adapter's `invalidate()`; add or extend a
-file adapter under `app/adapters/` plus an `auto` variant if it should fall
-back to a fixture; give it a label on the page in `app/view.py` and the
-matching template; then add one curl example and its cadence here.
+To push a new kind of data:
+
+1. Add its pydantic model in `app/models.py` (`extra="forbid"`,
+   `schema_version`, length caps, `AwareDatetime` for any timestamp).
+2. Add a `POST /api/<name>` endpoint in `app/main.py` that writes atomically
+   and calls the matching adapter's `invalidate()`.
+3. Add or extend a file adapter under `app/adapters/` plus an `auto` variant
+   (with its own pure `resolve()` for `GET /api/hub`) if it should fall back
+   to a fixture.
+4. In `app/view.py`: give it a label on the page and in the matching
+   template; add a `<dataset>_stale` wrapper around `stale_info` if it has a
+   staleness threshold; list every page that actually draws it in
+   `PAGE_PUSH_DATASETS`; and, if it should ever flag a page's footer with
+   `!`, add that check to `window_flags`. **A page missing from
+   `PAGE_PUSH_DATASETS` silently gets no DEMO mark and no stale flag for
+   that dataset**, even if the page draws it, so double check every page
+   that reads the new field, not just the page it is "for".
+5. Add one curl example and its cadence here.

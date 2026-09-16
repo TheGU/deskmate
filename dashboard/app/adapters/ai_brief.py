@@ -93,6 +93,9 @@ class FixtureBriefAdapter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
+    def resolve(self) -> str:
+        return self.source
+
     async def fetch(self) -> Brief:
         settings = self._settings
         payload = load_fixture(settings.fixtures_dir / "brief.json")
@@ -125,6 +128,9 @@ class FileBriefAdapter:
         #: Set on every successful fetch: the file's own ``received_at``, or
         #: its mtime. Read by ``CachedAdapter`` for ``BriefBlock.received_at``.
         self.last_received_at: datetime | None = None
+
+    def resolve(self) -> str:
+        return self.source
 
     async def fetch(self) -> Brief:
         settings = self._settings
@@ -205,6 +211,11 @@ class AutoBriefAdapter:
     @property
     def source(self) -> str:
         return self._last_source
+
+    def resolve(self) -> str:
+        """A pure, live check of what the *next* ``fetch()`` would use; see
+        ``AutoAIUsageAdapter.resolve``."""
+        return "file" if self._file_available() else "fixture"
 
     async def fetch(self) -> Brief:
         if self._file_available():

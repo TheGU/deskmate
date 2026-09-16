@@ -1518,6 +1518,20 @@ def test_window_flags_adds_brief_when_tasks_is_stale(settings: Settings) -> None
     assert "brief" in window_flags(state, settings, NOW, overdue_count=0)
 
 
+def test_window_flags_adds_today_when_brief_is_stale(settings: Settings) -> None:
+    """Today draws the brief note too (view.py:brief_note), so a stale brief
+    must flag Today's own footer entry, not only Brief's."""
+    old = NOW - timedelta(hours=11)
+    state = _empty_state_with(
+        brief=BriefBlock(
+            status=AdapterStatus.OK,
+            source="file",
+            brief=Brief(headline="x", generated_at=old, source="file"),
+        )
+    )
+    assert "today" in window_flags(state, settings, NOW, overdue_count=0)
+
+
 def test_window_flags_does_not_flag_today_or_brief_when_nothing_is_stale(settings: Settings) -> None:
     flagged = window_flags(_empty_state_with(), settings, NOW, overdue_count=0)
     assert "today" not in flagged

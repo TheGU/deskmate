@@ -46,9 +46,44 @@ already runs in one.
 
 set -eu
 
-PROVIDER="$1"
-SHORT="$2"
-WEEKLY="$3"
+# ${N:-} instead of $N: with set -u, a plain positional reference for an
+# argument the caller did not pass aborts on "unbound variable" before the
+# usage message below can print. Blank is checked explicitly next.
+PROVIDER="${1:-}"
+SHORT="${2:-}"
+WEEKLY="${3:-}"
+
+if [ -z "$PROVIDER" ] || [ -z "$SHORT" ] || [ -z "$WEEKLY" ]; then
+  echo "usage: deskmate-quota-hook.sh <provider> <short_window_percent_remaining> <weekly_percent_remaining>" >&2
+  exit 1
+fi
+
+# Provider becomes a JSON string below; keep it to a safe, unquoted-in-JSON-
+# unsafe-free charset rather than trusting it not to contain a stray quote.
+case "$PROVIDER" in
+  *[!A-Za-z0-9_-]*)
+    echo "provider must be letters, digits, _ or - only: $PROVIDER" >&2
+    exit 1
+    ;;
+esac
+
+is_percent() {
+  # A plain integer 0-100: no sign, no decimal point, no stray characters
+  # that would break the JSON number below.
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$1" -ge 0 ] && [ "$1" -le 100 ]
+}
+
+if ! is_percent "$SHORT"; then
+  echo "short_window_percent_remaining must be an integer 0-100: $SHORT" >&2
+  exit 1
+fi
+if ! is_percent "$WEEKLY"; then
+  echo "weekly_percent_remaining must be an integer 0-100: $WEEKLY" >&2
+  exit 1
+fi
 
 : "${DESKMATE_URL:?DESKMATE_URL is not set}"
 : "${DESKMATE_TOKEN:?DESKMATE_TOKEN is not set}"

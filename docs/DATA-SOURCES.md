@@ -85,9 +85,11 @@ stable identifier, reused across pushes to update the same task), title
 default `none`), completed (default false), tags (0-8)}`. A duplicate `id`
 inside one push is `422`. Response `200`: `{"stored": "tasks.json",
 "received_at": "<local ISO>", "count": <n>, "effective_source":
-"file"|"fixture"}`, plus `"warning"` when `TASKS_SOURCE` is pinned to
-`fixture` or set to `obsidian` (either way the push will not show on the
-panel). Full shape: `GET /openapi.json`.
+"file"|"fixture"|"obsidian"}` (`obsidian` only for tasks; ai-usage and brief
+are always `file` or `fixture`), plus `"warning"` when `TASKS_SOURCE` is
+pinned to `fixture` or set to `obsidian` (either way the push will not show
+on the panel, and `effective_source` names which). Full shape:
+`GET /openapi.json`.
 
 ### File (fallback): `data/tasks.json`
 
@@ -584,7 +586,7 @@ deskmate_auth: "Bearer <token>"
 ```yaml
 rest_command:
   deskmate_alert:
-    url: "http://dashboard-hub.lan:8080/api/alert"
+    url: "http://deskmate.local:8080/api/alert"
     method: POST
     headers:
       Authorization: !secret deskmate_auth
@@ -666,7 +668,7 @@ returns to the page it was on. Clear the alert from the hub afterwards if you
 want the page to go back to "no active alert":
 
 ```sh
-curl -X DELETE http://dashboard-hub.lan:8080/api/alert \
+curl -X DELETE http://deskmate.local:8080/api/alert \
   -H "Authorization: Bearer <token>"
 ```
 

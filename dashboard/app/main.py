@@ -179,13 +179,14 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _effective_source_after_push(configured: str) -> str:
-    """What the panel will actually serve right after a successful push: the
-    push just wrote the file, so "file" and "auto" (which now sees the file)
-    both mean "file"; "fixture" stays pinned, and tasks' "obsidian" reads the
-    vault regardless of any tasks.json, so it is reported the same way as
-    "fixture" here (the push did not change what the panel shows).
+    """What the panel will actually serve right after a successful push:
+    values are "file", "fixture" or "obsidian" (tasks only). The push just
+    wrote the file, so "file" and "auto" (which now sees the file) both
+    become "file"; a selector pinned to "fixture" or "obsidian" is reported
+    verbatim, since the push did not change what the panel shows (obsidian
+    reads the vault regardless of any tasks.json).
     """
-    return "file" if configured in ("file", "auto") else "fixture"
+    return "file" if configured in ("file", "auto") else configured
 
 
 def _validation_problems(error: ValidationError) -> list[dict[str, str]]:
@@ -303,20 +304,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "version": __version__,
                 "timezone": settings.timezone,
                 # "configured" is the settings value (may be "auto"); "effective"
-                # is what is actually serving the page right now ("fixture" or
-                # "file", or "obsidian" for tasks).
+                # is what the *next* render will use ("fixture", "file", or
+                # "obsidian" for tasks) - a live check, not the last fetch, so
+                # a push shows up here immediately. The footer's DEMO mark
+                # instead tracks the last actual fetch (what is currently
+                # drawn), which can lag until the next render.
                 "sources": {
                     "ai_usage": {
                         "configured": settings.ai_usage_source,
-                        "effective": hub.state_service.ai_usage.source,
+                        "effective": hub.state_service.ai_usage.resolve(),
                     },
                     "brief": {
                         "configured": settings.brief_source,
-                        "effective": hub.state_service.brief.source,
+                        "effective": hub.state_service.brief.resolve(),
                     },
                     "tasks": {
                         "configured": settings.tasks_source,
-                        "effective": hub.state_service.tasks.source,
+                        "effective": hub.state_service.tasks.resolve(),
                     },
                 },
             }
@@ -343,7 +347,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "count": len(payload.providers),
             "effective_source": effective,
         }
-        if effective == "fixture":
+        if effective != "file":
             body["warning"] = (
                 f"AI_USAGE_SOURCE is {settings.ai_usage_source}; the panel will not show this push"
             )
@@ -372,7 +376,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "count": len(payload.sections),
             "effective_source": effective,
         }
-        if effective == "fixture":
+        if effective != "file":
             body["warning"] = (
                 f"BRIEF_SOURCE is {settings.brief_source}; the panel will not show this push"
             )
@@ -395,7 +399,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "count": len(payload.tasks),
             "effective_source": effective,
         }
-        if effective == "fixture":
+        if effective != "file":
             body["warning"] = (
                 f"TASKS_SOURCE is {settings.tasks_source}; the panel will not show this push"
             )

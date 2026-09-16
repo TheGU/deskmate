@@ -512,10 +512,16 @@ def tasks_stale(state: DashboardState, settings: Settings, now: datetime) -> str
 #: Which pushed datasets each page actually shows: what the footer's DEMO
 #: mark (any of them sourced "fixture") and the "!" flag (any of them
 #: stale) are about. Weather/calendar/home/device keep their own
-#: established fixture-fallback story from earlier phases; this is scoped
-#: to the three datasets a remote agent pushes.
+#: established fixture-fallback story from earlier phases (fetched, or
+#: pushed by the device itself, not by an agent), so they are never listed
+#: here and never print DEMO. A page missing from this map, or missing one
+#: of its own datasets, silently gets no DEMO mark and no stale flag for
+#: that dataset: keep it in step with what each page's template actually
+#: draws (see "Adding a new dataset" in skills/deskmate/SKILL.md). Today
+#: also draws the brief note (view.py:brief_note, the Today page's NOTE
+#: field), so "brief" belongs here too, not just on the brief page.
 PAGE_PUSH_DATASETS: dict[str, tuple[str, ...]] = {
-    "today": ("ai_usage", "tasks"),
+    "today": ("ai_usage", "brief", "tasks"),
     "agenda": (),
     "weather": (),
     "brief": ("brief", "tasks"),
@@ -567,7 +573,11 @@ def window_flags(
         if "red" in air:
             flagged.add("weather")
 
-    if ai_usage_stale(state, settings, reference) or tasks_stale(state, settings, reference):
+    if (
+        ai_usage_stale(state, settings, reference)
+        or brief_stale(state, settings, reference)
+        or tasks_stale(state, settings, reference)
+    ):
         flagged.add("today")
     if brief_stale(state, settings, reference) or tasks_stale(state, settings, reference):
         flagged.add("brief")

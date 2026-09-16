@@ -46,7 +46,7 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | GET, POST | `/setup` | open | Claim an unconfigured hub; see Auth below |
 | GET | `/api/hub` | open | Hub name, base URL, configured, sources |
 | GET | `/api/state` | open | Normalized state JSON that pages render from |
-| GET | `/display/{page}.png` | open | page in `today agenda weather brief system alert` |
+| GET | `/display/{page}.png` | open | `page` is one of the current pages (see README.md's Pages line) |
 | GET | `/preview` | open | Browser page: switch between pages, shows PNG and HTML |
 | GET | `/preview/{page}.html` | open | Raw HTML at 800x480, for CSS work in a browser |
 | GET | `/preview/{page}-rgb.png` | open | RGB stage before quantization, no cache, dev only |
@@ -56,10 +56,13 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | POST | `/api/alert` | token | Set the current alert `{title, message, priority}` |
 | DELETE | `/api/alert` | token | Clear the current alert |
 | POST | `/api/device/telemetry` | open | The device posts one sample every 5 min |
+| GET | `/api/device/telemetry` | open | Latest sample plus sample count, oldest, newest |
+| GET | `/api/device/history` | open | `?hours=` window of stored samples, downsampled |
 
 `open` endpoints exist because the device fetches pages with no token; that
-also means panel content (including anything pushed) is readable by anyone
-who can reach the hub. Deploy on a LAN or behind a reverse proxy with its own
+also means panel content (including anything pushed), and up to 30 days of
+room climate and device battery history, are readable by anyone who can
+reach the hub. Deploy on a LAN or behind a reverse proxy with its own
 access control; see docs/DEPLOY.md.
 
 `/display/{page}.png`:
@@ -150,7 +153,7 @@ quantization and an unhinted stem lands as a smear of half-tones.
 
 See `DESIGN.md` for the full recorded system.
 
-The six pages share one frame, defined in `templates/base.html`: an 800x480
+The panel's pages share one frame, defined in `templates/base.html`: an 800x480
 still in six pure colors, no dithering, no motion, no hover, no reflow.
 
 **Color reports state, it never decorates.** A field takes a color only when
@@ -213,15 +216,28 @@ Each adapter has a `*_SOURCE` selector; `fixture` is always available.
 `auto` (tasks, ai_usage, ai_brief): the file adapter when its file exists and
 is readable for the current state (for ai_brief, "readable" means either
 `current.json` or the current brief mode's own Markdown file), otherwise
-`fixture`. Re-evaluated on every fetch, so a push flips the effective source
-without a restart once the endpoint invalidates the cached adapter. `GET
-/api/hub` reports both the configured selector and the effective one per
-dataset. `fixture` and `file` keep their strict, non-auto meanings; `tasks`
+`fixture`. `fixture` and `file` keep their strict, non-auto meanings; `tasks`
 alone also accepts `obsidian`, which `auto` never selects on its own.
 
-When a page shows a dataset whose effective source is `fixture`, its footer
-prints `DEMO` so a fresh install never passes demo numbers off as real; see
-"Staleness" below.
+`GET /api/hub`'s `sources.<dataset>.effective` and the footer's DEMO mark
+report two different moments, not the same fact twice:
+
+- `effective` is a live, pure check of what the *next* render will use,
+  evaluated fresh on every `GET /api/hub` call. It shows a push immediately,
+  before anything has re-rendered.
+- DEMO tracks what the *last* render actually drew (the adapter's last real
+  fetch), so it only catches up once the panel's own page cache expires (its
+  TTL) or a push invalidates it. This is deliberate: DEMO must match the
+  pixels currently on screen, not what will be there next time.
+
+DEMO covers exactly the three datasets a remote agent pushes (ai_usage,
+brief, tasks), and only on the Today and Brief pages, the only pages that
+draw them: when one of a page's own pushed datasets is fixture-sourced, that
+page's footer prints `DEMO` so a fresh install never passes demo numbers off
+as real. Weather, calendar, home and device keep their own established
+fixture-fallback story from earlier phases and never print DEMO: the hub
+fetches them itself, or (device) the E1002 firmware pushes them, so there is
+nothing there for a remote agent's push to represent. See "Staleness" below.
 
 Global: `TIMEZONE` (default `Asia/Bangkok`), `UNITS` (`metric`).
 
@@ -232,7 +248,11 @@ Obsidian access is read only. The vault is mounted read-only in Docker.
 `AI_USAGE_STALE_SECONDS` (default 21600), `BRIEF_STALE_SECONDS` and
 `TASKS_STALE_SECONDS` (default 36000 each) bound how old a pushed dataset's
 own age can get before the panel marks it: `view.py`'s `stale_info` compares
-`now` against `AIUsage.collected_at` (the oldest provider), `Brief.generated_at`
+its reference time, which is the state's own `updated_at` converted to
+`TIMEZONE` (not the wall-clock instant the comparison runs; `updated_at` is
+the newest adapter timestamp in that state snapshot, so a cached, not yet
+re-fetched page compares against the moment it was built, not against now)
+against `AIUsage.collected_at` (the oldest provider), `Brief.generated_at`
 or `TasksBlock.received_at`, and returns an hour-bucketed age label ("6 H
 AGO") once the threshold is passed and the age is at least an hour; under an
 hour is never marked, and a fixture-sourced block is never marked regardless

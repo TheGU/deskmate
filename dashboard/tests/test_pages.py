@@ -358,10 +358,12 @@ def test_today_page_fresh_has_no_stale_mark_and_stays_clean(
     renderer: Renderer, state: DashboardState
 ) -> None:
     """Today, file-sourced but freshly received: no tell-tale, no age text,
-    no DEMO (it is not a fixture), palette clean, nothing overflowing."""
+    no DEMO (none of Today's three datasets, ai_usage/brief/tasks, is a
+    fixture), palette clean, nothing overflowing."""
     fresh = state.model_copy(
         update={
             "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
+            "brief": state.brief.model_copy(update={"source": "file"}),
             "tasks": state.tasks.model_copy(update={"source": "file", "received_at": state.generated_at}),
         }
     )
@@ -426,17 +428,38 @@ def test_today_footer_shows_demo_for_the_default_fixture_state(
     assert overflow == [], overflow
 
 
-def test_today_footer_hides_demo_once_the_shown_datasets_are_file_sourced(
+def test_today_footer_hides_demo_once_every_shown_dataset_is_file_sourced(
     renderer: Renderer, state: DashboardState
 ) -> None:
+    """Today draws all three pushed datasets (ai_usage, brief via the NOTE
+    field, and tasks), so DEMO only clears once none of the three is a
+    fixture."""
     real = state.model_copy(
         update={
             "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
+            "brief": state.brief.model_copy(update={"source": "file"}),
             "tasks": state.tasks.model_copy(update={"source": "file"}),
         }
     )
     html = renderer.render_html("today", real, embed_fonts=False)
     assert 'class="ftr-demo"' not in html
+
+
+def test_today_footer_shows_demo_when_only_the_brief_is_still_a_fixture(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    """Regression: Today draws the brief note (the NOTE field), not just
+    ai_usage and tasks, so a fixture-sourced brief alone must still show
+    DEMO even when ai_usage and tasks are both file-sourced."""
+    mixed = state.model_copy(
+        update={
+            "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
+            "tasks": state.tasks.model_copy(update={"source": "file"}),
+        }
+    )
+    assert mixed.brief.source == "fixture"
+    html = renderer.render_html("today", mixed, embed_fonts=False)
+    assert '<span class="ftr-demo">DEMO</span>' in html
 
 
 def test_today_agenda_time_never_touches_the_title(renderer: Renderer, state: DashboardState) -> None:

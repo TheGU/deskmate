@@ -32,7 +32,7 @@ cd dashboard
 uv sync --all-groups
 uv run playwright install chromium
 
-# render all six pages to ../output/ without starting a server
+# render every page to ../output/ without starting a server
 uv run python ../scripts/render-all.py
 
 # or run the server
@@ -85,7 +85,7 @@ data once it has the token.
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/healthz` | Status plus one entry per adapter |
-| GET | `/setup`, POST `/setup` | Claim the hub (see Setup above); public |
+| GET, POST | `/setup` | Claim the hub (see Setup above); public |
 | GET | `/api/hub` | Hub name, base URL, configured sources; public |
 | GET | `/api/state` | The normalized state the pages render from |
 | GET | `/display/{page}.png` | 800x480 PNG, `ETag` + `304`, `?t=` busts the cache |

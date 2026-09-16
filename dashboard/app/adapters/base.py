@@ -113,6 +113,17 @@ class CachedAdapter(Generic[T]):
     def source(self) -> str:
         return self._adapter.source
 
+    def resolve(self) -> str:
+        """What the underlying adapter's *next* fetch would use, checked
+        live and without fetching. Adapters with an ambiguous source (the
+        Auto adapters for ai_usage/brief/tasks) define their own pure
+        ``resolve()``; anything else falls back to the static ``source``
+        above. Distinct from ``source``, which mirrors the *last* fetch and
+        is what the DEMO mark needs (it must match what is currently drawn).
+        """
+        resolver = getattr(self._adapter, "resolve", None)
+        return resolver() if resolver is not None else self.source
+
     def invalidate(self) -> None:
         """Force the next :meth:`get` to hit the underlying source.
 
