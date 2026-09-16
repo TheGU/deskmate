@@ -47,7 +47,7 @@ The backend is the brain.
 The E1002 is a thin display client.
 
 ============================================================
-PHASE 0 — BACK UP FACTORY FIRMWARE
+PHASE 0: BACK UP FACTORY FIRMWARE
 ============================================================
 
 THIS PHASE MUST HAPPEN BEFORE ANY FLASHING.
@@ -305,7 +305,7 @@ PAGES
 Build these five pages.
 
 ------------------------------------------------------------
-PAGE 0 — TODAY / NOW
+PAGE 0: TODAY / NOW
 ------------------------------------------------------------
 
 This is the default page and should contain the information I need
@@ -341,7 +341,7 @@ Focus on actionable information.
 Only show roughly the top 3 important tasks.
 
 ------------------------------------------------------------
-PAGE 1 — NEXT 7 DAYS / AGENDA
+PAGE 1: NEXT 7 DAYS / AGENDA
 ------------------------------------------------------------
 
 Use an agenda/list design, not a conventional month calendar.
@@ -360,7 +360,7 @@ Color concepts:
 - black = normal information
 
 ------------------------------------------------------------
-PAGE 2 — WEATHER
+PAGE 2: WEATHER
 ------------------------------------------------------------
 
 Optimize weather for daily life in Thailand.
@@ -389,7 +389,7 @@ For the first real implementation, prefer a weather service that
 doesn't require a secret API key if it meets requirements.
 
 ------------------------------------------------------------
-PAGE 3 — AI BRIEF
+PAGE 3: AI BRIEF
 ------------------------------------------------------------
 
 This page displays a PRE-GENERATED assistant brief.
@@ -426,7 +426,7 @@ data/brief/evening.md
 and the dashboard can render it.
 
 ------------------------------------------------------------
-PAGE 4 — HOME / SYSTEM
+PAGE 4: HOME / SYSTEM
 ------------------------------------------------------------
 
 Show useful status from home automation and my infrastructure.
