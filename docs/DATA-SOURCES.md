@@ -17,21 +17,35 @@ Check what the hub currently thinks with:
 ```sh
 curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8080/api/state
+curl -s http://127.0.0.1:8080/api/hub
 ```
+
+For AI usage, the brief and tasks, `POST`ing to the hub over HTTP is the
+primary way to get real data onto the panel; a hand-written file under
+`data/` is the fallback for offline testing or a tool that only writes files.
+Both land in the same place. See `skills/deskmate/SKILL.md` for the
+agent-facing version of the three push endpoints, and `GET /openapi.json` for
+the schema of record.
 
 ---
 
 ## Overview
 
-| Adapter | Sources | Configuration |
-| --- | --- | --- |
-| tasks | `fixture`, `obsidian` | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
-| calendar | `fixture`, `ics` | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
-| weather | `fixture`, `open_meteo` | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
-| ai_usage | `fixture`, `file` | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
-| ai_brief | `fixture`, `file` | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`), `BRIEF_EVENING_HOUR` |
-| home_assistant | `fixture`, `rest` | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` |
-| device | `store`, `fixture` | `DEVICE_SOURCE`, `TELEMETRY_DB_PATH`, `TELEMETRY_RETENTION_DAYS` |
+| Adapter | Sources | Default | Configuration |
+| --- | --- | --- | --- |
+| tasks | `fixture`, `file`, `obsidian`, `auto` | `auto` | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
+| calendar | `fixture`, `ics` | `fixture` | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
+| weather | `fixture`, `open_meteo` | `fixture` | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
+| ai_usage | `fixture`, `file`, `auto` | `auto` | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
+| ai_brief | `fixture`, `file`, `auto` | `auto` | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`), `BRIEF_EVENING_HOUR` |
+| home_assistant | `fixture`, `rest` | `fixture` | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` |
+| device | `store`, `fixture` | `fixture` | `DEVICE_SOURCE`, `TELEMETRY_DB_PATH`, `TELEMETRY_RETENTION_DAYS` |
+
+`auto` picks the file adapter once its file exists and is readable, otherwise
+`fixture`; a push always lands where the file adapter reads, so `auto` is
+what makes a push show up on the panel with no other configuration.
+`GET /api/hub` reports both the configured selector and the effective one
+per dataset (`{dataset: {configured, effective}}`).
 
 Global: `TIMEZONE` (default `Asia/Bangkok`), `UNITS` (`metric`),
 `FIXTURES_DIR`, `DATA_DIR`, `FIXTURE_RELATIVE_DATES`.
@@ -49,7 +63,53 @@ Set `FIXTURE_RELATIVE_DATES=false` to read the literal dates in the files.
 
 ---
 
-## Tasks: Obsidian (read only)
+## Tasks
+
+Three ways to get tasks onto the panel: push, a hand-written or agent-written
+file, or a read-only Obsidian vault. `TASKS_SOURCE=auto` (the default) picks
+the file adapter once `data/tasks.json` exists, otherwise fixture; it never
+selects Obsidian on its own.
+
+### Push (primary)
+
+```sh
+curl -s -X POST http://deskmate.local:8080/api/tasks \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"tasks": [{"id": "agent-1", "title": "Ship the release notes", "priority": "high"}]}'
+```
+
+Requires the bearer token. Replaces the whole task list on every push (not a
+diff): `tasks` is 0 to 60 of `{id (1-64 chars, required, the agent's own
+stable identifier, reused across pushes to update the same task), title
+(1-200 chars), due (date or null), priority (`high`/`medium`/`low`/`none`,
+default `none`), completed (default false), tags (0-8)}`. A duplicate `id`
+inside one push is `422`. Response `200`: `{"stored": "tasks.json",
+"received_at": "<local ISO>", "count": <n>, "effective_source":
+"file"|"fixture"}`, plus `"warning"` when `TASKS_SOURCE` is pinned to
+`fixture` or set to `obsidian` (either way the push will not show on the
+panel). Full shape: `GET /openapi.json`.
+
+### File (fallback): `data/tasks.json`
+
+```sh
+TASKS_SOURCE=file
+```
+
+```json
+{
+  "tasks": [
+    {"id": "agent-1", "title": "Ship the release notes", "priority": "high"}
+  ]
+}
+```
+
+Same shape the push endpoint writes, plus an optional top-level
+`received_at` (falls back to the file's own mtime; also the age
+`TASKS_STALE_SECONDS` measures from, see `docs/ARCHITECTURE.md`). No date
+shifting: a `due` date is used exactly as sent, unlike the fixture. Write
+atomically (`tmp` file plus rename).
+
+### Obsidian (read only)
 
 ```sh
 TASKS_SOURCE=obsidian
@@ -153,11 +213,39 @@ No location is assumed. Without both coordinates the adapter reports
 
 ---
 
-## AI usage / quota: `data/ai-usage.json`
+## AI usage / quota
 
-There is no supported public API for Claude or Codex quota, and the hub does no
-browser or credential scraping. A separate collector writes a JSON file; the hub
-only reads it.
+There is no supported public API for Claude or Codex quota, and the hub does
+no browser or credential scraping. Something else has to produce the numbers,
+either an agent that pushes them or a separate collector that writes a file.
+
+### Push (primary)
+
+```sh
+curl -s -X POST http://deskmate.local:8080/api/ai-usage \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"providers": [{"provider": "claude", "short_window_percent_remaining": 62,
+       "weekly_percent_remaining": 40}]}'
+```
+
+Requires the bearer token (see "Auth" in `docs/ARCHITECTURE.md`).
+`providers`: 1 to 8 of `{provider (1-32 chars, required), short_window_percent_remaining
+0-100 or null, short_window_reset_at, weekly_percent_remaining, weekly_reset_at,
+collected_at}`. Percent fields are percent **remaining**. Every datetime must
+carry a UTC offset; a naive one is rejected with `422` rather than assumed to
+be `TIMEZONE`. `collected_at` defaults to the moment of the push if omitted.
+Response `200`: `{"stored": "ai-usage.json", "received_at": "<local ISO>",
+"count": <n>, "effective_source": "file"|"fixture"}`, plus `"warning"` when
+`AI_USAGE_SOURCE` is pinned to `fixture` (the push is stored, but the panel
+will not show it until the selector changes). Unknown fields, a
+`schema_version` other than 1, or more than 8 providers are `422`. Full shape:
+`GET /openapi.json`.
+
+The push writes `data/ai-usage.json` (below) plus a top-level `received_at`,
+then invalidates the cached adapter so `/api/state` reflects it on the very
+next build.
+
+### File (fallback)
 
 ```sh
 AI_USAGE_SOURCE=file
@@ -186,13 +274,15 @@ Schema (see `data-examples/ai-usage.json`):
 | --- | --- | --- |
 | `provider` | string | Shown uppercased on the Today page. Required. |
 | `short_window_percent_remaining` | int or null | The 5 hour window. `null` renders as `unknown`. |
-| `short_window_reset_at` | ISO 8601 or null | Naive values are read as `TIMEZONE`. |
+| `short_window_reset_at` | ISO 8601 or null | Naive values in a hand-written file are read as `TIMEZONE` (the push endpoint instead rejects a naive value; see above). |
 | `weekly_percent_remaining` | int or null | The 7 day window. |
 | `weekly_reset_at` | ISO 8601 or null | |
-| `collected_at` | ISO 8601 or null | When the collector ran. |
+| `collected_at` | ISO 8601 or null | When the collector ran. Also the age `AI_USAGE_STALE_SECONDS` measures from (the oldest provider), see `docs/ARCHITECTURE.md`. |
 | `collection_status` | string | `ok`, `unknown` or `error`. Anything other than `ok` makes the page print `unknown` instead of the numbers. |
+| `received_at` | ISO 8601, optional | Written by the push endpoint; a hand-authored file can omit it and the adapter falls back to the file's own mtime. |
 
-A bare JSON array of provider objects is also accepted. Write the file
+A bare JSON array of provider objects is also accepted for a hand-authored
+file (the push endpoint always writes the object form). Write the file
 atomically (write a temporary file next to it, then rename) so the hub never
 reads half a file.
 
@@ -200,17 +290,38 @@ reads half a file.
 
 ## AI brief: `data/brief/`
 
-Opening the brief page never triggers an AI request. The hub reads whatever is
-already on disk.
+Opening the brief page never triggers an AI request. The hub only shows
+whatever it was given, by push or by file.
+
+Mode is chosen by the local clock: morning before `BRIEF_EVENING_HOUR`
+(default 14), evening from that hour on, unless the push names a mode.
+
+### Push (primary)
+
+```sh
+curl -s -X POST http://deskmate.local:8080/api/brief \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"headline": "Two hard deadlines today", "note": "Vendor quote is one day overdue.",
+       "sections": [{"title": "Key tasks", "items": ["Ship it"]}]}'
+```
+
+Requires the bearer token. `mode` (`morning`/`evening`) is optional and
+defaults to what the clock would pick. `headline` 1-120 chars, `note`
+optional up to 280, `sections` 0-6 of `{title 1-40, items 0-12 of up to 160
+chars}`, `generated_at` optional (a UTC-offset datetime; a naive value is
+`422`), defaults to the moment of the push. Response `200`:
+`{"stored": "current.json", "received_at": "<local ISO>", "count": <n
+sections>, "effective_source": "file"|"fixture"}`, plus `"warning"` when
+`BRIEF_SOURCE` is pinned to `fixture`. Writes `data/brief/current.json`
+(below) and invalidates the cached adapter. Full shape: `GET /openapi.json`.
+
+### File (fallback)
 
 ```sh
 BRIEF_SOURCE=file
 BRIEF_DIR=/data/brief
 BRIEF_EVENING_HOUR=14
 ```
-
-Mode is chosen by the local clock: morning before `BRIEF_EVENING_HOUR`, evening
-from that hour on.
 
 Lookup order:
 
@@ -234,10 +345,11 @@ Lookup order:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `mode` | `morning` or `evening` | Defaults to `morning`. |
-| `generated_at` | ISO 8601 or null | Falls back to the file mtime. |
+| `generated_at` | ISO 8601 or null | Falls back to the file mtime. Also the age `BRIEF_STALE_SECONDS` measures from, see `docs/ARCHITECTURE.md`. |
 | `headline` | string | One line, shown large. Keep it under about 60 characters. |
 | `note` | string | One sentence. Also used as the AI NOTE bar on the Today page. |
 | `sections` | list | At most 4 are drawn, each with at most 3 items. |
+| `received_at` | ISO 8601, optional | Written by the push endpoint; a hand-authored file can omit it. |
 
 The file may also hold both modes at once, as
 `{"morning": {...}, "evening": {...}}`; the hub picks by the clock.
@@ -296,15 +408,23 @@ motion/occupancy/presence give Detected / Clear).
 
 ## Device telemetry: the E1002 pushes, the hub stores
 
-This is the only adapter whose data flows the other way: the reTerminal E1002
-POSTs one sample every 5 minutes and the hub appends it to a local SQLite file.
-There is no polling, no device credential and nothing to configure but paths.
+The reTerminal E1002 POSTs one sample every 5 minutes and the hub appends it
+to a local SQLite file. There is no polling and nothing to configure but
+paths.
 
 ```sh
 DEVICE_SOURCE=store
 #TELEMETRY_DB_PATH=/data/telemetry.sqlite
 TELEMETRY_RETENTION_DAYS=30
 ```
+
+**Trade-off:** unlike the push endpoints above, `POST /api/device/telemetry`
+does not require the bearer token. The E1002 firmware does not send one
+today, though it already sends `request_headers` on this request
+(`firmware/e1002.yaml`), so adding a device token is a small, tracked
+firmware follow-up (and a reflash), not shipped here. This is one reason the
+hub should stay on a LAN or behind a reverse proxy with its own access
+control rather than facing the public internet; see `docs/DEPLOY.md`.
 
 ### Payload
 

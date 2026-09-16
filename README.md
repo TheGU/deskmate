@@ -3,11 +3,13 @@
 A local-first desk dashboard for the Seeed Studio reTerminal E1002
 (ESP32-S3, 800x480 six-color e-paper).
 
-All the logic lives in a small server called **dashboard-hub**: it reads tasks,
-calendar, weather, a pre-generated AI brief, AI quota and Home Assistant state,
-renders one of six pages to an 800x480 PNG constrained to the panel's six
-colors, and serves it over the LAN. The device is a thin display client that
-downloads a PNG and shows it.
+All the logic lives in a small server called **dashboard-hub**: it fetches
+calendar, weather and Home Assistant state itself, accepts AI quota, an
+AI-written brief and open tasks pushed over HTTP by a remote agent (see
+[skills/deskmate/SKILL.md](skills/deskmate/SKILL.md)), renders one of six
+pages to an 800x480 PNG constrained to the panel's six colors, and serves it
+over the LAN. The device is a thin display client that downloads a PNG and
+shows it.
 
 ```
 Data sources -> dashboard-hub (FastAPI + Jinja2 + Chromium at 4x + Lanczos + Pillow)
@@ -52,6 +54,7 @@ cd dashboard && uv run pytest
 ```sh
 cp .env.example .env      # optional, the defaults are fixture-only
 docker compose up -d --build
+docker compose logs dashboard-hub   # first run: prints the claim code
 curl -s http://127.0.0.1:8080/healthz
 curl -o today.png http://127.0.0.1:8080/display/today.png
 ```
@@ -63,21 +66,41 @@ If host port 8080 is already in use, set `HUB_PORT` in `.env` (for example
 The compose service mounts `./data` read-write (files other agents write),
 `./fixtures` read-only, and optionally an Obsidian vault read-only at `/vault`.
 
+### Setup (claiming the hub)
+
+A fresh hub is unconfigured: `GET /` redirects to `/setup`, and every write
+(pushes, alerts) answers `503` until it is claimed. Open
+`http://127.0.0.1:8080/setup` (or the container log line), enter a hub name,
+the public base URL, and the claim code from the log. The result page shows
+a bearer token **once**; save it, there is no way to see it again. Push
+endpoints and `POST`/`DELETE /api/alert` then need
+`Authorization: Bearer <token>`; `/display`, `/preview` and `/api/state` stay
+open (the device fetches without a token). See
+[docs/DEPLOY.md](docs/DEPLOY.md) for the full server setup and
+[skills/deskmate/SKILL.md](skills/deskmate/SKILL.md) for how an agent pushes
+data once it has the token.
+
 ## Endpoints
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/healthz` | Status plus one entry per adapter |
+| GET | `/setup`, POST `/setup` | Claim the hub (see Setup above); public |
+| GET | `/api/hub` | Hub name, base URL, configured sources; public |
 | GET | `/api/state` | The normalized state the pages render from |
 | GET | `/display/{page}.png` | 800x480 PNG, `ETag` + `304`, `?t=` busts the cache |
 | GET | `/preview` | Developer page for switching between pages |
 | GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work |
 | GET | `/preview/{page}-rgb.png` | RGB stage before quantization, not cached |
-| POST | `/api/alert` | Set the current alert |
-| DELETE | `/api/alert` | Clear it |
-| POST | `/api/device/telemetry` | Device pushes one sample every 5 min, `202` |
+| POST | `/api/ai-usage`, `/api/brief`, `/api/tasks` | Agent pushes, token required |
+| POST | `/api/alert` | Set the current alert, token required |
+| DELETE | `/api/alert` | Clear it, token required |
+| POST | `/api/device/telemetry` | Device pushes one sample every 5 min, `202`, no token |
 | GET | `/api/device/telemetry` | Latest sample plus sample count, oldest, newest |
 | GET | `/api/device/history` | `?hours=24`, downsampled to at most 300 points |
+
+Full request and response shapes: `GET /openapi.json`, or `/docs` for the
+interactive Swagger UI.
 
 ## Layout
 
@@ -86,9 +109,10 @@ The compose service mounts `./data` read-write (files other agents write),
 | `dashboard/` | The dashboard-hub server, its Dockerfile and tests |
 | `fixtures/` | Demo data, used when no integration is enabled |
 | `data-examples/` | Templates for the files other agents write into `data/` |
-| `data/` | Runtime data (brief, ai-usage, alert). Gitignored |
+| `data/` | Runtime data (`hub.json`, brief, ai-usage, tasks, alert). Gitignored |
 | `output/` | Generated example PNGs. Gitignored |
-| `docs/` | Architecture, data sources, flashing, factory restore |
+| `docs/` | Architecture, data sources, deploy, hooks, flashing, factory restore |
+| `skills/` | `deskmate/SKILL.md`, how a remote agent pushes data to the hub |
 | `scripts/` | Backup, verify and render helpers |
 | `firmware/` | ESPHome YAML for the E1002, secrets example, its own venv |
 | `private-backups/` | Factory flash dumps. Gitignored, sensitive |
@@ -121,9 +145,16 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - the binding spec: endpoints,
-  palette, config names, refresh policy.
+  auth, palette, config names, refresh policy.
 - [docs/DATA-SOURCES.md](docs/DATA-SOURCES.md) - how to configure each adapter,
-  the `data/` file schemas, the alert API and a Home Assistant example.
+  the push endpoints, the `data/` file schemas, the alert API and a Home
+  Assistant example.
+- [skills/deskmate/SKILL.md](skills/deskmate/SKILL.md) - how a remote agent
+  pushes AI usage, a brief and tasks to the hub.
+- [docs/HOOKS.md](docs/HOOKS.md) - a POSIX sh hook that pushes AI quota
+  numbers whenever they change.
+- [docs/DEPLOY.md](docs/DEPLOY.md) - running dashboard-hub in Docker on a
+  homelab server: claiming it, the firmware secret, reverse proxy, backup.
 - [docs/FACTORY-RESTORE.md](docs/FACTORY-RESTORE.md) - restoring the factory
   firmware dump.
 - [docs/FLASHING.md](docs/FLASHING.md) - flashing procedure.

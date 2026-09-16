@@ -60,10 +60,12 @@ no logic and no credentials on the device.
 - PC-side feed: some data cannot be produced by the hub because it needs the
   owner's context or credentials. Examples the owner named: an AI summary from
   a scheduled or looped AI session, remaining AI license or quota from a live
-  Claude Code session, a calendar summary pushed by a local script or by that
-  same scheduled AI session. Today the hub reads these from files under the
-  data directory (ai-usage.json, brief/). The push mechanism beyond that is
-  undecided (see Capabilities and Constraints).
+  Claude Code session, an open task list a local agent keeps. The hub accepts
+  these over three bearer-token HTTP push endpoints
+  (`POST /api/ai-usage`, `/api/brief`, `/api/tasks`; see `docs/DATA-SOURCES.md`
+  and `skills/deskmate/SKILL.md`) and also reads the same shapes from files
+  under the data directory for offline testing or a tool that only writes
+  files.
 
 ## Capabilities and Constraints
 
@@ -81,7 +83,10 @@ Confirmed:
 - Data is never invented. An adapter that is unset or failing makes the page
   say "unknown" or "unavailable".
 - Hub endpoints: healthz, api/state, display/{page}.png with ETag and 304,
-  preview pages, alert set and clear, device telemetry in and history out.
+  preview pages, setup and hub info, AI usage/brief/tasks push, alert set and
+  clear, device telemetry in and history out. Setup, alert and the three push
+  endpoints require a bearer token claimed once on `/setup`; the panel and
+  telemetry endpoints stay open because the device fetches without one.
   Telemetry (battery, temperature, humidity, Wi-Fi, power state, wake cause)
   is stored in SQLite with 30-day retention and charted on the System page.
 - Text: Thai and English mixed content is a requirement. Google Sans (SIL
@@ -93,11 +98,13 @@ Confirmed:
   (fixture or live), fixture, battery mode, always-on, DESK panel (the device
   section of the System page), alert.
 
+Decided: the PC-side feed reaches the hub over three bearer-token HTTP push
+endpoints (`/api/ai-usage`, `/api/brief`, `/api/tasks`), with a file dropped
+into the mounted data directory as the fallback path; see
+`docs/DATA-SOURCES.md`.
+
 Undecided:
 
-- How the PC-side feed reaches the hub: files dropped into the mounted data
-  directory, an HTTP push endpoint, or a scheduled AI session that does both.
-  The owner is not sure yet; do not build on an assumed mechanism.
 - Which AI products appear in the AI capacity view and where those numbers come
   from. The fixture shows Claude and ChatGPT/Codex with 5-hour and 7-day
   windows; treat that as illustration, not confirmed data.

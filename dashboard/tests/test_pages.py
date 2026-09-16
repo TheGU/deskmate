@@ -337,9 +337,14 @@ def _today_state_with_stale_ai_usage_and_tasks(state: DashboardState) -> Dashboa
     """AI CAPACITY and PRIORITIES both past their staleness threshold
     (AI_USAGE_STALE_SECONDS 21600 s / 6 h, TASKS_STALE_SECONDS 36000 s / 10 h),
     file-sourced so they are eligible to be marked at all (a fixture never
-    is)."""
-    old_usage = state.generated_at - timedelta(hours=8)
-    old_tasks = state.generated_at - timedelta(hours=12)
+    is). The extra 10 minutes on each offset is a safety margin: the view
+    layer's "now" is the newest block.updated_at, which lands a hair before
+    ``state.generated_at`` (stamped after every adapter fetch completes), so
+    an exact 8h/12h offset can float across the whole-hour floor and flip
+    the asserted bucket by one.
+    """
+    old_usage = state.generated_at - timedelta(hours=8, minutes=10)
+    old_tasks = state.generated_at - timedelta(hours=12, minutes=10)
     providers = [p.model_copy(update={"collected_at": old_usage}) for p in state.ai_usage.providers]
     return state.model_copy(
         update={

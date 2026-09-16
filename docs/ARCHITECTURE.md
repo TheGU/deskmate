@@ -40,16 +40,27 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 
 ### Endpoints
 
-| Method | Path | Notes |
-| --- | --- | --- |
-| GET | `/healthz` | `{"status":"ok"}` plus adapter status |
-| GET | `/api/state` | Normalized state JSON that pages render from |
-| GET | `/display/{page}.png` | page in `today agenda weather brief system alert` |
-| GET | `/preview` | Browser page: switch between pages, shows PNG and HTML |
-| GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work in a browser |
-| GET | `/preview/{page}-rgb.png` | RGB stage before quantization, no cache, dev only |
-| POST | `/api/alert` | Set the current alert `{title, message, priority}` |
-| DELETE | `/api/alert` | Clear the current alert |
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| GET | `/healthz` | open | `{"status":"ok"}` plus adapter status |
+| GET, POST | `/setup` | open | Claim an unconfigured hub; see Auth below |
+| GET | `/api/hub` | open | Hub name, base URL, configured, sources |
+| GET | `/api/state` | open | Normalized state JSON that pages render from |
+| GET | `/display/{page}.png` | open | page in `today agenda weather brief system alert` |
+| GET | `/preview` | open | Browser page: switch between pages, shows PNG and HTML |
+| GET | `/preview/{page}.html` | open | Raw HTML at 800x480, for CSS work in a browser |
+| GET | `/preview/{page}-rgb.png` | open | RGB stage before quantization, no cache, dev only |
+| POST | `/api/ai-usage` | token | Push AI quota; see docs/DATA-SOURCES.md |
+| POST | `/api/brief` | token | Push the AI-written brief |
+| POST | `/api/tasks` | token | Push the open task list (replaces it) |
+| POST | `/api/alert` | token | Set the current alert `{title, message, priority}` |
+| DELETE | `/api/alert` | token | Clear the current alert |
+| POST | `/api/device/telemetry` | open | The device posts one sample every 5 min |
+
+`open` endpoints exist because the device fetches pages with no token; that
+also means panel content (including anything pushed) is readable by anyone
+who can reach the hub. Deploy on a LAN or behind a reverse proxy with its own
+access control; see docs/DEPLOY.md.
 
 `/display/{page}.png`:
 
@@ -60,6 +71,39 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 - Response headers: `ETag` = sha256 of PNG bytes, `Cache-Control:
   no-cache`. If the request carries a matching `If-None-Match`, reply
   `304 Not Modified` so ESPHome can skip the e-paper refresh.
+
+### Auth
+
+`POST /setup` claims an unconfigured hub: hub name, a public base URL
+(`http` or `https`, a host, a port 1 to 65535, no path, query or
+credentials), and the claim code the process logged at startup. A hub with
+no `data/hub.json` yet generates an 8-character code
+(`XXXX-XXXX`), logs it once, and keeps it only in memory until claimed;
+`hub.json` holds `{schema, name, base_url, token_sha256, created_at}`, never
+the plaintext token. `GET /setup` shows the claim form when unconfigured, a
+short status page once claimed; `POST /setup` on an already-claimed hub is
+`409`. There is no edit or regenerate mode: recovery is stopping the
+container, deleting `data/hub.json`, and starting again (a new claim code is
+logged).
+
+Every token-protected route requires `Authorization: Bearer <token>`
+(`Bearer` is case-insensitive), checked by hashing and
+`hmac.compare_digest` against `token_sha256`. One error shape for the whole
+API: a JSON body with `detail` (a string, or a list of validation problems
+for a `422`).
+
+| Status | Meaning |
+| --- | --- |
+| 401 | Missing or wrong bearer token |
+| 403 | Wrong claim code on `POST /setup` |
+| 409 | `POST /setup` on an already-claimed hub |
+| 422 | Body rejected: unknown field, bad `schema_version`, a length or count cap, a duplicate task id, a naive datetime, or an invalid base URL |
+| 503 | Hub not set up yet, or `data/hub.json` exists but is unreadable (the detail names the path) |
+
+`POST /api/device/telemetry` stays open: the E1002 firmware does not send a
+token today, though it already sends `request_headers` on that request
+(`firmware/e1002.yaml`), so adding one is a small, tracked firmware
+follow-up, not shipped here.
 
 ### Rendering pipeline
 
@@ -157,22 +201,54 @@ epaper_spi driver maps RGB to the nearest of the six panel colors):
 Configuration is environment variables (`config.py`, pydantic-settings).
 Each adapter has a `*_SOURCE` selector; `fixture` is always available.
 
-| Adapter | Sources | Config |
-| --- | --- | --- |
-| tasks | fixture, obsidian | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
-| calendar | fixture, ics | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
-| weather | fixture, open_meteo | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
-| ai_usage | fixture, file | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
-| ai_brief | fixture, file | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`) |
-| home_assistant | fixture, rest | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` (JSON) |
+| Adapter | Sources | Default | Config |
+| --- | --- | --- | --- |
+| tasks | fixture, file, obsidian, auto | auto | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
+| calendar | fixture, ics | fixture | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
+| weather | fixture, open_meteo | fixture | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
+| ai_usage | fixture, file, auto | auto | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
+| ai_brief | fixture, file, auto | auto | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`) |
+| home_assistant | fixture, rest | fixture | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` (JSON) |
+
+`auto` (tasks, ai_usage, ai_brief): the file adapter when its file exists and
+is readable for the current state (for ai_brief, "readable" means either
+`current.json` or the current brief mode's own Markdown file), otherwise
+`fixture`. Re-evaluated on every fetch, so a push flips the effective source
+without a restart once the endpoint invalidates the cached adapter. `GET
+/api/hub` reports both the configured selector and the effective one per
+dataset. `fixture` and `file` keep their strict, non-auto meanings; `tasks`
+alone also accepts `obsidian`, which `auto` never selects on its own.
+
+When a page shows a dataset whose effective source is `fixture`, its footer
+prints `DEMO` so a fresh install never passes demo numbers off as real; see
+"Staleness" below.
 
 Global: `TIMEZONE` (default `Asia/Bangkok`), `UNITS` (`metric`).
 
 Obsidian access is read only. The vault is mounted read-only in Docker.
 
+### Staleness
+
+`AI_USAGE_STALE_SECONDS` (default 21600), `BRIEF_STALE_SECONDS` and
+`TASKS_STALE_SECONDS` (default 36000 each) bound how old a pushed dataset's
+own age can get before the panel marks it: `view.py`'s `stale_info` compares
+`now` against `AIUsage.collected_at` (the oldest provider), `Brief.generated_at`
+or `TasksBlock.received_at`, and returns an hour-bucketed age label ("6 H
+AGO") once the threshold is passed and the age is at least an hour; under an
+hour is never marked, and a fixture-sourced block is never marked regardless
+of age. This is computed in `view.py` only, never serialized onto a model,
+so the state fingerprint and the device's `304` path do not move because of
+it; the mark can therefore lag a push by up to one page's own cache TTL.
+
+Grammar: a yellow tell-tale before the section label and the age in 16 px
+caps after it (Today: AI CAPACITY, PRIORITIES; Brief: the mode label line),
+exactly the System page's stale BATTERY pattern, plus a `!` on the page's
+footer entry through the existing footer-flag logic.
+
 ### Alerts
 
-- `POST /api/alert` stores the current alert (in memory plus
+- `POST /api/alert` and `DELETE /api/alert` require the bearer token (see
+  Auth above). `POST /api/alert` stores the current alert (in memory plus
   `data/alert.json`). `/display/alert.png` renders it. Priority order:
   `critical > doorbell > important > normal`; a lower priority does not
   replace a higher one that is still active.
