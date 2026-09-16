@@ -16,11 +16,13 @@ from urllib.parse import urlparse
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-TasksSource = Literal["fixture", "obsidian"]
+#: "auto": the file adapter when the pushed file exists, else fixture.
+#: "fixture" and "file" keep their strict, explicit meanings.
+TasksSource = Literal["fixture", "obsidian", "file", "auto"]
 CalendarSource = Literal["fixture", "ics"]
 WeatherSource = Literal["fixture", "open_meteo"]
-AIUsageSource = Literal["fixture", "file"]
-BriefSource = Literal["fixture", "file"]
+AIUsageSource = Literal["fixture", "file", "auto"]
+BriefSource = Literal["fixture", "file", "auto"]
 HomeAssistantSource = Literal["fixture", "rest"]
 #: ``store`` reads only what the device posted; ``fixture`` falls back to
 #: ``fixtures/device.json`` while the store is still empty (dev and preview).
@@ -71,7 +73,7 @@ class Settings(BaseSettings):
     fixture_relative_dates: bool = Field(default=True, alias="FIXTURE_RELATIVE_DATES")
 
     # -- tasks ----------------------------------------------------------
-    tasks_source: TasksSource = Field(default="fixture", alias="TASKS_SOURCE")
+    tasks_source: TasksSource = Field(default="auto", alias="TASKS_SOURCE")
     obsidian_vault_path: Path | None = Field(default=None, alias="OBSIDIAN_VAULT_PATH")
     obsidian_task_glob: str = Field(default="**/*.md", alias="OBSIDIAN_TASK_GLOB")
 
@@ -93,11 +95,11 @@ class Settings(BaseSettings):
     weather_location_name: str = Field(default="", alias="WEATHER_LOCATION_NAME")
 
     # -- ai usage -------------------------------------------------------
-    ai_usage_source: AIUsageSource = Field(default="fixture", alias="AI_USAGE_SOURCE")
+    ai_usage_source: AIUsageSource = Field(default="auto", alias="AI_USAGE_SOURCE")
     ai_usage_path: Path | None = Field(default=None, alias="AI_USAGE_PATH")
 
     # -- ai brief -------------------------------------------------------
-    brief_source: BriefSource = Field(default="fixture", alias="BRIEF_SOURCE")
+    brief_source: BriefSource = Field(default="auto", alias="BRIEF_SOURCE")
     brief_dir: Path | None = Field(default=None, alias="BRIEF_DIR")
     #: Local hour at which the brief switches from morning to evening mode.
     brief_evening_hour: int = Field(default=14, ge=0, le=23, alias="BRIEF_EVENING_HOUR")
@@ -148,6 +150,10 @@ class Settings(BaseSettings):
     @property
     def ai_usage_file(self) -> Path:
         return self.ai_usage_path or (self.data_dir / "ai-usage.json")
+
+    @property
+    def tasks_file(self) -> Path:
+        return self.data_dir / "tasks.json"
 
     @property
     def brief_directory(self) -> Path:

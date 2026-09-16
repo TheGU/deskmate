@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
-from app.adapters.base import AdapterUnavailable
+from app.adapters.base import AdapterUnavailable, received_at_or_mtime
 from app.adapters.fixtures import day_delta, load_fixture, shift_tree
 from app.config import Settings
 from app.models import AIUsage
@@ -53,13 +54,17 @@ class FixtureAIUsageAdapter:
 
 
 class FileAIUsageAdapter:
-    """Quota from ``AI_USAGE_PATH`` (default ``data/ai-usage.json``)."""
+    """Quota from ``AI_USAGE_PATH`` (default ``data/ai-usage.json``), the
+    shape ``POST /api/ai-usage`` writes."""
 
     name = "ai_usage"
     source = "file"
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        #: Set on every successful fetch: the file's own ``received_at``, or
+        #: its mtime. Read by ``CachedAdapter`` for ``AIUsageBlock.received_at``.
+        self.last_received_at: datetime | None = None
 
     async def fetch(self) -> list[AIUsage]:
         path = self._settings.ai_usage_file
@@ -68,17 +73,52 @@ class FileAIUsageAdapter:
         with path.open("r", encoding="utf-8") as handle:
             payload: Any = json.load(handle)
         raw: Any
+        received_raw: Any = None
         if isinstance(payload, dict):
             raw = payload.get("providers", [])
+            received_raw = payload.get("received_at")
         elif isinstance(payload, list):
             raw = payload
         else:
             raise ValueError(f"{path} must contain an object or a list")
         providers = [AIUsage.model_validate(item) for item in raw]
+        self.last_received_at = received_at_or_mtime(received_raw, path, self._settings.timezone)
         return _localize(providers, self._settings.timezone)
 
 
-def build_ai_usage_adapter(settings: Settings) -> FixtureAIUsageAdapter | FileAIUsageAdapter:
+class AutoAIUsageAdapter:
+    """"auto": the file adapter when its file exists, else fixture.
+
+    Re-checked on every ``fetch()``, not just at startup, so a push made
+    while the process is running switches the effective source immediately
+    once the endpoint calls ``invalidate()``.
+    """
+
+    name = "ai_usage"
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._file = FileAIUsageAdapter(settings)
+        self._fixture = FixtureAIUsageAdapter(settings)
+        #: Mirrors whichever delegate last ran, for ``CachedAdapter``.
+        self.last_received_at: datetime | None = None
+
+    @property
+    def source(self) -> str:
+        return "file" if self._settings.ai_usage_file.is_file() else "fixture"
+
+    async def fetch(self) -> list[AIUsage]:
+        delegate = self._file if self._settings.ai_usage_file.is_file() else self._fixture
+        value = await delegate.fetch()
+        self.last_received_at = getattr(delegate, "last_received_at", None)
+        return value
+
+
+def build_ai_usage_adapter(
+    settings: Settings,
+) -> FixtureAIUsageAdapter | FileAIUsageAdapter | AutoAIUsageAdapter:
     if settings.ai_usage_source == "file":
         return FileAIUsageAdapter(settings)
+    if settings.ai_usage_source == "auto":
+        return AutoAIUsageAdapter(settings)
     return FixtureAIUsageAdapter(settings)

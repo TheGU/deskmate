@@ -107,6 +107,9 @@ def _block(model: type[BlockT], outcome: Outcome[Any], field: str, empty: Any) -
         source=outcome.source,
         updated_at=outcome.updated_at,
         error=outcome.error,
+        # Only AIUsageBlock, BriefBlock and TasksBlock declare this field;
+        # pydantic's default extra="ignore" drops it for the other blocks.
+        received_at=outcome.received_at,
         **{field: value},
     )
 

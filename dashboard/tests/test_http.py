@@ -122,7 +122,10 @@ def test_api_hub_reports_identity_and_sources(client: TestClient, hub_token: str
     assert payload["configured"] is True
     assert payload["name"] == "deskmate"
     assert payload["base_url"] == "http://dashboard-hub.lan:8080"
-    assert payload["sources"] == {"ai_usage": "fixture", "brief": "fixture", "tasks": "fixture"}
+    # The test DATA_DIR is empty, so "auto" (the default) resolves to fixture.
+    for dataset in ("ai_usage", "brief", "tasks"):
+        assert payload["sources"][dataset]["configured"] == "auto"
+        assert payload["sources"][dataset]["effective"] == "fixture"
 
 
 def test_alert_requires_the_token(client: TestClient, hub_token: str) -> None:

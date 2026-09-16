@@ -20,7 +20,7 @@ from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Any
 
-from app.adapters.base import AdapterUnavailable
+from app.adapters.base import AdapterUnavailable, received_at_or_mtime
 from app.adapters.fixtures import day_delta, load_fixture, shift_tree
 from app.config import Settings
 from app.models import Brief, BriefMode, BriefSection
@@ -113,13 +113,18 @@ class FixtureBriefAdapter:
 
 
 class FileBriefAdapter:
-    """Brief from ``BRIEF_DIR`` (default ``data/brief``)."""
+    """Brief from ``BRIEF_DIR`` (default ``data/brief``): ``current.json``,
+    the shape ``POST /api/brief`` writes, or a hand-authored Markdown
+    fallback."""
 
     name = "brief"
     source = "file"
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        #: Set on every successful fetch: the file's own ``received_at``, or
+        #: its mtime. Read by ``CachedAdapter`` for ``BriefBlock.received_at``.
+        self.last_received_at: datetime | None = None
 
     async def fetch(self) -> Brief:
         settings = self._settings
@@ -134,6 +139,7 @@ class FileBriefAdapter:
                 markdown.read_text(encoding="utf-8", errors="replace"), mode
             )
             brief.generated_at = _mtime(markdown, settings.timezone)
+            self.last_received_at = brief.generated_at
             return brief
         raise AdapterUnavailable(f"no brief in {directory} (looked for current.json, {mode.value}.md)")
 
@@ -142,15 +148,18 @@ class FileBriefAdapter:
             payload: Any = json.load(handle)
         if not isinstance(payload, dict):
             raise ValueError(f"{path} must contain a JSON object")
+        received_raw: Any = payload.get("received_at")
         # Either a single brief, or an object holding both modes.
         if "sections" not in payload and (payload.get("morning") or payload.get("evening")):
             payload = payload.get(mode.value) or payload.get("morning") or payload.get("evening")
+            received_raw = payload.get("received_at") if isinstance(payload, dict) else None
         brief = Brief.model_validate(payload)
         brief.source = "file"
         if brief.generated_at is None:
             brief.generated_at = _mtime(path, self._settings.timezone)
         else:
             brief.generated_at = to_local(brief.generated_at, self._settings.timezone)
+        self.last_received_at = received_at_or_mtime(received_raw, path, self._settings.timezone)
         return brief
 
 
@@ -159,7 +168,46 @@ def _mtime(path: Path, timezone_name: str) -> datetime:
     return to_local(stamp, timezone_name)
 
 
-def build_brief_adapter(settings: Settings) -> FixtureBriefAdapter | FileBriefAdapter:
+class AutoBriefAdapter:
+    """"auto": the file adapter when a brief file exists, else fixture.
+
+    Re-checked on every ``fetch()`` (see ``AutoAIUsageAdapter``) so a push
+    made while the process is running switches the effective source as soon
+    as the endpoint calls ``invalidate()``.
+    """
+
+    name = "brief"
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._file = FileBriefAdapter(settings)
+        self._fixture = FixtureBriefAdapter(settings)
+        self.last_received_at: datetime | None = None
+
+    def _file_available(self) -> bool:
+        directory = self._settings.brief_directory
+        return (
+            (directory / "current.json").is_file()
+            or (directory / "morning.md").is_file()
+            or (directory / "evening.md").is_file()
+        )
+
+    @property
+    def source(self) -> str:
+        return "file" if self._file_available() else "fixture"
+
+    async def fetch(self) -> Brief:
+        delegate = self._file if self._file_available() else self._fixture
+        value = await delegate.fetch()
+        self.last_received_at = getattr(delegate, "last_received_at", None)
+        return value
+
+
+def build_brief_adapter(
+    settings: Settings,
+) -> FixtureBriefAdapter | FileBriefAdapter | AutoBriefAdapter:
     if settings.brief_source == "file":
         return FileBriefAdapter(settings)
+    if settings.brief_source == "auto":
+        return AutoBriefAdapter(settings)
     return FixtureBriefAdapter(settings)

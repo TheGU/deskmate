@@ -7,6 +7,9 @@ Endpoints follow docs/ARCHITECTURE.md::
     POST   /setup
     GET    /api/hub
     GET    /api/state
+    POST   /api/ai-usage
+    POST   /api/brief
+    POST   /api/tasks
     GET    /display/{page}.png
     GET    /preview
     GET    /preview/{page}.html
@@ -24,10 +27,13 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
+import tempfile
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
@@ -37,6 +43,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app import __version__
+from app.adapters.ai_brief import current_mode
 from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
 from app.config import Settings, get_settings
@@ -48,7 +55,15 @@ from app.hub_config import (
     require_token,
 )
 from app.logging_setup import configure_logging, log
-from app.models import AlertRequest, DashboardState, DeviceSample, DeviceTelemetry
+from app.models import (
+    AIUsagePush,
+    AlertRequest,
+    BriefPush,
+    DashboardState,
+    DeviceSample,
+    DeviceTelemetry,
+    TasksPush,
+)
 from app.renderer.palette import to_png_bytes
 from app.renderer.render import PAGE_TTL_SECONDS, PAGES, Renderer
 from app.state import StateService, state_fingerprint
@@ -134,6 +149,22 @@ def etag_matches(header: str | None, etag: str) -> bool:
         if token.strip('"') == bare:
             return True
     return False
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Atomic JSON write: a temp file in the same directory, then ``os.replace``.
+
+    Same pattern as ``app/alerts.py`` and ``app/hub_config.py``. Creates the
+    parent directory when absent, so a first push into ``DATA_DIR/brief``
+    does not need it to exist already.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"
+    )
+    with handle:
+        json.dump(payload, handle, indent=2)
+    os.replace(handle.name, path)
 
 
 def _validation_problems(error: ValidationError) -> list[dict[str, str]]:
@@ -250,13 +281,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "configured": hub.identity.configured,
                 "version": __version__,
                 "timezone": settings.timezone,
+                # "configured" is the settings value (may be "auto"); "effective"
+                # is what is actually serving the page right now ("fixture" or
+                # "file", or "obsidian" for tasks).
                 "sources": {
-                    "ai_usage": settings.ai_usage_source,
-                    "brief": settings.brief_source,
-                    "tasks": settings.tasks_source,
+                    "ai_usage": {
+                        "configured": settings.ai_usage_source,
+                        "effective": hub.state_service.ai_usage.source,
+                    },
+                    "brief": {
+                        "configured": settings.brief_source,
+                        "effective": hub.state_service.brief.source,
+                    },
+                    "tasks": {
+                        "configured": settings.tasks_source,
+                        "effective": hub.state_service.tasks.source,
+                    },
                 },
             }
         )
+
+    # -- pushed data -------------------------------------------------------
+    # Every push writes atomically in a threadpool, then invalidates the
+    # matching CachedAdapter so /api/state reflects it on the very next
+    # build, not after the adapter's own TTL.
+    @app.post("/api/ai-usage", dependencies=[Depends(require_token)])
+    async def post_ai_usage(payload: AIUsagePush) -> JSONResponse:
+        hub: Hub = app.state.hub
+        received_at = datetime.now(dt_timezone.utc)
+        document = {
+            "received_at": received_at.isoformat(),
+            "providers": [item.model_dump(mode="json") for item in payload.providers],
+        }
+        await run_in_threadpool(_write_json_atomic, settings.ai_usage_file, document)
+        hub.state_service.ai_usage.invalidate()
+        body: dict[str, Any] = {
+            "stored": settings.ai_usage_file.name,
+            "received_at": to_local(received_at, settings.timezone).isoformat(),
+            "count": len(payload.providers),
+            "active_source": settings.ai_usage_source,
+        }
+        if settings.ai_usage_source == "fixture":
+            body["warning"] = "AI_USAGE_SOURCE is fixture; the panel will not show this push"
+        return JSONResponse(body)
+
+    @app.post("/api/brief", dependencies=[Depends(require_token)])
+    async def post_brief(payload: BriefPush) -> JSONResponse:
+        hub: Hub = app.state.hub
+        received_at = datetime.now(dt_timezone.utc)
+        mode = payload.mode or current_mode(settings)
+        document = {
+            "received_at": received_at.isoformat(),
+            "mode": mode.value,
+            "headline": payload.headline,
+            "note": payload.note or "",
+            "sections": [section.model_dump(mode="json") for section in payload.sections],
+            "generated_at": payload.generated_at.isoformat(),
+        }
+        target = settings.brief_directory / "current.json"
+        await run_in_threadpool(_write_json_atomic, target, document)
+        hub.state_service.brief.invalidate()
+        body: dict[str, Any] = {
+            "stored": target.name,
+            "received_at": to_local(received_at, settings.timezone).isoformat(),
+            "count": len(payload.sections),
+            "active_source": settings.brief_source,
+        }
+        if settings.brief_source == "fixture":
+            body["warning"] = "BRIEF_SOURCE is fixture; the panel will not show this push"
+        return JSONResponse(body)
+
+    @app.post("/api/tasks", dependencies=[Depends(require_token)])
+    async def post_tasks(payload: TasksPush) -> JSONResponse:
+        hub: Hub = app.state.hub
+        received_at = datetime.now(dt_timezone.utc)
+        document = {
+            "received_at": received_at.isoformat(),
+            "tasks": [item.model_dump(mode="json") for item in payload.tasks],
+        }
+        await run_in_threadpool(_write_json_atomic, settings.tasks_file, document)
+        hub.state_service.tasks.invalidate()
+        body: dict[str, Any] = {
+            "stored": settings.tasks_file.name,
+            "received_at": to_local(received_at, settings.timezone).isoformat(),
+            "count": len(payload.tasks),
+            "active_source": settings.tasks_source,
+        }
+        if settings.tasks_source == "fixture":
+            body["warning"] = "TASKS_SOURCE is fixture; the panel will not show this push"
+        return JSONResponse(body)
 
     # -- alerts ------------------------------------------------------------
     @app.post("/api/alert", dependencies=[Depends(require_token)])

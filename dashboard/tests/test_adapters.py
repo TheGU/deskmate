@@ -8,12 +8,22 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from app.adapters import ai_brief
-from app.adapters.ai_brief import FileBriefAdapter, FixtureBriefAdapter, parse_markdown_brief
-from app.adapters.ai_usage import FileAIUsageAdapter, FixtureAIUsageAdapter
+from app.adapters.ai_brief import (
+    AutoBriefAdapter,
+    FileBriefAdapter,
+    FixtureBriefAdapter,
+    parse_markdown_brief,
+)
+from app.adapters.ai_usage import AutoAIUsageAdapter, FileAIUsageAdapter, FixtureAIUsageAdapter
 from app.adapters.base import AdapterUnavailable, CachedAdapter
 from app.adapters.calendar import FixtureCalendarAdapter, IcsCalendarAdapter, parse_ics
 from app.adapters.home_assistant import FixtureHomeAdapter, RestHomeAdapter, build_home_state
-from app.adapters.tasks import FixtureTasksAdapter, ObsidianTasksAdapter
+from app.adapters.tasks import (
+    AutoTasksAdapter,
+    FileTasksAdapter,
+    FixtureTasksAdapter,
+    ObsidianTasksAdapter,
+)
 from app.adapters.weather import (
     FixtureWeatherAdapter,
     OpenMeteoWeatherAdapter,
@@ -50,6 +60,93 @@ def test_obsidian_adapter_without_a_vault_is_unavailable(settings: Settings) -> 
     adapter = ObsidianTasksAdapter(settings.model_copy(update={"obsidian_vault_path": None}))
     with pytest.raises(AdapterUnavailable):
         run(adapter.fetch())
+
+
+def test_file_tasks_round_trips_with_no_date_shifting(settings: Settings, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    target = tmp_path / "tasks.json"
+    target.write_text(
+        json.dumps(
+            {
+                "received_at": "2026-09-04T08:00:00+00:00",
+                "tasks": [
+                    {"id": "agent-1", "title": "Ship it", "due": "2026-09-04", "priority": "high"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    local = settings.model_copy(update={"data_dir": tmp_path, "fixture_relative_dates": True})
+    adapter = FileTasksAdapter(local)
+    tasks = run(adapter.fetch())
+    assert len(tasks) == 1
+    assert tasks[0].id == "agent-1"
+    # No date shifting: the literal due date survives even though the
+    # fixture-relative-dates switch is on.
+    assert tasks[0].due == date(2026, 9, 4)
+    assert tasks[0].source == "file"
+    assert adapter.last_received_at is not None
+
+
+def test_file_tasks_falls_back_to_mtime_without_a_received_at_key(  # type: ignore[no-untyped-def]
+    settings: Settings, tmp_path
+) -> None:
+    target = tmp_path / "tasks.json"
+    target.write_text(json.dumps({"tasks": []}), encoding="utf-8")
+    adapter = FileTasksAdapter(settings.model_copy(update={"data_dir": tmp_path}))
+    run(adapter.fetch())
+    assert adapter.last_received_at is not None
+
+
+def test_file_tasks_missing_file_is_unavailable(settings: Settings, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    adapter = FileTasksAdapter(settings.model_copy(update={"data_dir": tmp_path}))
+    with pytest.raises(AdapterUnavailable):
+        run(adapter.fetch())
+
+
+def test_auto_tasks_picks_fixture_before_a_push_and_file_after(  # type: ignore[no-untyped-def]
+    settings: Settings, tmp_path
+) -> None:
+    local = settings.model_copy(update={"data_dir": tmp_path})
+    adapter = AutoTasksAdapter(local)
+    assert adapter.source == "fixture"
+    tasks_before = run(adapter.fetch())
+    assert {task.source for task in tasks_before} == {"fixture"}
+
+    (tmp_path / "tasks.json").write_text(
+        json.dumps({"tasks": [{"id": "a", "title": "Pushed"}]}), encoding="utf-8"
+    )
+    assert adapter.source == "file"
+    tasks_after = run(adapter.fetch())
+    assert [task.title for task in tasks_after] == ["Pushed"]
+
+
+def test_auto_ai_usage_picks_fixture_before_and_file_after(settings: Settings, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    local = settings.model_copy(update={"ai_usage_path": tmp_path / "ai-usage.json"})
+    adapter = AutoAIUsageAdapter(local)
+    assert adapter.source == "fixture"
+    (tmp_path / "ai-usage.json").write_text(
+        json.dumps({"providers": [{"provider": "Claude"}]}), encoding="utf-8"
+    )
+    assert adapter.source == "file"
+    providers = run(adapter.fetch())
+    assert providers[0].provider == "Claude"
+
+
+def test_auto_brief_picks_fixture_before_and_file_after(  # type: ignore[no-untyped-def]
+    settings: Settings, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    freeze_hour(monkeypatch, 8)
+    brief_dir = tmp_path / "brief-auto"
+    local = settings.model_copy(update={"brief_dir": brief_dir})
+    adapter = AutoBriefAdapter(local)
+    assert adapter.source == "fixture"
+    brief_dir.mkdir()
+    (brief_dir / "current.json").write_text(
+        json.dumps({"headline": "Pushed brief", "sections": []}), encoding="utf-8"
+    )
+    assert adapter.source == "file"
+    brief = run(adapter.fetch())
+    assert brief.headline == "Pushed brief"
 
 
 # -- calendar --------------------------------------------------------------

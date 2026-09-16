@@ -7,11 +7,11 @@ invented: when an adapter cannot produce data the surrounding block carries
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone as dt_timezone
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AdapterStatus(str, Enum):
@@ -326,6 +326,136 @@ class AlertRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Push endpoints (docs/DATA-SOURCES.md): a remote agent's own data, not
+# fetched by the hub. Every push body forbids unknown fields and pins its
+# shape to ``schema_version`` 1, same discipline as :class:`AlertRequest`.
+# ---------------------------------------------------------------------------
+def _utc_now() -> datetime:
+    return datetime.now(tz=dt_timezone.utc)
+
+
+class SchemaVersioned(BaseModel):
+    """Shared envelope: unknown fields and any schema but 1 are a 422."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = Field(
+        default=1,
+        ge=1,
+        le=1,
+        description="Payload shape version. Only 1 is understood today.",
+    )
+
+
+class AIUsageProviderPush(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(min_length=1, max_length=32)
+    #: Percent of quota REMAINING (not used), 0 to 100, or null when unknown.
+    short_window_percent_remaining: int | None = Field(default=None, ge=0, le=100)
+    short_window_reset_at: datetime | None = None
+    #: Percent of quota REMAINING (not used), 0 to 100, or null when unknown.
+    weekly_percent_remaining: int | None = Field(default=None, ge=0, le=100)
+    weekly_reset_at: datetime | None = None
+    collected_at: datetime = Field(default_factory=_utc_now)
+
+
+class AIUsagePush(SchemaVersioned):
+    """Body of ``POST /api/ai-usage``."""
+
+    providers: list[AIUsageProviderPush] = Field(min_length=1, max_length=8)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "schema_version": 1,
+                "providers": [
+                    {
+                        "provider": "claude",
+                        "short_window_percent_remaining": 62,
+                        "weekly_percent_remaining": 40,
+                    }
+                ],
+            }
+        }
+    )
+
+
+class BriefSectionPush(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=40)
+    items: list[Annotated[str, Field(max_length=160)]] = Field(
+        default_factory=list, max_length=12
+    )
+
+
+class BriefPush(SchemaVersioned):
+    """Body of ``POST /api/brief``."""
+
+    #: Defaults to the mode the clock would pick (adapters/ai_brief.py's
+    #: ``current_mode``) when the caller does not name one.
+    mode: BriefMode | None = None
+    headline: str = Field(min_length=1, max_length=120)
+    note: str | None = Field(default=None, max_length=280)
+    sections: list[BriefSectionPush] = Field(default_factory=list, max_length=6)
+    generated_at: datetime = Field(default_factory=_utc_now)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "schema_version": 1,
+                "headline": "Two deadlines today",
+                "note": "Answer the vendor quote before standup.",
+                "sections": [{"title": "Key tasks", "items": ["Ship it"]}],
+            }
+        }
+    )
+
+
+class TaskPush(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The agent's own stable id for this task; used to update it on a later
+    #: push and to catch a duplicate within the same push (422).
+    id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    due: date | None = None
+    priority: Priority = Priority.NONE
+    completed: bool = False
+    tags: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        default_factory=list, max_length=8
+    )
+
+
+class TasksPush(SchemaVersioned):
+    """Body of ``POST /api/tasks``."""
+
+    tasks: list[TaskPush] = Field(default_factory=list, max_length=60)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "schema_version": 1,
+                "tasks": [
+                    {"id": "agent-1", "title": "Ship the release notes", "priority": "high"}
+                ],
+            }
+        }
+    )
+
+    @field_validator("tasks")
+    @classmethod
+    def _no_duplicate_ids(cls, value: list[TaskPush]) -> list[TaskPush]:
+        seen: set[str] = set()
+        for item in value:
+            if item.id in seen:
+                raise ValueError(f"duplicate task id: {item.id}")
+            seen.add(item.id)
+        return value
+
+
+# ---------------------------------------------------------------------------
 # State blocks
 # ---------------------------------------------------------------------------
 class Block(BaseModel):
@@ -346,8 +476,13 @@ class Block(BaseModel):
         return self.status in (AdapterStatus.OK, AdapterStatus.STALE)
 
 
+#: Set by the file adapters (ai_usage, brief, tasks) from the pushed file's
+#: own ``received_at`` key, or its mtime when that key is absent. ``None``
+#: for a fixture block. Plain field, not a computed one: view.py (Part 2)
+#: reads it to decide staleness, and it is not used for anything today.
 class TasksBlock(Block):
     items: list[Task] = Field(default_factory=list)
+    received_at: datetime | None = None
 
 
 class CalendarBlock(Block):
@@ -360,10 +495,12 @@ class WeatherBlock(Block):
 
 class AIUsageBlock(Block):
     providers: list[AIUsage] = Field(default_factory=list)
+    received_at: datetime | None = None
 
 
 class BriefBlock(Block):
     brief: Brief | None = None
+    received_at: datetime | None = None
 
 
 class HomeBlock(Block):

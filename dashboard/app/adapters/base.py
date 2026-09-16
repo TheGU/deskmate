@@ -18,10 +18,12 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
-from typing import Generic, Protocol, TypeVar
+from pathlib import Path
+from typing import Any, Generic, Protocol, TypeVar
 
 from app.logging_setup import log
 from app.models import AdapterStatus
+from app.timeutil import to_local
 
 T = TypeVar("T")
 
@@ -58,10 +60,31 @@ class Outcome(Generic[T]):
     source: str
     updated_at: datetime | None = None
     error: str | None = None
+    #: When the underlying file was received (its own ``received_at`` key, or
+    #: its mtime). Only the file adapters for ai_usage, brief and tasks set
+    #: this (via ``last_received_at`` on the adapter instance); every other
+    #: adapter leaves it ``None`` and it is silently dropped when the block
+    #: model has no such field (pydantic's default ``extra="ignore"``).
+    received_at: datetime | None = None
 
 
 def _now() -> datetime:
     return datetime.now(tz=dt_timezone.utc)
+
+
+def received_at_or_mtime(value: Any, path: Path, timezone_name: str) -> datetime:
+    """A pushed file's own ``received_at`` string, or its mtime, localized.
+
+    Shared by the file adapters for ai_usage, brief and tasks so the three
+    ``received_at``-bearing blocks (models.py) get one consistent rule.
+    """
+    if isinstance(value, str):
+        try:
+            return to_local(datetime.fromisoformat(value), timezone_name)
+        except ValueError:
+            pass
+    stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=dt_timezone.utc)
+    return to_local(stamp, timezone_name)
 
 
 class CachedAdapter(Generic[T]):
@@ -94,6 +117,16 @@ class CachedAdapter(Generic[T]):
             and (time.monotonic() - self._monotonic_at) < self._ttl
         )
 
+    def _received_at(self) -> datetime | None:
+        """The adapter's own ``last_received_at``, when it tracks one.
+
+        Only the file adapters for ai_usage, brief and tasks set this
+        instance attribute; every other adapter has none, so this is
+        ``None`` for them. It reflects the *last successful* fetch, so it
+        stays correct through a cache hit or a subsequent failure too.
+        """
+        return getattr(self._adapter, "last_received_at", None)
+
     async def get(self, *, force: bool = False) -> Outcome[T]:
         """Read the adapter, using the TTL cache unless ``force`` is set."""
         async with self._lock:
@@ -103,6 +136,7 @@ class CachedAdapter(Generic[T]):
                     status=AdapterStatus.OK,
                     source=self.source,
                     updated_at=self._value_at,
+                    received_at=self._received_at(),
                 )
             started = time.monotonic()
             try:
@@ -123,6 +157,7 @@ class CachedAdapter(Generic[T]):
                     source=self.source,
                     updated_at=self._value_at,
                     error=str(exc),
+                    received_at=self._received_at(),
                 )
             except Exception as exc:  # noqa: BLE001 - one adapter must not kill the page
                 self._last_error = f"{type(exc).__name__}: {exc}"
@@ -140,6 +175,7 @@ class CachedAdapter(Generic[T]):
                     source=self.source,
                     updated_at=self._value_at,
                     error=self._last_error,
+                    received_at=self._received_at(),
                 )
 
             self._value = value
@@ -159,4 +195,5 @@ class CachedAdapter(Generic[T]):
                 status=AdapterStatus.OK,
                 source=self.source,
                 updated_at=self._value_at,
+                received_at=self._received_at(),
             )
