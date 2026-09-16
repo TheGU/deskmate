@@ -152,19 +152,40 @@ def etag_matches(header: str | None, etag: str) -> bool:
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    """Atomic JSON write: a temp file in the same directory, then ``os.replace``.
+    """Atomic JSON write: fsync the temp file, then ``os.replace`` it into place.
 
-    Same pattern as ``app/alerts.py`` and ``app/hub_config.py``. Creates the
-    parent directory when absent, so a first push into ``DATA_DIR/brief``
-    does not need it to exist already.
+    Same pattern as ``app/alerts.py`` and ``app/hub_config.py``, plus two
+    things they do not need for a single small file written on every push:
+    ``fsync`` before the rename, so a crash right after does not leave the
+    rename pointing at a truncated file, and removing the temp file on any
+    failure (a bad serializer, a full disk) instead of leaving a stray
+    ``*.tmp`` in ``DATA_DIR``. Creates the parent directory when absent, so
+    a first push into ``DATA_DIR/brief`` does not need it to exist already.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"
     )
-    with handle:
-        json.dump(payload, handle, indent=2)
-    os.replace(handle.name, path)
+    tmp_path = Path(handle.name)
+    try:
+        with handle:
+            json.dump(payload, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _effective_source_after_push(configured: str) -> str:
+    """What the panel will actually serve right after a successful push: the
+    push just wrote the file, so "file" and "auto" (which now sees the file)
+    both mean "file"; "fixture" stays pinned, and tasks' "obsidian" reads the
+    vault regardless of any tasks.json, so it is reported the same way as
+    "fixture" here (the push did not change what the panel shows).
+    """
+    return "file" if configured in ("file", "auto") else "fixture"
 
 
 def _validation_problems(error: ValidationError) -> list[dict[str, str]]:
@@ -319,7 +340,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "stored": settings.ai_usage_file.name,
             "received_at": to_local(received_at, settings.timezone).isoformat(),
             "count": len(payload.providers),
-            "active_source": settings.ai_usage_source,
+            "effective_source": _effective_source_after_push(settings.ai_usage_source),
         }
         if settings.ai_usage_source == "fixture":
             body["warning"] = "AI_USAGE_SOURCE is fixture; the panel will not show this push"
@@ -345,7 +366,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "stored": target.name,
             "received_at": to_local(received_at, settings.timezone).isoformat(),
             "count": len(payload.sections),
-            "active_source": settings.brief_source,
+            "effective_source": _effective_source_after_push(settings.brief_source),
         }
         if settings.brief_source == "fixture":
             body["warning"] = "BRIEF_SOURCE is fixture; the panel will not show this push"
@@ -365,7 +386,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "stored": settings.tasks_file.name,
             "received_at": to_local(received_at, settings.timezone).isoformat(),
             "count": len(payload.tasks),
-            "active_source": settings.tasks_source,
+            "effective_source": _effective_source_after_push(settings.tasks_source),
         }
         if settings.tasks_source == "fixture":
             body["warning"] = "TASKS_SOURCE is fixture; the panel will not show this push"
@@ -494,6 +515,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/setup", response_class=HTMLResponse)
     async def get_setup(request: Request) -> HTMLResponse:
         hub: Hub = app.state.hub
+        if hub.identity.error is not None:
+            raise HTTPException(status_code=503, detail=hub.identity.error)
         if hub.identity.configured:
             config = hub.identity.config
             assert config is not None
@@ -512,10 +535,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/setup", response_class=HTMLResponse)
     async def post_setup(request: Request) -> HTMLResponse:
         hub: Hub = app.state.hub
+        if hub.identity.error is not None:
+            raise HTTPException(status_code=503, detail=hub.identity.error)
         form = await request.form()
-        name = str(form.get("name", ""))
+        name = str(form.get("name", "")).strip()
         base_url = str(form.get("base_url", ""))
         claim_code = str(form.get("claim_code", ""))
+        # Capped before claim_hub's own base-URL validation runs, so an
+        # absurd or empty name/base_url is a plain 422, not whatever urlsplit
+        # or a downstream write does with it.
+        if not name or len(name) > 60:
+            raise HTTPException(status_code=422, detail="name must be 1 to 60 characters")
+        if len(base_url) > 200:
+            raise HTTPException(status_code=422, detail="base_url must be 200 characters or fewer")
         try:
             token = await hub.identity.claim(
                 submitted_code=claim_code, name=name, base_url=base_url
@@ -535,7 +567,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             token=token,
             skill_path="skills/deskmate/SKILL.md",
         )
-        return HTMLResponse(html)
+        # This page carries the token, shown once: never cache or store it.
+        return HTMLResponse(
+            html, headers={"Cache-Control": "no-store", "Pragma": "no-cache"}
+        )
 
     # -- preview ---------------------------------------------------------
     @app.get("/")
@@ -601,6 +636,8 @@ def main() -> None:  # pragma: no cover - convenience entry point
     import uvicorn
 
     settings = get_settings()
+    # workers=1 (the default here): HubIdentity.claim()'s asyncio.Lock only
+    # serializes concurrent POST /setup within one process (see Dockerfile).
     uvicorn.run(
         "app.main:app", host="0.0.0.0", port=DEFAULT_PORT, log_level=settings.log_level.lower()
     )

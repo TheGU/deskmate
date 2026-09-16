@@ -240,7 +240,10 @@ class FileTasksAdapter:
 
 class AutoTasksAdapter:
     """"auto": the file adapter when ``DATA_DIR/tasks.json`` exists, else
-    fixture. Re-checked on every ``fetch()`` (see ``AutoAIUsageAdapter``)."""
+    fixture. Re-checked on every ``fetch()`` (see ``AutoAIUsageAdapter``);
+    also falls back to fixture instead of an ``error`` block when the file
+    delegate raises ``AdapterUnavailable`` or the file vanishes between the
+    check here and the delegate's own read (TOCTOU)."""
 
     name = "tasks"
 
@@ -249,15 +252,27 @@ class AutoTasksAdapter:
         self._file = FileTasksAdapter(settings)
         self._fixture = FixtureTasksAdapter(settings)
         self.last_received_at: datetime | None = None
+        #: The delegate actually used on the last fetch; see
+        #: ``AutoAIUsageAdapter._last_source``.
+        self._last_source = "fixture"
 
     @property
     def source(self) -> str:
-        return "file" if self._settings.tasks_file.is_file() else "fixture"
+        return self._last_source
 
     async def fetch(self) -> list[Task]:
-        delegate = self._file if self._settings.tasks_file.is_file() else self._fixture
-        value = await delegate.fetch()
-        self.last_received_at = getattr(delegate, "last_received_at", None)
+        if self._settings.tasks_file.is_file():
+            try:
+                value = await self._file.fetch()
+            except (AdapterUnavailable, OSError):
+                pass
+            else:
+                self._last_source = "file"
+                self.last_received_at = getattr(self._file, "last_received_at", None)
+                return value
+        value = await self._fixture.fetch()
+        self._last_source = "fixture"
+        self.last_received_at = getattr(self._fixture, "last_received_at", None)
         return value
 
 

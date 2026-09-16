@@ -172,8 +172,11 @@ class AutoBriefAdapter:
     """"auto": the file adapter when a brief file exists, else fixture.
 
     Re-checked on every ``fetch()`` (see ``AutoAIUsageAdapter``) so a push
-    made while the process is running switches the effective source as soon
-    as the endpoint calls ``invalidate()``.
+    made while the process is running switches the effective source once the
+    endpoint calls ``invalidate()``. Also falls back to fixture, instead of
+    surfacing an ``error`` block, when the file delegate raises
+    ``AdapterUnavailable`` (see ``_file_available``) or the file vanishes
+    between the check here and the delegate's own read (TOCTOU).
     """
 
     name = "brief"
@@ -183,23 +186,39 @@ class AutoBriefAdapter:
         self._file = FileBriefAdapter(settings)
         self._fixture = FixtureBriefAdapter(settings)
         self.last_received_at: datetime | None = None
+        #: The delegate actually used on the last fetch; see
+        #: ``AutoAIUsageAdapter._last_source``.
+        self._last_source = "fixture"
 
     def _file_available(self) -> bool:
+        """Matches exactly what ``FileBriefAdapter.fetch`` reads for the
+        *current* mode: ``current.json``, or that mode's own ``.md`` file.
+        Checking both ``morning.md`` and ``evening.md`` regardless of mode
+        would say "file" is available when only the other mode's Markdown
+        exists, and ``fetch`` would then raise ``AdapterUnavailable``."""
         directory = self._settings.brief_directory
-        return (
-            (directory / "current.json").is_file()
-            or (directory / "morning.md").is_file()
-            or (directory / "evening.md").is_file()
-        )
+        if (directory / "current.json").is_file():
+            return True
+        mode = current_mode(self._settings)
+        return (directory / f"{mode.value}.md").is_file()
 
     @property
     def source(self) -> str:
-        return "file" if self._file_available() else "fixture"
+        return self._last_source
 
     async def fetch(self) -> Brief:
-        delegate = self._file if self._file_available() else self._fixture
-        value = await delegate.fetch()
-        self.last_received_at = getattr(delegate, "last_received_at", None)
+        if self._file_available():
+            try:
+                value = await self._file.fetch()
+            except (AdapterUnavailable, OSError):
+                pass
+            else:
+                self._last_source = "file"
+                self.last_received_at = getattr(self._file, "last_received_at", None)
+                return value
+        value = await self._fixture.fetch()
+        self._last_source = "fixture"
+        self.last_received_at = getattr(self._fixture, "last_received_at", None)
         return value
 
 

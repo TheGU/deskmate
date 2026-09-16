@@ -17,6 +17,7 @@ stateful wrapper ``main.py`` holds for the life of the process.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -30,12 +31,22 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
 from app.logging_setup import log
 
 logger = logging.getLogger("app.hub_config")
+
+#: auto_error=False: a missing or wrong-scheme header returns None instead
+#: of FastAPI's own 403, so require_token keeps the one 401/503 error shape
+#: for the whole API. Declaring it this way (rather than a bare Header
+#: check) is what makes /openapi.json carry a bearer security scheme, so
+#: Swagger UI gets an Authorize button (docs/DATA-SOURCES.md, item 12).
+_bearer_scheme = HTTPBearer(
+    auto_error=False, description="Hub bearer token, shown once on /setup."
+)
 
 HUB_CONFIG_SCHEMA = 1
 
@@ -58,6 +69,15 @@ class AlreadyConfigured(HubConfigError):
 
 class InvalidBaseURL(HubConfigError):
     """The submitted base URL fails the http(s)+host, no path/query/creds rule."""
+
+
+class HubConfigUnreadable(HubConfigError):
+    """``hub.json`` exists but cannot be trusted: bad JSON, a missing key, or
+    a schema other than 1. Distinct from "absent" (which means unconfigured):
+    a present-but-broken file must never be treated as a fresh install, or
+    the hub would generate a new claim code next to a config file nobody can
+    read.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +146,14 @@ def validate_base_url(value: str) -> str:
         raise InvalidBaseURL("base URL must not include credentials")
     if parts.path or parts.query or parts.fragment:
         raise InvalidBaseURL("base URL must not include a path or query")
+    # ``.port`` raises ValueError itself for anything outside 0-65535 (e.g.
+    # ":99999"); port 0 parses but is not a real port, so it is rejected too.
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise InvalidBaseURL("base URL port must be between 1 and 65535") from exc
+    if port is not None and not (1 <= port <= 65535):
+        raise InvalidBaseURL("base URL port must be between 1 and 65535")
     return candidate
 
 
@@ -164,14 +192,30 @@ def claim_hub(
 # File I/O (synchronous; call through run_in_threadpool from async code)
 # ---------------------------------------------------------------------------
 def load_hub_config(path: Path) -> HubConfig | None:
+    """Read ``hub.json``.
+
+    Returns ``None`` only when the file is absent: that means unconfigured,
+    and the caller should generate a claim code. When the file exists but is
+    corrupt JSON, not an object, missing a key, or ``schema`` is not 1, this
+    raises :class:`HubConfigUnreadable` instead of returning ``None`` -
+    silently treating a broken file as "unconfigured" would hand out a fresh
+    claim code next to a config nobody can read.
+    """
     if not path.is_file():
         return None
+    message = f"hub config unreadable: {path}, fix or delete it"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HubConfigUnreadable(message) from exc
+    if not isinstance(payload, dict):
+        raise HubConfigUnreadable(message)
+    if payload.get("schema") != HUB_CONFIG_SCHEMA:
+        raise HubConfigUnreadable(message)
+    try:
         return HubConfig.from_json(payload)
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        log(logger, logging.WARNING, "unreadable hub.json", path=str(path), error=str(exc))
-        return None
+    except (KeyError, ValueError) as exc:
+        raise HubConfigUnreadable(message) from exc
 
 
 def write_hub_config(path: Path, config: HubConfig) -> None:
@@ -194,13 +238,29 @@ class HubIdentity:
     One instance lives on ``Hub`` (``app/main.py``) for the life of the
     process. Loads ``hub.json`` at construction time; when it is absent, a
     claim code is generated and kept only in memory until the hub is
-    claimed.
+    claimed. When it exists but cannot be trusted (:class:`HubConfigUnreadable`),
+    no claim code is generated either: ``self.error`` carries the detail
+    every 503 on this hub repeats until the file is fixed or deleted.
+
+    Process assumes a single worker (see the ``workers=1`` note by the
+    uvicorn command in ``Dockerfile``): the claim lock below serializes
+    concurrent ``POST /setup`` calls within this process, not across
+    processes.
     """
 
     def __init__(self, path: Path) -> None:
         self._path = path
-        self.config: HubConfig | None = load_hub_config(path)
-        self.claim_code: str | None = None if self.config else generate_claim_code()
+        self._claim_lock = asyncio.Lock()
+        self.error: str | None = None
+        try:
+            self.config: HubConfig | None = load_hub_config(path)
+        except HubConfigUnreadable as exc:
+            log(logger, logging.ERROR, "hub config unreadable", path=str(path), error=str(exc))
+            self.config = None
+            self.error = str(exc)
+        self.claim_code: str | None = (
+            None if (self.config is not None or self.error is not None) else generate_claim_code()
+        )
 
     @property
     def configured(self) -> bool:
@@ -210,32 +270,45 @@ class HubIdentity:
         return self.config is not None and token_matches(token, self.config.token_sha256)
 
     async def claim(self, *, submitted_code: str, name: str, base_url: str) -> str:
-        """Validate and persist a setup submission. Returns the plaintext token."""
-        config, token = claim_hub(
-            existing=self.config,
-            expected_code=self.claim_code or "",
-            submitted_code=submitted_code,
-            name=name,
-            base_url=base_url,
-        )
-        await run_in_threadpool(write_hub_config, self._path, config)
-        self.config = config
-        self.claim_code = None
-        return token
+        """Validate and persist a setup submission. Returns the plaintext token.
+
+        Guarded by an ``asyncio.Lock``: the "not yet configured" check and
+        the write both happen while holding it, so two ``POST /setup``
+        requests racing each other cannot both pass the check. The loser
+        gets :class:`AlreadyConfigured` (409), not a clobbered file or two
+        valid tokens.
+        """
+        async with self._claim_lock:
+            config, token = claim_hub(
+                existing=self.config,
+                expected_code=self.claim_code or "",
+                submitted_code=submitted_code,
+                name=name,
+                base_url=base_url,
+            )
+            await run_in_threadpool(write_hub_config, self._path, config)
+            self.config = config
+            self.claim_code = None
+            return token
 
 
 # ---------------------------------------------------------------------------
 # Auth dependency
 # ---------------------------------------------------------------------------
 async def require_token(
-    request: Request, authorization: str | None = Header(default=None)
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> None:
-    """``Authorization: Bearer <token>``. One error shape: HTTPException.detail."""
+    """``Authorization: Bearer <token>``, case-insensitive scheme (HTTPBearer's
+    own comparison). One error shape: HTTPException.detail.
+    """
     identity: HubIdentity = request.app.state.hub.identity
+    if identity.error is not None:
+        raise HTTPException(status_code=503, detail=identity.error)
     if not identity.configured:
         raise HTTPException(status_code=503, detail="hub is not set up; open /setup")
-    if authorization is None or not authorization.startswith("Bearer "):
+    if credentials is None:
         raise HTTPException(status_code=401, detail="missing bearer token")
-    token = authorization.removeprefix("Bearer ").strip()
+    token = credentials.credentials.strip()
     if not token or not identity.verify_token(token):
         raise HTTPException(status_code=401, detail="invalid bearer token")

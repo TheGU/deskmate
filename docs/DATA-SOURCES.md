@@ -452,9 +452,14 @@ Responses: `201` with `{"accepted": true, "alert": {...}}`, or `409` with
 `configuration.yaml`:
 
 `POST` and `DELETE /api/alert` require the hub's bearer token now
-(`Authorization: Bearer <token>`, shown once on `/setup`); keep the real
-token in `secrets.yaml` as `deskmate_token`, never in `configuration.yaml`
-itself.
+(`Authorization: Bearer <token>`, shown once on `/setup`). A YAML tag such as
+`!secret` cannot sit inside a quoted scalar, so put the whole header value in
+`secrets.yaml` instead of just the token:
+
+```yaml
+# secrets.yaml
+deskmate_auth: "Bearer <token>"
+```
 
 ```yaml
 rest_command:
@@ -462,7 +467,7 @@ rest_command:
     url: "http://dashboard-hub.lan:8080/api/alert"
     method: POST
     headers:
-      Authorization: "Bearer !secret deskmate_token"
+      Authorization: !secret deskmate_auth
     content_type: "application/json"
     payload: >-
       {"title": "{{ title }}", "message": "{{ message }}",

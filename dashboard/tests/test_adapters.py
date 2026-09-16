@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date, datetime, timedelta
 
@@ -111,13 +112,54 @@ def test_auto_tasks_picks_fixture_before_a_push_and_file_after(  # type: ignore[
     assert adapter.source == "fixture"
     tasks_before = run(adapter.fetch())
     assert {task.source for task in tasks_before} == {"fixture"}
+    assert adapter.source == "fixture"
 
     (tmp_path / "tasks.json").write_text(
         json.dumps({"tasks": [{"id": "a", "title": "Pushed"}]}), encoding="utf-8"
     )
-    assert adapter.source == "file"
+    # source reports the delegate used on the *last fetch*, not a live stat:
+    # writing the file alone does not flip it until fetch() runs again.
+    assert adapter.source == "fixture"
     tasks_after = run(adapter.fetch())
     assert [task.title for task in tasks_after] == ["Pushed"]
+    assert adapter.source == "file"
+
+
+def test_auto_tasks_source_survives_the_file_being_deleted_until_the_next_fetch(  # type: ignore[no-untyped-def]
+    settings: Settings, tmp_path
+) -> None:
+    local = settings.model_copy(update={"data_dir": tmp_path})
+    adapter = AutoTasksAdapter(local)
+    (tmp_path / "tasks.json").write_text(json.dumps({"tasks": []}), encoding="utf-8")
+    run(adapter.fetch())
+    assert adapter.source == "file"
+
+    (tmp_path / "tasks.json").unlink()
+    # Still "file": nothing has re-fetched yet (that is CachedAdapter's TTL
+    # or invalidate() to trigger, not this adapter's job).
+    assert adapter.source == "file"
+
+
+def test_auto_tasks_falls_back_to_fixture_when_the_file_vanishes_mid_fetch(  # type: ignore[no-untyped-def]
+    settings: Settings, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TOCTOU: is_file() says yes, but the file is gone by the time the
+    file adapter actually opens it (deleted between the check and the read).
+    auto must fall back to fixture, not surface an error block."""
+    local = settings.model_copy(update={"data_dir": tmp_path})
+    adapter = AutoTasksAdapter(local)
+    (tmp_path / "tasks.json").write_text(json.dumps({"tasks": []}), encoding="utf-8")
+
+    real_fetch = adapter._file.fetch
+
+    async def vanish_then_fetch() -> list[Task]:
+        (tmp_path / "tasks.json").unlink()
+        return await real_fetch()
+
+    monkeypatch.setattr(adapter._file, "fetch", vanish_then_fetch)
+    tasks = run(adapter.fetch())
+    assert tasks  # fixture tasks, not an empty/error result
+    assert adapter.source == "fixture"
 
 
 def test_auto_ai_usage_picks_fixture_before_and_file_after(settings: Settings, tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -127,9 +169,10 @@ def test_auto_ai_usage_picks_fixture_before_and_file_after(settings: Settings, t
     (tmp_path / "ai-usage.json").write_text(
         json.dumps({"providers": [{"provider": "Claude"}]}), encoding="utf-8"
     )
-    assert adapter.source == "file"
+    assert adapter.source == "fixture"
     providers = run(adapter.fetch())
     assert providers[0].provider == "Claude"
+    assert adapter.source == "file"
 
 
 def test_auto_brief_picks_fixture_before_and_file_after(  # type: ignore[no-untyped-def]
@@ -144,9 +187,28 @@ def test_auto_brief_picks_fixture_before_and_file_after(  # type: ignore[no-unty
     (brief_dir / "current.json").write_text(
         json.dumps({"headline": "Pushed brief", "sections": []}), encoding="utf-8"
     )
-    assert adapter.source == "file"
+    assert adapter.source == "fixture"
     brief = run(adapter.fetch())
     assert brief.headline == "Pushed brief"
+    assert adapter.source == "file"
+
+
+def test_auto_brief_serves_the_fixture_when_only_the_other_mode_markdown_exists(  # type: ignore[no-untyped-def]
+    settings: Settings, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only morning.md is present but the clock says evening: FileBriefAdapter
+    would raise AdapterUnavailable (it only ever reads the current mode's own
+    file), so auto must serve the fixture, not an error block."""
+    freeze_hour(monkeypatch, 20)
+    brief_dir = tmp_path / "brief-mismatch"
+    brief_dir.mkdir()
+    (brief_dir / "morning.md").write_text("# Morning\n\n## Key tasks\n- Ship it\n", encoding="utf-8")
+    local = settings.model_copy(update={"brief_dir": brief_dir})
+    adapter = AutoBriefAdapter(local)
+    assert adapter._file_available() is False
+    brief = run(adapter.fetch())
+    assert brief.source == "fixture"
+    assert adapter.source == "fixture"
 
 
 # -- calendar --------------------------------------------------------------
@@ -495,3 +557,46 @@ def test_cached_adapter_force_bypasses_the_cache() -> None:
     cached = CachedAdapter(_Boom(["first", "second"]), ttl_seconds=600)
     assert run(cached.get()).value == "first"
     assert run(cached.get(force=True)).value == "second"
+
+
+class _Slow:
+    """A fetch that blocks until the test lets it finish, so a test can
+    invalidate() while it is in flight."""
+
+    name = "slow"
+    source = "test"
+
+    def __init__(self, values: list[str]) -> None:
+        self._values = values
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = 0
+
+    async def fetch(self) -> str:
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        return self._values.pop(0)
+
+
+def test_invalidate_during_a_fetch_forces_the_next_get_to_refetch() -> None:
+    async def scenario() -> None:
+        adapter = _Slow(["stale", "fresh"])
+        cached = CachedAdapter(adapter, ttl_seconds=600)
+        task = asyncio.create_task(cached.get())
+        await adapter.started.wait()
+        # A push writes its file and calls invalidate() while the get()
+        # above is still awaiting its (slow) fetch of the old file.
+        cached.invalidate()
+        adapter.release.set()
+        first = await task
+        assert first.value == "stale"
+        assert adapter.calls == 1
+
+        # The in-flight fetch must not have resurrected the cache: this
+        # get() has to fetch again, not serve "stale" from the TTL cache.
+        second = await cached.get()
+        assert second.value == "fresh"
+        assert adapter.calls == 2
+
+    run(scenario())

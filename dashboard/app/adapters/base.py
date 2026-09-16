@@ -98,6 +98,12 @@ class CachedAdapter(Generic[T]):
         self._value_at: datetime | None = None
         self._monotonic_at: float | None = None
         self._last_error: str | None = None
+        #: Bumped by invalidate(). invalidate() is called synchronously (a
+        #: push handler is not inside this adapter's async lock), so a slow
+        #: fetch already in flight when it fires must not resurrect the
+        #: cache: get() compares the generation it started with against the
+        #: current one before marking its result fresh.
+        self._generation = 0
 
     @property
     def name(self) -> str:
@@ -108,8 +114,14 @@ class CachedAdapter(Generic[T]):
         return self._adapter.source
 
     def invalidate(self) -> None:
-        """Force the next :meth:`get` to hit the underlying source."""
+        """Force the next :meth:`get` to hit the underlying source.
+
+        Safe to call while a :meth:`get` is mid-fetch: bumping the
+        generation counter here means that fetch, even though it started
+        before this call, cannot mark the cache fresh when it completes.
+        """
         self._monotonic_at = None
+        self._generation += 1
 
     def _fresh(self) -> bool:
         return (
@@ -138,6 +150,7 @@ class CachedAdapter(Generic[T]):
                     updated_at=self._value_at,
                     received_at=self._received_at(),
                 )
+            generation = self._generation
             started = time.monotonic()
             try:
                 value = await self._adapter.fetch()
@@ -180,7 +193,10 @@ class CachedAdapter(Generic[T]):
 
             self._value = value
             self._value_at = _now()
-            self._monotonic_at = time.monotonic()
+            # An invalidate() that landed while this fetch was in flight must
+            # not be erased: only mark the cache fresh if the generation is
+            # still the one this fetch started with.
+            self._monotonic_at = time.monotonic() if generation == self._generation else None
             self._last_error = None
             log(
                 logger,

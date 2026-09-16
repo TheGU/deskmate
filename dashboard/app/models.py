@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone as dt_timezone
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
 class AdapterStatus(str, Enum):
@@ -353,11 +353,22 @@ class AIUsageProviderPush(BaseModel):
     provider: str = Field(min_length=1, max_length=32)
     #: Percent of quota REMAINING (not used), 0 to 100, or null when unknown.
     short_window_percent_remaining: int | None = Field(default=None, ge=0, le=100)
-    short_window_reset_at: datetime | None = None
+    short_window_reset_at: AwareDatetime | None = Field(
+        default=None,
+        description="Must carry a UTC offset (e.g. a trailing Z or +07:00). "
+        "A naive value is rejected with 422 rather than assumed to be the "
+        "hub's own timezone.",
+    )
     #: Percent of quota REMAINING (not used), 0 to 100, or null when unknown.
     weekly_percent_remaining: int | None = Field(default=None, ge=0, le=100)
-    weekly_reset_at: datetime | None = None
-    collected_at: datetime = Field(default_factory=_utc_now)
+    weekly_reset_at: AwareDatetime | None = Field(
+        default=None,
+        description="Must carry a UTC offset; a naive value is rejected (see short_window_reset_at).",
+    )
+    collected_at: AwareDatetime = Field(
+        default_factory=_utc_now,
+        description="Must carry a UTC offset; a naive value is rejected (see short_window_reset_at).",
+    )
 
 
 class AIUsagePush(SchemaVersioned):
@@ -399,7 +410,11 @@ class BriefPush(SchemaVersioned):
     headline: str = Field(min_length=1, max_length=120)
     note: str | None = Field(default=None, max_length=280)
     sections: list[BriefSectionPush] = Field(default_factory=list, max_length=6)
-    generated_at: datetime = Field(default_factory=_utc_now)
+    generated_at: AwareDatetime = Field(
+        default_factory=_utc_now,
+        description="Must carry a UTC offset; a naive value is rejected rather than assumed "
+        "to be the hub's own timezone.",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

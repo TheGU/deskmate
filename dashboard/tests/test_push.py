@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import REPO_ROOT, Settings
-from app.main import create_app
+from app.main import _write_json_atomic, create_app
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 
@@ -63,6 +63,19 @@ def token(push_client: TestClient) -> str:
     return _claim(push_client)
 
 
+def test_write_json_atomic_leaves_no_tmp_when_the_payload_cannot_serialize(
+    tmp_path: Path,
+) -> None:
+    class Unserializable:
+        pass
+
+    target = tmp_path / "out.json"
+    with pytest.raises(TypeError):
+        _write_json_atomic(target, {"bad": Unserializable()})
+    assert list(tmp_path.glob("*.tmp")) == []
+    assert not target.exists()
+
+
 def test_auto_reports_fixture_before_any_push(push_client: TestClient, token: str) -> None:
     sources = push_client.get("/api/hub").json()["sources"]
     for dataset in ("ai_usage", "brief", "tasks"):
@@ -104,6 +117,33 @@ def test_post_ai_usage_requires_the_token(push_client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_post_ai_usage_rejects_a_naive_collected_at(push_client: TestClient, token: str) -> None:
+    response = push_client.post(
+        "/api/ai-usage",
+        json={"providers": [{"provider": "claude", "collected_at": "2026-09-16T10:00:00"}]},
+        headers=auth(token),
+    )
+    assert response.status_code == 422
+
+
+def test_post_ai_usage_preserves_an_aware_collected_at(
+    push_client: TestClient, token: str
+) -> None:
+    response = push_client.post(
+        "/api/ai-usage",
+        json={
+            "providers": [{"provider": "aware-check", "collected_at": "2026-09-16T10:00:00+07:00"}]
+        },
+        headers=auth(token),
+    )
+    assert response.status_code == 200
+    state = push_client.get("/api/state").json()
+    provider = next(p for p in state["ai_usage"]["providers"] if p["provider"] == "aware-check")
+    # Same UTC offset as the hub's own Asia/Bangkok TIMEZONE, so re-localizing
+    # for display must leave the wall-clock value unchanged, not shifted.
+    assert provider["collected_at"].startswith("2026-09-16T10:00:00")
+
+
 def test_post_ai_usage_valid_writes_atomically_and_reaches_state(
     push_client: TestClient, token: str, data_dir: Path
 ) -> None:
@@ -124,7 +164,9 @@ def test_post_ai_usage_valid_writes_atomically_and_reaches_state(
     body = response.json()
     assert body["stored"] == "ai-usage.json"
     assert body["count"] == 1
-    assert body["active_source"] == "auto"
+    # AI_USAGE_SOURCE is "auto" and this push just wrote the file, so the
+    # panel will serve "file" now, not the raw "auto" selector.
+    assert body["effective_source"] == "file"
     assert "warning" not in body
 
     assert list(data_dir.glob("*.tmp")) == []
@@ -138,6 +180,15 @@ def test_post_ai_usage_valid_writes_atomically_and_reaches_state(
 
 
 # -- brief --------------------------------------------------------------------
+def test_post_brief_rejects_a_naive_generated_at(push_client: TestClient, token: str) -> None:
+    response = push_client.post(
+        "/api/brief",
+        json={"headline": "x", "generated_at": "2026-09-16T10:00:00"},
+        headers=auth(token),
+    )
+    assert response.status_code == 422
+
+
 def test_post_brief_rejects_an_unknown_field(push_client: TestClient, token: str) -> None:
     response = push_client.post(
         "/api/brief", json={"headline": "x", "extra": True}, headers=auth(token)
@@ -180,7 +231,7 @@ def test_post_brief_valid_writes_atomically_and_reaches_state(
     body = response.json()
     assert body["stored"] == "current.json"
     assert body["count"] == 1
-    assert body["active_source"] == "auto"
+    assert body["effective_source"] == "file"
 
     brief_dir = data_dir / "brief"
     assert list(brief_dir.glob("*.tmp")) == []
@@ -219,7 +270,7 @@ def test_post_tasks_valid_writes_atomically_and_reaches_state(
     body = response.json()
     assert body["stored"] == "tasks.json"
     assert body["count"] == 1
-    assert body["active_source"] == "auto"
+    assert body["effective_source"] == "file"
 
     assert list(data_dir.glob("*.tmp")) == []
     assert (data_dir / "tasks.json").is_file()
@@ -267,3 +318,28 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
     assert ai_usage.json()["warning"] == "AI_USAGE_SOURCE is fixture; the panel will not show this push"
     assert brief.json()["warning"] == "BRIEF_SOURCE is fixture; the panel will not show this push"
     assert tasks.json()["warning"] == "TASKS_SOURCE is fixture; the panel will not show this push"
+    assert ai_usage.json()["effective_source"] == "fixture"
+    assert brief.json()["effective_source"] == "fixture"
+    assert tasks.json()["effective_source"] == "fixture"
+
+
+def test_push_tasks_reports_fixture_when_the_selector_is_obsidian(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Pushing tasks.json while TASKS_SOURCE=obsidian does not change what
+    the panel shows (it still reads the vault), so effective_source must not
+    claim "file"."""
+    data_dir = tmp_path_factory.mktemp("push-obsidian")
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=data_dir,
+        LOG_LEVEL="WARNING",
+        TASKS_SOURCE="obsidian",
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        obsidian_token = _claim(client)
+        response = client.post("/api/tasks", json={"tasks": []}, headers=auth(obsidian_token))
+    assert response.json()["effective_source"] == "fixture"

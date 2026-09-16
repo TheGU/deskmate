@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
@@ -11,6 +13,8 @@ import pytest
 from app.hub_config import (
     AlreadyConfigured,
     HubConfig,
+    HubConfigUnreadable,
+    HubIdentity,
     InvalidBaseURL,
     WrongClaimCode,
     claim_hub,
@@ -53,11 +57,18 @@ def test_validate_base_url_accepts_a_plain_host() -> None:
         "http://user:pass@dashboard-hub.lan",
         "http://dashboard-hub.lan/setup",
         "http://dashboard-hub.lan?x=1",
+        "http://dashboard-hub.lan:99999",
+        "http://dashboard-hub.lan:0",
     ],
 )
 def test_validate_base_url_rejects_the_bad_shapes(value: str) -> None:
     with pytest.raises(InvalidBaseURL):
         validate_base_url(value)
+
+
+def test_validate_base_url_accepts_the_edge_ports() -> None:
+    assert validate_base_url("http://dashboard-hub.lan:1") == "http://dashboard-hub.lan:1"
+    assert validate_base_url("http://dashboard-hub.lan:65535") == "http://dashboard-hub.lan:65535"
 
 
 def _config(token_sha256: str = "x") -> HubConfig:
@@ -128,10 +139,69 @@ def test_write_hub_config_is_atomic_and_leaves_no_tmp_file(tmp_path: Path) -> No
 
 
 def test_load_hub_config_returns_none_when_absent(tmp_path: Path) -> None:
+    """Absent means unconfigured: a fresh install, safe to hand out a claim code."""
     assert load_hub_config(tmp_path / "missing.json") is None
 
 
-def test_load_hub_config_returns_none_for_a_corrupt_file(tmp_path: Path) -> None:
+def test_load_hub_config_raises_for_corrupt_json(tmp_path: Path) -> None:
+    """Present but broken is not the same as absent: it must not be treated
+    as a fresh install (that would hand out a claim code next to a hub.json
+    nobody can read)."""
     path = tmp_path / "hub.json"
     path.write_text("{ not json", encoding="utf-8")
-    assert load_hub_config(path) is None
+    with pytest.raises(HubConfigUnreadable):
+        load_hub_config(path)
+
+
+def test_load_hub_config_raises_for_a_missing_key(tmp_path: Path) -> None:
+    path = tmp_path / "hub.json"
+    path.write_text(json.dumps({"schema": 1, "name": "deskmate"}), encoding="utf-8")
+    with pytest.raises(HubConfigUnreadable):
+        load_hub_config(path)
+
+
+def test_load_hub_config_raises_for_the_wrong_schema(tmp_path: Path) -> None:
+    path = tmp_path / "hub.json"
+    config = _config()
+    payload = {**config.to_json(), "schema": 2}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(HubConfigUnreadable):
+        load_hub_config(path)
+
+
+# -- HubIdentity: startup state and the claim race --------------------------
+def test_identity_with_an_unreadable_config_serves_no_claim_code(tmp_path: Path) -> None:
+    path = tmp_path / "hub.json"
+    path.write_text("{ not json", encoding="utf-8")
+    identity = HubIdentity(path)
+    assert identity.configured is False
+    assert identity.claim_code is None
+    assert identity.error is not None
+    assert str(path) in identity.error
+
+
+def test_identity_with_no_hub_json_gets_a_claim_code(tmp_path: Path) -> None:
+    identity = HubIdentity(tmp_path / "hub.json")
+    assert identity.configured is False
+    assert identity.error is None
+    assert identity.claim_code is not None
+
+
+def test_concurrent_claims_issue_exactly_one_token(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        identity = HubIdentity(tmp_path / "hub.json")
+        code = identity.claim_code
+        assert code is not None
+        results = await asyncio.gather(
+            identity.claim(submitted_code=code, name="first", base_url="http://a.lan:8080"),
+            identity.claim(submitted_code=code, name="second", base_url="http://b.lan:8080"),
+            return_exceptions=True,
+        )
+        tokens = [item for item in results if isinstance(item, str)]
+        errors = [item for item in results if isinstance(item, BaseException)]
+        assert len(tokens) == 1
+        assert len(errors) == 1
+        assert isinstance(errors[0], AlreadyConfigured)
+        assert identity.configured is True
+
+    asyncio.run(scenario())

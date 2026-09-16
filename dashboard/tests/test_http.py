@@ -2,119 +2,153 @@
 
 The hub identity/auth flow (Part 1A) is inherently a one-shot state machine:
 a fresh hub starts unconfigured, and claiming it is a single irreversible
-transition (no edit or regenerate mode). The tests below walk that sequence
-first, against the shared session ``client``, and stash the resulting bearer
-token in ``_HUB_TOKEN`` for every later test in this module that needs to
-write through the API.
+transition (no edit or regenerate mode). ``hub_token`` below is an autouse,
+module-scoped fixture: it claims the shared session ``client``'s hub once,
+before any test in this module runs, regardless of which test pytest picks
+first, so nothing here depends on test execution order. The full
+unconfigured-to-claimed story (which needs a hub that is *not* claimed yet)
+gets its own isolated app instead, in ``test_setup_flow_end_to_end``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import etag_matches
+from app.config import REPO_ROOT, Settings
+from app.main import create_app, etag_matches
 from app.renderer.palette import DISPLAY_SIZE
 from app.renderer.render import PAGES
 from tests.conftest import open_png
 
-_HUB_TOKEN: str | None = None
-
-
-@pytest.fixture()
-def hub_token() -> str:
-    assert _HUB_TOKEN is not None, "the setup-flow tests must claim the hub first"
-    return _HUB_TOKEN
+FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 
 def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_hub_starts_unconfigured(client: TestClient) -> None:
-    hub = client.app.state.hub
-    assert hub.identity.configured is False
-    assert hub.identity.claim_code is not None
-
-
-def test_root_redirects_to_setup_before_claiming(client: TestClient) -> None:
-    response = client.get("/", follow_redirects=False)
-    assert response.status_code in (307, 308)
-    assert response.headers["location"] == "/setup"
-
-
-def test_get_setup_renders_the_claim_form(client: TestClient) -> None:
-    response = client.get("/setup")
-    assert response.status_code == 200
-    assert "claim code" in response.text.lower()
-
-
-def test_writes_are_refused_before_the_hub_is_set_up(client: TestClient) -> None:
-    assert client.post("/api/alert", json={"title": "x"}).status_code == 503
-    assert client.delete("/api/alert").status_code == 503
-
-
-def test_setup_rejects_the_wrong_claim_code(client: TestClient) -> None:
-    response = client.post(
-        "/setup",
-        data={
-            "name": "deskmate",
-            "base_url": "http://dashboard-hub.lan:8080",
-            "claim_code": "0000-0000",
-        },
-    )
-    assert response.status_code == 403
-    assert client.app.state.hub.identity.configured is False
-
-
-def test_setup_claims_the_hub_and_shows_the_token_once(client: TestClient) -> None:
-    global _HUB_TOKEN
+@pytest.fixture(scope="module", autouse=True)
+def hub_token(client: TestClient) -> str:
+    """Claim the shared session hub once for this module, before any test
+    body runs. Bypasses the HTTP form (that flow is exercised on its own,
+    isolated app in ``test_setup_flow_end_to_end``) so this has no ordering
+    dependency on any other test.
+    """
     hub = client.app.state.hub
     code = hub.identity.claim_code
     assert code is not None
-
-    response = client.post(
-        "/setup",
-        data={
-            "name": "deskmate",
-            "base_url": "http://dashboard-hub.lan:8080",
-            "claim_code": code,
-        },
+    return asyncio.run(
+        hub.identity.claim(
+            submitted_code=code, name="deskmate", base_url="http://dashboard-hub.lan:8080"
+        )
     )
-    assert response.status_code == 200
-    match = re.search(r'id="token-value">([^<]+)</code>', response.text)
-    assert match is not None, response.text
-    token = match.group(1)
-    assert len(token) > 20
-
-    assert hub.identity.configured is True
-    assert hub.identity.claim_code is None
-    stored = json.loads(hub.settings.hub_config_file.read_text(encoding="utf-8"))
-    assert stored["token_sha256"] != token
-    assert token not in hub.settings.hub_config_file.read_text(encoding="utf-8")
-
-    _HUB_TOKEN = token
 
 
-def test_setup_when_configured_shows_a_short_page(client: TestClient, hub_token: str) -> None:
-    response = client.get("/setup")
-    assert response.status_code == 200
-    assert "already set up" in response.text.lower()
-
-
-def test_setup_refuses_a_second_claim(client: TestClient, hub_token: str) -> None:
-    response = client.post(
-        "/setup",
-        data={
-            "name": "deskmate",
-            "base_url": "http://dashboard-hub.lan:8080",
-            "claim_code": "AAAA-AAAA",
-        },
+def test_setup_flow_end_to_end(tmp_path: Path) -> None:
+    """The whole unconfigured -> claimed story in one function, on its own
+    isolated app: the shared session ``client``'s hub is always already
+    claimed (see the ``hub_token`` autouse fixture above), so the
+    unconfigured-state assertions below need a hub of their own.
+    """
+    data_dir = tmp_path
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=data_dir,
+        LOG_LEVEL="WARNING",
     )
-    assert response.status_code == 409
+    app = create_app(settings)
+    with TestClient(app) as flow_client:
+        hub = flow_client.app.state.hub
+        assert hub.identity.configured is False
+        assert hub.identity.claim_code is not None
+
+        redirect = flow_client.get("/", follow_redirects=False)
+        assert redirect.status_code in (307, 308)
+        assert redirect.headers["location"] == "/setup"
+
+        unconfigured_page = flow_client.get("/setup")
+        assert unconfigured_page.status_code == 200
+        assert "claim code" in unconfigured_page.text.lower()
+
+        assert flow_client.post("/api/alert", json={"title": "x"}).status_code == 503
+        assert flow_client.delete("/api/alert").status_code == 503
+
+        form = {"name": "deskmate", "base_url": "http://dashboard-hub.lan:8080"}
+        wrong = flow_client.post("/setup", data={**form, "claim_code": "0000-0000"})
+        assert wrong.status_code == 403
+        assert hub.identity.configured is False
+
+        code = hub.identity.claim_code
+        assert code is not None
+        right = flow_client.post("/setup", data={**form, "claim_code": code})
+        assert right.status_code == 200
+        assert right.headers["cache-control"] == "no-store"
+        assert right.headers["pragma"] == "no-cache"
+        match = re.search(r'id="token-value">([^<]+)</code>', right.text)
+        assert match is not None, right.text
+        token = match.group(1)
+        assert len(token) > 20
+
+        assert hub.identity.configured is True
+        assert hub.identity.claim_code is None
+        stored_text = hub.settings.hub_config_file.read_text(encoding="utf-8")
+        stored = json.loads(stored_text)
+        assert stored["token_sha256"] != token
+        assert token not in stored_text
+
+        configured_page = flow_client.get("/setup")
+        assert configured_page.status_code == 200
+        assert "already set up" in configured_page.text.lower()
+
+        second = flow_client.post("/setup", data={**form, "claim_code": "AAAA-AAAA"})
+        assert second.status_code == 409
+
+        denied = flow_client.post("/api/alert", json={"title": "x"})
+        assert denied.status_code == 401
+        allowed = flow_client.post(
+            "/api/alert", json={"title": "x"}, headers=auth(token)
+        )
+        assert allowed.status_code == 201
+        flow_client.delete("/api/alert", headers=auth(token))
+
+
+def test_a_corrupt_hub_config_503s_setup_and_writes_but_the_panel_keeps_working(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "hub.json").write_text("{ not json", encoding="utf-8")
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    app = create_app(settings)
+    with TestClient(app) as broken_client:
+        hub = broken_client.app.state.hub
+        assert hub.identity.error is not None
+        assert hub.identity.claim_code is None
+
+        setup = broken_client.get("/setup")
+        assert setup.status_code == 503
+        assert "hub config unreadable" in setup.json()["detail"]
+
+        alert = broken_client.post("/api/alert", json={"title": "x"})
+        assert alert.status_code == 503
+        assert "hub config unreadable" in alert.json()["detail"]
+
+        # The panel routes do not depend on hub identity at all.
+        assert broken_client.get("/healthz").status_code == 200
+        assert broken_client.get("/api/state").status_code == 200
+        assert broken_client.get("/display/today.png").status_code == 200
 
 
 def test_api_hub_reports_identity_and_sources(client: TestClient, hub_token: str) -> None:

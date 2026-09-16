@@ -90,8 +90,12 @@ class AutoAIUsageAdapter:
     """"auto": the file adapter when its file exists, else fixture.
 
     Re-checked on every ``fetch()``, not just at startup, so a push made
-    while the process is running switches the effective source immediately
-    once the endpoint calls ``invalidate()``.
+    while the process is running switches the effective source once the
+    endpoint calls ``invalidate()``. The file delegate is also given a
+    chance whenever its file merely looks present: if it raises
+    ``AdapterUnavailable``, or the file vanishes between this adapter's own
+    ``is_file()`` check and the delegate's own read (TOCTOU), this falls
+    back to fixture instead of surfacing an ``error`` block.
     """
 
     name = "ai_usage"
@@ -102,15 +106,30 @@ class AutoAIUsageAdapter:
         self._fixture = FixtureAIUsageAdapter(settings)
         #: Mirrors whichever delegate last ran, for ``CachedAdapter``.
         self.last_received_at: datetime | None = None
+        #: The delegate actually used on the last fetch, set only inside
+        #: fetch(). ``source`` reports this, not a fresh stat, so it keeps
+        #: saying "file" between fetches even if the file is later deleted
+        #: (it stays correct until the TTL or an invalidate() triggers the
+        #: next real fetch).
+        self._last_source = "fixture"
 
     @property
     def source(self) -> str:
-        return "file" if self._settings.ai_usage_file.is_file() else "fixture"
+        return self._last_source
 
     async def fetch(self) -> list[AIUsage]:
-        delegate = self._file if self._settings.ai_usage_file.is_file() else self._fixture
-        value = await delegate.fetch()
-        self.last_received_at = getattr(delegate, "last_received_at", None)
+        if self._settings.ai_usage_file.is_file():
+            try:
+                value = await self._file.fetch()
+            except (AdapterUnavailable, OSError):
+                pass
+            else:
+                self._last_source = "file"
+                self.last_received_at = getattr(self._file, "last_received_at", None)
+                return value
+        value = await self._fixture.fetch()
+        self._last_source = "fixture"
+        self.last_received_at = getattr(self._fixture, "last_received_at", None)
         return value
 
 
