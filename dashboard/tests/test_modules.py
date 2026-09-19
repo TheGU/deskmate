@@ -16,8 +16,10 @@ from typing import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import FormData
 
 from app.config import REPO_ROOT, Env
+from app.forms import parse_section, render_section
 from app.main import create_app
 from app.models import TasksBlock
 from app.modules import (
@@ -27,8 +29,15 @@ from app.modules import (
     PageSpec,
     validate_module,
 )
-from app.modules.registry import ModulesSettings, ModuleToggle, Registry, builtin_registry
+from app.modules.registry import (
+    ModulesSettings,
+    ModuleToggle,
+    Registry,
+    builtin_registry,
+    directory_modules,
+)
 from app.settings import HubSettings
+from tests.test_forms import submission
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 
@@ -43,7 +52,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.models import AdapterStatus, Block, TasksBlock, Task
+from app.models import Task, TasksBlock
 from app.modules import DatasetSpec, Module, PageSpec
 
 HERE = Path(__file__).resolve().parent
@@ -366,11 +375,29 @@ def test_disabling_a_module_removes_its_page_after_reload(
 
 def test_a_module_directory_without_an_init_is_ignored(hello_data_dir: Path) -> None:
     """Half an installation is not an installation."""
-    from app.modules.registry import directory_modules
-
     (hello_data_dir / "modules" / "not-a-package").mkdir(exist_ok=True)
     ids = {module.id for module in directory_modules(hello_data_dir)}
     assert ids == {"hello"}
+
+
+# ---------------------------------------------------------------------------
+# the modules settings section through the generated form
+# ---------------------------------------------------------------------------
+def test_the_modules_section_round_trips_through_the_settings_form() -> None:
+    """The section is a list of scalars, which is exactly what the form
+    generator renders (``app/forms.py``). 2.1b puts the section on the page;
+    this is the claim that it will fit when it does."""
+    current = ModulesSettings(
+        items=[
+            ModuleToggle(id="today", enabled=True, order=10),
+            ModuleToggle(id="weather", enabled=False, order=None),
+        ]
+    )
+    form = render_section("modules", ModulesSettings, current.model_dump())
+    parsed = parse_section(ModulesSettings, FormData(submission(form)), current)
+
+    assert parsed.errors == {}
+    assert ModulesSettings.model_validate(parsed.data) == current
 
 
 def test_the_example_package_is_plain_ascii() -> None:
