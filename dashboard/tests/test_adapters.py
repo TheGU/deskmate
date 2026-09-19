@@ -8,10 +8,13 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 import pytest
 
+import httpx
+
 from app.adapters import ai_brief
+from app.adapters import calendar as calendar_module
 from app.adapters.ai_brief import FixtureBriefAdapter, PushBriefAdapter
 from app.adapters.ai_usage import FixtureAIUsageAdapter, PushAIUsageAdapter
-from app.adapters.base import AdapterUnavailable, CachedAdapter
+from app.adapters.base import AdapterError, AdapterUnavailable, CachedAdapter
 from app.adapters.calendar import FixtureCalendarAdapter, IcsCalendarAdapter, parse_ics
 from app.adapters.home_assistant import FixtureHomeAdapter, RestHomeAdapter, build_home_state
 from app.adapters.tasks import FixtureTasksAdapter, ObsidianTasksAdapter, PushTasksAdapter
@@ -26,6 +29,7 @@ from app.config import Env
 from app.datasets import write_dataset
 from app.db import get_database
 from app.models import AdapterStatus, BriefMode, HourlyRain, Priority, ServiceHealth
+from app.modules.calendar.settings import Feed
 from app.settings import HubSettings
 from app.timeutil import today_local, zone
 from tests.conftest import run
@@ -112,6 +116,42 @@ def test_fixture_calendar_is_sorted_and_localized(hub_settings: HubSettings, env
 def test_ics_adapter_without_urls_is_unavailable(hub_settings: HubSettings, env: Env) -> None:
     with pytest.raises(AdapterUnavailable):
         run(IcsCalendarAdapter(hub_settings.calendar, hub_settings.general, env).fetch())
+
+
+def test_a_failing_feed_names_itself_but_never_leaks_its_url(
+    hub_settings: HubSettings, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Google/Outlook ICS URL's "secret address" is a credential: a 404
+    from the feed must not put the URL into the adapter's error string,
+    which is readable through Outcome.error, /healthz and /api/state."""
+    secret_url = "https://calendar.google.com/calendar/ical/super-secret-address/basic.ics"
+    calendar = hub_settings.calendar.model_copy(
+        update={"source": "ics", "feeds": [Feed(url=secret_url, name="Work")]}
+    )
+
+    class _FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def get(self, url: str, follow_redirects: bool = True) -> httpx.Response:
+            request = httpx.Request("GET", url)
+            return httpx.Response(404, request=request)
+
+    monkeypatch.setattr(calendar_module.httpx, "AsyncClient", _FakeClient)
+
+    with pytest.raises(AdapterError) as excinfo:
+        run(IcsCalendarAdapter(calendar, hub_settings.general, env).fetch())
+
+    message = str(excinfo.value)
+    assert secret_url not in message
+    assert "Work" in message
+    assert "404" in message
 
 
 ICS_SAMPLE = """BEGIN:VCALENDAR

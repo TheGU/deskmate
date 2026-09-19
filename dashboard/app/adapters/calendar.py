@@ -18,7 +18,7 @@ import httpx
 from dateutil.rrule import rrulestr
 from icalendar import Calendar as ICalendar
 
-from app.adapters.base import AdapterUnavailable
+from app.adapters.base import AdapterError, AdapterUnavailable
 from app.adapters.fixtures import day_delta, load_fixture, shift_iso
 from app.config import Env
 from app.logging_setup import log
@@ -93,7 +93,10 @@ class IcsCalendarAdapter:
         # later feed was never even reached.
         async with httpx.AsyncClient(timeout=self._env.http_timeout_seconds) as client:
             results = await asyncio.gather(
-                *(_read_ics(client, reference) for reference in sources),
+                *(
+                    _fetch_feed(client, index, reference, self._calendar.feed_name(index))
+                    for index, reference in enumerate(sources)
+                ),
                 return_exceptions=True,
             )
         texts: list[tuple[str, str]] = []
@@ -134,6 +137,25 @@ async def _read_ics(client: httpx.AsyncClient, reference: str) -> str:
     if not path.is_file():
         raise AdapterUnavailable(f"ICS file not found: {path}")
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+async def _fetch_feed(client: httpx.AsyncClient, index: int, reference: str, name: str) -> str:
+    """:func:`_read_ics` with the URL scrubbed out of whatever it raises.
+
+    A Google or Outlook "secret address" ICS URL is a credential: httpx's own
+    ``HTTPStatusError``/``RequestError`` carry the full request URL in their
+    ``str()``, and that string would otherwise land in ``Outcome.error`` and
+    so in ``/healthz``, ``/api/state`` (readable with the device key) and the
+    WARNING log. The feed's index and configured name identify it instead.
+    """
+    try:
+        return await _read_ics(client, reference)
+    except httpx.HTTPStatusError as exc:
+        raise AdapterError(
+            f"calendar feed {index} ({name}): HTTP {exc.response.status_code}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise AdapterError(f"calendar feed {index} ({name}): {type(exc).__name__}") from exc
 
 
 def _as_datetime(value: Any, timezone_name: str) -> tuple[datetime, bool]:
