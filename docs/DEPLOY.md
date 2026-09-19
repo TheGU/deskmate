@@ -6,23 +6,24 @@ or hypervisor product; adapt the volume paths to whatever the server uses.
 
 ## Before you start
 
-The device bakes the hub's URL into its firmware at flash time
-(`firmware/secrets.yaml`'s `hub_base_url`), and it is not runtime-settable
-today, so changing the hub's address later means reflashing. Give the server
-a stable address before the first flash:
+The device's hub URL and device key are runtime-settable text fields (its
+own web page, or Home Assistant), not baked into the firmware at flash
+time, so moving the hub or rotating its key later is a browser edit, not a
+reflash (see `docs/FLASHING.md`, "Provisioning at runtime"). A stable
+server address is still worth having, since it saves you from editing the
+device's Hub base URL field every time the address changes:
 
 - A DHCP reservation (a fixed lease for the server's MAC address) on the
   router, or
 - A static IP on the server itself, or
 - A hostname through the homelab's own DNS or mDNS if it has one.
 
-Any of the three is fine; what matters is that the address does not change
-after you flash the device.
+Any of the three is fine.
 
 A `.local` mDNS hostname (for example `myserver.local`) does not resolve on
 the device itself: ESP-IDF's resolver sends a `.local` name to mDNS, and this
-firmware never joins that multicast group, so the lookup just fails.
-`hub_base_url` must be the server's IP address, or a DNS name the router or
+firmware never joins that multicast group, so the lookup just fails. The Hub
+base URL must be the server's IP address, or a DNS name the router or
 homelab's own DNS actually serves, never a `.local` name.
 
 ## Compose
@@ -137,13 +138,31 @@ redirects to `/setup` for a browser hitting `/` or a preview route.
 Once you have the token, `docs/LOCAL-AGENT.md` covers getting it onto an
 agent machine and setting up the pushes.
 
-## Firmware secret and one reflash
+## Giving the device its hub URL and key
 
-Put the base URL and the device key the setup page showed into
-`firmware/secrets.yaml` (`hub_base_url` and `hub_key`), then flash the
-device once (see `docs/FLASHING.md`). It always builds its request URLs
-from `hub_base_url` and sends `hub_key` as a bearer header on every image
-fetch and telemetry post.
+Firmware built from this version of `firmware/e1002.yaml` keeps the hub
+base URL and the device key as two text fields on the device itself, so
+setting them (or changing them later, for example after a rotate or a
+restore) is a browser edit, never a reflash:
+
+- Open `http://<device-ip>/` (the device's own web page; basic auth from
+  its `secrets.yaml`'s `web_username`/`web_password` at flash time) and
+  fill in "Hub base URL" and "Hub key" with what the setup page showed
+  above, or
+- If the device is added to Home Assistant, set its "Hub base URL" and
+  "Hub key" text entities there instead.
+
+Either way the change takes effect immediately: the device builds every
+request URL from the Hub base URL field and sends the Hub key as a bearer
+header on every image fetch and telemetry post. See `docs/FLASHING.md`,
+"Provisioning at runtime", for the Wi-Fi side of first setup.
+
+**Fallback for older firmware.** A device flashed before this change has
+no text fields or web page for these values; put the base URL and the
+device key into `firmware/secrets.yaml` (`hub_base_url` and `hub_key`)
+and flash it once (see `docs/FLASHING.md`) to pick up the new firmware, or
+reflash with the same old-style YAML if you are not ready to move to the
+runtime fields yet.
 
 ## Reverse proxy
 
