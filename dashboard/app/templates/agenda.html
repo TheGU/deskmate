@@ -69,7 +69,7 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="empty">Nothing scheduled</div>
+  <div class="empty">{{ calendar_note or "Nothing scheduled" }}</div>
   {% endif %}
 </div>
 

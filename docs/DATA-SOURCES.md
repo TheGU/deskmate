@@ -190,15 +190,16 @@ Normalized fields: `id`, `title`, `start`, `end`, `all_day`, `location`,
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| `CALENDAR_NAMES` | the URL host, else `calendar N` | Goes into `Event.calendar` and is what the agenda legend prints. |
+| `CALENDAR_NAMES` | the URL host, else `calendar N` | Goes into `Event.calendar`, which only decides which feed gets which colour below; no page prints the name. |
 | `CALENDAR_COLORS` | cycles blue, green, yellow | One of `blue`, `green`, `yellow`, `red`, `black` per feed. |
 
 The agenda and the Today NEXT pane print each event's time in its calendar's
-colour, and the agenda's status bar entry is the legend that says which name
-is which colour. Red and yellow are not handed out by default: they mean
-overdue and caution everywhere else on the panel, and a calendar is not a
-state. The fixture calendar tags every event `work` or `personal`, so the demo
-shows blue and green through the same default cycle.
+colour - that colour coding is the only place a feed's identity shows on the
+panel; no page prints a legend naming which colour is which feed. Red and
+yellow are not handed out by default: they mean overdue and caution
+everywhere else on the panel, and a calendar is not a state. The fixture
+calendar tags every event `work` or `personal`, so the demo shows blue and
+green through the same default cycle.
 
 ---
 

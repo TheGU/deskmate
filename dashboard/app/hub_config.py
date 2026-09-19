@@ -88,8 +88,8 @@ class HubConfigUnreadable(HubConfigError):
     schema other than the current one, or (the schema-1 case) a file written
     before the read key existed. Distinct from "absent" (which means
     unconfigured): a present-but-broken file must never be treated as a
-    fresh install, or the hub would generate a new claim code next to a
-    config file nobody can read.
+    fresh install, or the hub would accept a new ``POST /setup`` and mint a
+    fresh token and device key next to a config file nobody can read.
     """
 
 
@@ -135,17 +135,22 @@ def is_private_client_host(host: str | None) -> bool:
     callers ``POST /setup`` accepts on an unconfigured hub, now that there
     is no claim code to guard it instead.
 
-    ``None`` (the ASGI scope carries no client at all) and a value that is
-    not a parseable IP address (Starlette's ``TestClient`` uses the literal
-    host ``"testclient"``) are both treated as allowed: a real deployment
-    always hands this a real client IP.
+    ``None`` (the ASGI scope carries no client at all, e.g. a unix socket)
+    is treated as allowed: a real deployment always hands this a real client
+    IP, so there is no live listener this can silently open up. A host that
+    fails to parse as an IP address - including Starlette's ``TestClient``
+    default, ``"testclient"`` - is refused rather than waved through:
+    failing open here would let a caller behind ``uvicorn --proxy-headers``
+    bypass the guard with a forged, unparseable ``X-Forwarded-For`` value.
+    Tests that need an unconfigured ``POST /setup`` to succeed must build
+    their ``TestClient`` with an explicit private ``client=(host, port)``.
     """
     if host is None:
         return True
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
-        return True
+        return False
     return addr.is_loopback or addr.is_private or addr.is_link_local
 
 
@@ -264,14 +269,15 @@ def load_hub_config(path: Path) -> HubConfig | None:
     """Read ``hub.json``.
 
     Returns ``None`` only when the file is absent: that means unconfigured,
-    and the caller should generate a claim code. When the file exists but is
-    corrupt JSON, not an object, missing a key, or ``schema`` does not match
-    :data:`HUB_CONFIG_SCHEMA`, this raises :class:`HubConfigUnreadable`
-    instead of returning ``None`` - silently treating a broken file as
-    "unconfigured" would hand out a fresh claim code next to a config nobody
-    can read. A file at schema 1 (from before the read key existed, so it
-    has no device key or session secret to serve reads with) gets its own
-    detail: there is nothing to migrate, only to redo.
+    and the next ``POST /setup`` to arrive claims the hub. When the file
+    exists but is corrupt JSON, not an object, missing a key, or ``schema``
+    does not match :data:`HUB_CONFIG_SCHEMA`, this raises
+    :class:`HubConfigUnreadable` instead of returning ``None`` - silently
+    treating a broken file as "unconfigured" would let a new ``POST /setup``
+    mint a fresh token and device key next to a config nobody can read. A
+    file at schema 1 (from before the read key existed, so it has no device
+    key or session secret to serve reads with) gets its own detail: there is
+    nothing to migrate, only to redo.
     """
     if not path.is_file():
         return None

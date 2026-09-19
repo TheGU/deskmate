@@ -46,11 +46,13 @@ from app.view import (
     PAGES_WITH_OWN_OVERDUE_CHIP,
     PRIORITY_TITLE_MAX_CHARS,
     TODAY_CHIP_WIDTH_PX,
+    agenda_context,
     agenda_list_rows,
     ai_capacity_rows,
     ai_usage_stale,
     alert_context,
     battery_accent,
+    block_note,
     brief_context,
     brief_due_label,
     brief_headline_fits_one_line,
@@ -961,6 +963,39 @@ def test_agenda_list_rows_nothing_scheduled_when_the_window_is_empty() -> None:
         calendar=CalendarBlock(status=AdapterStatus.OK, items=[]),
     )
     assert agenda_list_rows(usable_but_empty, {}, today) == []
+
+
+def test_agenda_context_calendar_note_is_blank_when_the_calendar_is_just_empty(
+    settings: Settings,
+) -> None:
+    """An empty but usable calendar has nothing wrong with it: the note must
+    be blank so the template's default "Nothing scheduled" prints."""
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
+        timezone="Asia/Bangkok",
+        calendar=CalendarBlock(status=AdapterStatus.OK, items=[]),
+    )
+    context = agenda_context(state, settings)
+    assert context["agenda_list"] == []
+    assert context["calendar_note"] == ""
+
+
+def test_agenda_context_calendar_note_explains_an_unusable_calendar(
+    settings: Settings,
+) -> None:
+    """When the calendar block itself is not usable (unset, or erroring),
+    the empty agenda list must say why instead of the generic "Nothing
+    scheduled", which would read as "you have no events" rather than "the
+    calendar is not configured"."""
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
+        timezone="Asia/Bangkok",
+        calendar=CalendarBlock(status=AdapterStatus.UNAVAILABLE),
+    )
+    context = agenda_context(state, settings)
+    assert context["agenda_list"] == []
+    assert context["calendar_note"] == block_note(AdapterStatus.UNAVAILABLE, "calendar")
+    assert context["calendar_note"] == "calendar unavailable"
 
 
 def test_month_grid_starts_monday_and_marks_today() -> None:

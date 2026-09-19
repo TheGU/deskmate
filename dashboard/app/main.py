@@ -307,6 +307,20 @@ def _read_latest(hub: "Hub") -> tuple[DeviceSample | None, TelemetrySummary]:
     return hub.telemetry.latest(), hub.telemetry.summary()
 
 
+def _forwarded_scheme(request: Request) -> str:
+    """The scheme to treat ``request`` as: the first value of a comma
+    separated ``X-Forwarded-Proto`` (a chain of proxies lists the original
+    client's scheme first, e.g. ``"https, http"``), or the request's own
+    scheme when the header is absent. Shared by the setup page's base-URL
+    guess and :func:`_telemetry_origin`'s ``hub_host``, so the two never
+    disagree about which proxy header value to trust.
+    """
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if not forwarded_proto:
+        return request.url.scheme
+    return forwarded_proto.split(",")[0].strip()
+
+
 def _telemetry_origin(request: Request) -> tuple[str | None, str | None]:
     """``(remote_addr, hub_host)`` for a telemetry POST: who sent it, and the
     hub URL they used to reach it. Both capped and both best-effort - neither
@@ -318,7 +332,7 @@ def _telemetry_origin(request: Request) -> tuple[str | None, str | None]:
     if remote_addr is not None:
         remote_addr = remote_addr[:TELEMETRY_ORIGIN_MAX_LEN]
 
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    scheme = _forwarded_scheme(request)
     host = request.headers.get("host") or ""
     try:
         hub_host = validate_base_url(f"{scheme}://{host}")[:TELEMETRY_ORIGIN_MAX_LEN]
@@ -681,8 +695,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if hub.identity.configured:
             template = hub.renderer.environment.get_template("setup-configured.html")
             return HTMLResponse(template.render())
-        forwarded_proto = request.headers.get("x-forwarded-proto")
-        scheme = forwarded_proto.split(",")[0].strip() if forwarded_proto else request.url.scheme
+        scheme = _forwarded_scheme(request)
         guessed_base_url = f"{scheme}://{request.headers.get('host', '')}"
         template = hub.renderer.environment.get_template("setup.html")
         html = template.render(default_name="deskmate", default_base_url=guessed_base_url)
@@ -740,7 +753,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if hub.identity.error is not None:
             raise HTTPException(status_code=503, detail=hub.identity.error)
         if not hub.identity.configured:
-            return RedirectResponse("/setup")
+            return RedirectResponse("/setup", status_code=303)
         next_path = request.query_params.get("next", "/preview")
         template = hub.renderer.environment.get_template("login.html")
         html = template.render(next=next_path, error=None)
@@ -752,7 +765,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if hub.identity.error is not None:
             raise HTTPException(status_code=503, detail=hub.identity.error)
         if not hub.identity.configured:
-            return RedirectResponse("/setup")
+            return RedirectResponse("/setup", status_code=303)
         await _cap_form_body(request)
         form = await request.form()
         key = str(form.get("key", "")).strip()

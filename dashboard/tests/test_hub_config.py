@@ -44,12 +44,22 @@ def test_is_private_client_host_rejects_public_addresses(host: str) -> None:
     assert is_private_client_host(host) is False
 
 
-def test_is_private_client_host_allows_a_missing_or_unparseable_host() -> None:
-    """``None`` (no client in the ASGI scope) and a non-IP host (Starlette's
-    TestClient default, "testclient") are both treated as allowed - a real
-    deployment always hands this a real client IP."""
+def test_is_private_client_host_allows_a_missing_host_but_not_an_unparseable_one() -> None:
+    """``None`` (no client in the ASGI scope, e.g. a unix socket) is allowed
+    - a real deployment always hands this a real client IP. A host that is
+    not a parseable IP address - including Starlette's ``TestClient``
+    default, "testclient" - must fail closed: waving it through would let a
+    caller behind ``uvicorn --proxy-headers`` bypass the guard with a
+    forged, unparseable ``X-Forwarded-For`` value."""
     assert is_private_client_host(None) is True
-    assert is_private_client_host("testclient") is True
+    assert is_private_client_host("testclient") is False
+
+
+def test_is_private_client_host_rejects_an_ipv4_mapped_public_address() -> None:
+    """``::ffff:8.8.8.8`` is a public IPv4 address wrapped in IPv6 notation;
+    Python's ``ipaddress`` treats it as a plain, non-private IPv6 literal, so
+    this must still come out refused."""
+    assert is_private_client_host("::ffff:8.8.8.8") is False
 
 
 def test_token_hash_round_trips() -> None:

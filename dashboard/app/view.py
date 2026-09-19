@@ -1014,6 +1014,7 @@ def agenda_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
 
     context["long_date"] = reference.strftime("%A %d %B").upper()
     context["agenda_list"] = agenda_list_rows(state, colors, today)
+    context["calendar_note"] = block_note(state.calendar.status, "calendar")
     context["month"] = month_grid(state, colors, today)
     context["next7"] = next_seven_days(state, today)
     return context

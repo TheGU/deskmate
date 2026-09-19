@@ -1,8 +1,10 @@
 """Configuration for dashboard-hub.
 
 All settings come from environment variables (or a local ``.env``). Names match
-docs/ARCHITECTURE.md. Every adapter has a ``*_SOURCE`` selector and ``fixture``
-is always available, so the server runs with no configuration at all.
+docs/ARCHITECTURE.md. Every adapter has a ``*_SOURCE`` selector; ``fixture`` is
+always available for development, but no adapter defaults to it any more. The
+server still runs with no configuration at all: it just renders an honest
+empty state (``unavailable``) on every block until each source is configured.
 """
 
 from __future__ import annotations

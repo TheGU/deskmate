@@ -112,7 +112,11 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
         LOG_LEVEL="WARNING",
     )
     app = create_app(settings)
-    with TestClient(app) as flow_client:
+    # An explicit private client address: is_private_client_host now fails
+    # closed on TestClient's default, unparseable "testclient" host, and
+    # this flow's two POST /setup calls (claim, then the already-configured
+    # 409) must reach the claim check to exercise what they are about.
+    with TestClient(app, client=("127.0.0.1", 1)) as flow_client:
         hub = flow_client.app.state.hub
         assert hub.identity.configured is False
 
@@ -186,6 +190,27 @@ def test_post_setup_rejects_a_non_private_client(tmp_path: Path) -> None:
     assert public_client.app.state.hub.identity.configured is False
 
 
+def test_get_setup_prefill_uses_the_first_forwarded_proto(tmp_path: Path) -> None:
+    """The setup page's guessed base URL and _telemetry_origin's hub_host
+    share one helper for X-Forwarded-Proto (app.main._forwarded_scheme): a
+    proxy chain lists the original client's scheme first in a comma
+    separated value, and the guess must take that first one, not the whole
+    raw header."""
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    unconfigured_client = TestClient(create_app(settings))
+    response = unconfigured_client.get(
+        "/setup", headers={"X-Forwarded-Proto": "https, http", "Host": "dashboard-hub.lan"}
+    )
+    assert response.status_code == 200
+    assert 'value="https://dashboard-hub.lan"' in response.text
+
+
 def test_reads_and_device_telemetry_503_while_unconfigured(tmp_path: Path) -> None:
     settings = Settings(
         _env_file=None,
@@ -223,6 +248,32 @@ def test_preview_and_root_redirect_to_setup_while_unconfigured(tmp_path: Path) -
     assert root_redirect.headers["location"] == "/setup"
 
 
+def test_login_redirects_to_setup_with_a_get_not_a_repost_while_unconfigured(
+    tmp_path: Path,
+) -> None:
+    """A plain (default) 307 redirect re-sends the original method and body,
+    which would turn a POST /login into a POST /setup carrying the login
+    form's fields. Both /login handlers must answer 303 instead, so a
+    browser's next request to /setup is a GET."""
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    unconfigured_client = TestClient(create_app(settings))
+    get_redirect = unconfigured_client.get("/login", follow_redirects=False)
+    assert get_redirect.status_code == 303
+    assert get_redirect.headers["location"] == "/setup"
+
+    post_redirect = unconfigured_client.post(
+        "/login", data={"key": "whatever", "next": "/preview"}, follow_redirects=False
+    )
+    assert post_redirect.status_code == 303
+    assert post_redirect.headers["location"] == "/setup"
+
+
 def test_healthz_minimal_body_while_unconfigured(tmp_path: Path) -> None:
     settings = Settings(
         _env_file=None,
@@ -248,7 +299,10 @@ def test_post_setup_rejects_a_form_over_the_cap(tmp_path: Path) -> None:
         LOG_LEVEL="WARNING",
     )
     app = create_app(settings)
-    with TestClient(app) as oversized_client:
+    # A private client address so the size cap is what rejects this request,
+    # not the (now fail-closed) is_private_client_host check on TestClient's
+    # default "testclient" host.
+    with TestClient(app, client=("127.0.0.1", 1)) as oversized_client:
         oversized = {"name": "x" * (MAX_OPEN_BODY_BYTES + 1)}
         response = oversized_client.post("/setup", data=oversized)
         assert response.status_code == 413

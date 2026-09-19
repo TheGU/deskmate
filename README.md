@@ -83,7 +83,10 @@ A fresh hub is unconfigured: it serves nothing but `GET`/`POST /setup`,
 and firmware telemetry answers `503` too. There is no claim code: the first
 `POST /setup` to reach the hub wins, so set it up right after the first
 start. It is guarded by address instead - only a caller on this machine's
-own loopback or private network may call it; anyone else gets `403`. Open
+own loopback or private network may call it; anyone else gets `403`. That
+guard sees whoever made the TCP connection, so a reverse proxy in front of
+the hub defeats it (every caller looks like the proxy's own private
+address); see "Reverse proxy" in [docs/DEPLOY.md](docs/DEPLOY.md). Open
 `http://127.0.0.1/setup` and enter a hub name and the public base URL.
 The result page shows **two secrets**, each **once**; save both, there is no
 way to see either again: a bearer token for agents (read and write), and a
@@ -176,9 +179,9 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 - [docs/HOOKS.md](docs/HOOKS.md) - a POSIX sh hook that pushes AI quota
   numbers whenever they change.
 - [docs/LOCAL-AGENT.md](docs/LOCAL-AGENT.md) - setting up an external agent
-  that pushes AI usage, a brief and tasks to a claimed hub.
+  that pushes AI usage, a brief and tasks to a set-up hub.
 - [docs/DEPLOY.md](docs/DEPLOY.md) - running dashboard-hub in Docker on a
-  homelab server: claiming it, the firmware secret, reverse proxy, backup.
+  homelab server: setting it up, the firmware secret, reverse proxy, backup.
 - [docs/FACTORY-RESTORE.md](docs/FACTORY-RESTORE.md) - restoring the factory
   firmware dump.
 - [docs/FLASHING.md](docs/FLASHING.md) - flashing procedure.
@@ -196,10 +199,14 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 - Color reports state, it never decorates. The chrome is black on white; a
   field turns blue, red, yellow or green only when it carries that state, and
   healthy is the quiet default. Calendars are the one exception: each feed
-  gets a color and the agenda prints a legend.
+  gets a color, and the time of every event prints in its calendar's color
+  (`CALENDAR_NAMES` only decides which feed gets which color; no page prints
+  a legend).
 - Type floors for a 1-bit panel: row text 24 px weight 700, labels and chips
-  20 px weight 900, nothing below 20 px. No gradients, shadows, grays, radius,
-  animation or tiny text.
+  16 px weight 700 by default, with a 14 px floor for the few contexts
+  measured to need it (the System chart key, the agenda month weekday row,
+  Brief's own due chip). Nothing below 14 px. No gradients, shadows, grays,
+  radius, animation or tiny text.
 - Deterministic rendering: bundled Google Sans (variable, OFL), which carries
   Latin and Thai in one file, for text, and a Symbols Nerd Font subset for
   icons. No system fonts, no network at render time, no clock that changes

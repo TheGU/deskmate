@@ -851,6 +851,27 @@ def test_post_telemetry_stores_the_remote_addr_and_hub_host(device_client: _Devi
     assert hub_host == "http://192.0.2.1:8080"
 
 
+def test_post_telemetry_hub_host_uses_the_first_forwarded_proto(
+    device_client: _DeviceKeyClient,
+) -> None:
+    """A proxy chain lists the original client's scheme first in a comma
+    separated ``X-Forwarded-Proto``; ``hub_host`` must take that first value
+    (here "https"), not the whole raw header or the hub's own plain-http
+    scheme."""
+    response = device_client.post(
+        "/api/device/telemetry",
+        json=DEVICE_PAYLOAD,
+        headers={"Host": "192.0.2.1:8080", "X-Forwarded-Proto": "https, http"},
+    )
+    assert response.status_code == 202
+
+    hub = device_client.app.state.hub
+    origin = hub.telemetry.latest_origin()
+    assert origin is not None
+    _remote_addr, hub_host, _received_at = origin
+    assert hub_host == "https://192.0.2.1:8080"
+
+
 def test_post_telemetry_stores_no_hub_host_for_an_invalid_host_header(
     device_client: _DeviceKeyClient,
 ) -> None:

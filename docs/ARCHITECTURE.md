@@ -88,9 +88,16 @@ credentials). There is no claim code: the first submission to reach an
 unconfigured hub wins, first come first served. The only guard is the
 caller's address - `request.client.host` must be loopback, RFC1918/ULA
 private, or link-local (`ipaddress.ip_address(...).is_loopback` /
-`.is_private` / `.is_link_local`); anything else is `403` before the form
-is even read. Setup generates two secrets, each shown once on the
-setup-done page and never displayable again:
+`.is_private` / `.is_link_local`); a host that fails to parse as an IP
+address at all is refused too (fail closed), and only a missing client
+(`request.client is None`, e.g. a unix socket) is let through unchecked.
+Anything the check refuses is `403` before the form is even read. This is a
+network-layer check on the immediate TCP peer, so it only works when the
+hub is reached directly: behind a reverse proxy, `request.client.host` is
+the proxy's own address, not the original caller's, and the guard always
+passes - see "Reverse proxy" in `docs/DEPLOY.md`. Setup generates two
+secrets, each shown once on the setup-done page and never displayable
+again:
 
 - **The bearer token**, for agents. Read and write: accepted by every
   `token` route and every `reader` route.
@@ -356,7 +363,12 @@ footer entry through the existing footer-flag logic.
   for the driver to be idle before refreshing.
 - Telemetry: every 5 min (or once per wake on battery) the device POSTs
   battery, temperature, humidity, Wi-Fi RSSI, uptime, page, power mode,
-  USB presence and charge state to `/api/device/telemetry`.
+  USB presence and charge state to `/api/device/telemetry`. The hub also
+  records that POST's own origin - the caller's address and the `Host`
+  header it used - and carries it on `DeviceState` as `remote_addr` and
+  `hub_host`. Both reach `GET /api/state` (reader-authenticated) and the
+  System page's HUB column (DEVICE IP, HUB URL); neither is returned by
+  `GET`/`POST /api/device/telemetry` itself.
 
 ### Power modes
 

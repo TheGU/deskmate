@@ -37,6 +37,10 @@ ENV PATH=/app/dashboard/.venv/bin:$PATH
 RUN playwright install --with-deps --only-shell chromium \
     && rm -rf /var/lib/apt/lists/*
 
+# Installed as root, whatever the build umask happened to be; the hub user
+# (uid 1001, below) must be able to read the whole browser tree regardless.
+RUN chmod -R a+rX /ms-playwright
+
 # uid/gid 1001 matches the PUID/PGID default in docker-compose.yml.
 RUN groupadd -g 1001 hub && useradd -u 1001 -g 1001 -M hub
 

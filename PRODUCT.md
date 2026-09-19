@@ -51,8 +51,7 @@ no logic and no credentials on the device.
 - Buttons: left = previous page, right = next page, green tap = refresh, green
   hold = back to Today. Page order: Today, Agenda, Weather, Brief, System. The
   Alert page is shown on demand and the previous page is restored after it.
-- Hub: Docker container on the owner's Windows PC today (published on port
-  18080 because 8080 is taken), planned to move to an unraid homelab server.
+- Hub: runs as a Docker container on a home server.
 - Sources that will be live on the desk: Obsidian vault tasks (read only), an
   ICS calendar feed, Open-Meteo weather, Home Assistant (state on the System
   page, alerts pushed from HA automations to the hub's alert API), and device
@@ -84,16 +83,19 @@ Confirmed:
   say "unknown" or "unavailable".
 - Hub endpoints: healthz, api/state, display/{page}.png with ETag and 304,
   preview pages, setup and hub info, AI usage/brief/tasks push, alert set and
-  clear, device telemetry in and history out. Setup, alert and the three push
-  endpoints require a bearer token claimed once on `/setup`; the panel and
-  telemetry endpoints stay open because the device fetches without one.
-  Telemetry (battery, temperature, humidity, Wi-Fi, power state, wake cause)
-  is stored in SQLite with 30-day retention and charted on the System page.
-  Each POST also records who sent it and which hub URL they used (remote
-  address, Host header); the System page's HUB column shows those as DEVICE
-  IP and HUB URL, next to an age for every pushed or fetched dataset and
-  the device's own last sync. Neither ever appears in the telemetry API
-  responses, only on the page.
+  clear, device telemetry in and history out. `/setup` needs no token, only
+  a caller on this hub's own loopback or private network, and is first come
+  first served (no claim code). Reads need the bearer token, the device key,
+  or a browser session from `/login`; writes (the three pushes and the alert
+  endpoints) need the bearer token only; device telemetry needs the device
+  key or the token. Telemetry (battery, temperature, humidity, Wi-Fi, power
+  state, wake cause) is stored in SQLite with 30-day retention and charted
+  on the System page. Each POST also records who sent it and which hub URL
+  they used (remote address, Host header); the System page's HUB column
+  shows those as DEVICE IP and HUB URL, next to an age for every pushed or
+  fetched dataset and the device's own last sync. Both fields also reach
+  `/api/state` (reader-authenticated) as `device.remote_addr` and
+  `device.hub_host`, never any other API response.
 - Text: Thai and English mixed content is a requirement. Google Sans (SIL
   OFL) carries Latin and Thai in one file, weights 400 to 700; Google Sans
   Flex and Noto Sans Thai were replaced on 2026-09-05 after the owner asked

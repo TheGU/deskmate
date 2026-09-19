@@ -55,6 +55,10 @@ mkdir -p data
 docker compose up -d --build
 ```
 
+Rootless Docker cannot publish a container port below 1024 to the host, so
+port 80 (the default) will fail to bind; set `HUB_PORT` in `.env` to an
+unprivileged port (for example `HUB_PORT=8080`) when running rootless.
+
 Create `data` yourself first so it is owned by your user: the container runs
 as `PUID:PGID` (default 1001) and must be able to write there. If `id -u` on
 this host is not 1001, set `PUID` and `PGID` in `.env` to match it.
@@ -70,7 +74,9 @@ Volumes (already wired in `docker-compose.yml`):
   `.env` and `TASKS_SOURCE=obsidian`.
 
 `.env` holds every setting in `.env.example`, all optional; an empty `.env`
-runs entirely on fixtures.
+runs on the live defaults (file, ics, open_meteo, file, file, rest, store),
+not fixtures - every block renders an honest `unavailable` until its own
+source is actually configured.
 
 **Single worker only.** The compose service and the Dockerfile's `CMD` both
 run exactly one uvicorn worker. The setup lock lives in that one process's
@@ -154,6 +160,17 @@ marked `Secure` and a browser will silently drop it if you then open the
 hub over plain `http` on the LAN; `/login` will appear to do nothing.
 Either set the hub up with the same scheme you actually browse it with, or
 always reach it through the `https` hostname the reverse proxy terminates.
+
+**A reverse proxy defeats the `POST /setup` address guard.** That guard
+(see "What is unauthenticated, on purpose" below) checks
+`request.client.host`, which behind a reverse proxy is always the proxy's
+own loopback or private address, never the real client's - so every caller
+who can reach the proxy passes it, including one on the public internet if
+the proxy itself is exposed there. Do not put an unconfigured hub behind a
+public-facing reverse proxy; set it up first, from the LAN or loopback,
+before putting it behind one. A caller on a carrier-grade NAT range such as
+`100.64.0.0/10` (this is where Tailscale addresses live) is refused by the
+guard itself, proxy or not: set the hub up from the LAN or loopback instead.
 
 ## What is unauthenticated, on purpose
 
