@@ -23,6 +23,7 @@ from app.db import close_databases, get_database
 from app.main import create_app
 from app.models import DashboardState
 from app.renderer.render import Renderer
+from app.settings import HubSettings
 from app.state import StateService
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
@@ -70,6 +71,15 @@ def settings(tmp_path_factory: pytest.TempPathFactory) -> Settings:
         HA_SOURCE="fixture",
         DEVICE_SOURCE="fixture",
     )
+
+
+@pytest.fixture(scope="session")
+def hub_settings(settings: Settings) -> HubSettings:
+    """A ``HubSettings`` built from the shared ``settings`` fixture, the same
+    way 1.2b will build one at startup. Unused by any test until 1.2b
+    switches call sites; it exists now so those tests do not also have to
+    add this fixture."""
+    return HubSettings.from_env(settings)
 
 
 @pytest.fixture(scope="session")

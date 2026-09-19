@@ -234,40 +234,56 @@ def _split(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def calendar_feeds(env: LegacyEnv) -> list[dict[str, str]]:
+def feed_rows(urls: str, names: str, colors: str) -> list[dict[str, str]]:
     """The three comma lists folded into one feed row per URL.
+
+    The pure core of :func:`calendar_feeds`, taking the three raw strings
+    directly rather than a :class:`LegacyEnv`, so ``app/settings.py:
+    HubSettings.from_env`` can call it with ``config.Settings`` fields without
+    either duplicating this logic or pretending a ``Settings`` is a
+    ``LegacyEnv``.
 
     A feed nobody named falls back to the URL host, then to its number, the
     way ``config.py:ics_calendar_name`` did; a feed nobody coloured takes the
     next colour of the default cycle, the way ``view.py`` did at render time.
     """
-    urls = _split(env.calendar_ics_urls)
-    names = _split(env.calendar_names)
-    colors = [item.lower() for item in _split(env.calendar_colors)]
+    url_list = _split(urls)
+    name_list = _split(names)
+    color_list = [item.lower() for item in _split(colors)]
     feeds: list[dict[str, str]] = []
-    for index, url in enumerate(urls):
-        if index < len(names):
-            name = names[index]
+    for index, url in enumerate(url_list):
+        if index < len(name_list):
+            name = name_list[index]
         else:
             name = urlparse(url).hostname or f"calendar {index + 1}"
         color = (
-            colors[index]
-            if index < len(colors)
+            color_list[index]
+            if index < len(color_list)
             else DEFAULT_CALENDAR_COLORS[index % len(DEFAULT_CALENDAR_COLORS)]
         )
         feeds.append({"url": url, "name": name, "color": color})
     return feeds
 
 
-def home_entities(env: LegacyEnv) -> list[dict[str, str]]:
-    """``HA_ENTITIES`` (a JSON object) as the ordered slot list the settings
-    form edits. An unset or unparseable value falls back to the defaults the
-    hub was actually rendering."""
-    raw = env.ha_entities_raw.strip()
+def calendar_feeds(env: LegacyEnv) -> list[dict[str, str]]:
+    """:func:`feed_rows` applied to one ``LegacyEnv``'s three comma lists."""
+    return feed_rows(env.calendar_ics_urls, env.calendar_names, env.calendar_colors)
+
+
+def entity_rows(raw: str) -> list[dict[str, str]]:
+    """``HA_ENTITIES`` (a JSON object, as a raw string) as the ordered slot
+    list the settings form edits. An unset or unparseable value falls back to
+    the defaults the hub was actually rendering.
+
+    The pure core of :func:`home_entities`, taking the raw string directly so
+    ``app/settings.py:HubSettings.from_env`` can call it with a
+    ``config.Settings`` field the same way :func:`calendar_feeds` does.
+    """
+    text = raw.strip()
     mapping: dict[str, str] = dict(DEFAULT_HA_ENTITIES)
-    if raw:
+    if text:
         try:
-            parsed: Any = json.loads(raw)
+            parsed: Any = json.loads(text)
         except json.JSONDecodeError:
             parsed = None
         if isinstance(parsed, dict):
@@ -275,6 +291,11 @@ def home_entities(env: LegacyEnv) -> list[dict[str, str]]:
         else:
             log(logger, logging.WARNING, "HA_ENTITIES is not a JSON object, using defaults")
     return [{"slot": slot, "entity_id": entity_id} for slot, entity_id in mapping.items()]
+
+
+def home_entities(env: LegacyEnv) -> list[dict[str, str]]:
+    """:func:`entity_rows` applied to one ``LegacyEnv``'s ``HA_ENTITIES``."""
+    return entity_rows(env.ha_entities_raw)
 
 
 def section_documents(env: LegacyEnv) -> dict[str, dict[str, Any]]:
@@ -582,6 +603,8 @@ def _import_settings(db: Database, env: LegacyEnv) -> None:
 __all__ = [
     "LegacyEnv",
     "calendar_feeds",
+    "entity_rows",
+    "feed_rows",
     "home_entities",
     "import_legacy",
     "pushed_source",
