@@ -175,6 +175,20 @@ def test_alert_default_duration_is_used_when_a_post_omits_its_own(admin: AdminHu
     assert state["alert"]["duration_seconds"] == 150
 
 
+def test_alert_default_duration_out_of_bounds_is_422(admin: AdminHub) -> None:
+    """``default_duration_seconds`` has to stay inside the same window as
+    ``AlertRequest.duration_seconds`` (models.py, ge=5, le=600): main.py
+    injects this value with ``model_copy``, which skips re-validation."""
+    response = admin.client.post(
+        "/settings/alert",
+        headers=admin.auth,
+        data={"default_duration_seconds": "0", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    assert admin.hub.hub_settings.alert.default_duration_seconds == 90
+
+
 def test_a_bad_timezone_comes_back_on_the_field_and_saves_nothing(admin: AdminHub) -> None:
     response = admin.client.post(
         "/settings/general",

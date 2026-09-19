@@ -17,6 +17,8 @@ class AlertSettings(BaseModel):
 
     default_duration_seconds: int = Field(
         default=90,
+        ge=5,
+        le=600,
         description="How long an alert stays on screen when it does not specify its own duration.",
     )
 
