@@ -389,12 +389,18 @@ def _cap_restore_length(request: Request) -> None:
     multipart parser reads a byte.
 
     Content-Length is a claim, not a fact, so it is only ever a fast refusal:
-    :func:`_stream_upload_to`'s counter is what actually decides, and it runs
-    whether or not the header was there (a chunked upload carries none).
+    :func:`_stream_upload_to`'s counter is what actually decides. A request
+    with no Content-Length (chunked, most often) is refused outright here
+    instead: ``request.form()`` no longer carries ``max_part_size=
+    MAX_RESTORE_BYTES`` (that only ever raised the *text*-field cap; a
+    starlette 1.6 file part is spooled to disk with no size check of its
+    own), so without a declared length there is nothing to stop the whole
+    body being read into a spooled temp file before the byte counter in
+    :func:`_stream_upload_to` ever sees it.
     """
     content_length = request.headers.get("content-length")
     if content_length is None:
-        return
+        raise HTTPException(status_code=411, detail="restore needs a Content-Length")
     try:
         declared_length = int(content_length)
     except ValueError:
@@ -1273,7 +1279,7 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         previous = hub.identity.config
         previous_device_key = "" if previous is None else previous.device_key_sha256
         try:
-            async with request.form(max_part_size=MAX_RESTORE_BYTES) as form:
+            async with request.form() as form:
                 upload = form.get("file")
                 if not isinstance(upload, UploadFile) or not upload.filename:
                     return _settings_html(
