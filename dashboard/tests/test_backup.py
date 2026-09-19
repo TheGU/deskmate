@@ -38,11 +38,19 @@ from app.backup import (
     backup_temp_path,
     inspect_backup,
 )
-from app.config import REPO_ROOT, Settings
+from app.config import REPO_ROOT, Env
 from app.db import DB_SCHEMA_VERSION, Database, get_database
 from app.hub_config import COOKIE_NAME, ClaimedSecrets, claim_hub, session_role, write_hub_config
 from app.main import _stream_upload_to, create_app
+from app.modules.ai_usage.settings import AIUsageSettings
+from app.modules.brief.settings import BriefSettings
+from app.modules.calendar.settings import CalendarSettings
+from app.modules.device.settings import DeviceSettings
+from app.modules.home.settings import HomeSettings
+from app.modules.tasks.settings import TasksSettings
+from app.modules.weather.settings import WeatherSettings
 from app.renderer.render import Renderer
+from app.settings import HubSettings
 from tests.conftest import run
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
@@ -54,20 +62,27 @@ def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def hub_settings(data_dir: Path) -> Settings:
-    return Settings(
+def hub_env(data_dir: Path) -> Env:
+    return Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
-        TASKS_SOURCE="fixture",
-        CALENDAR_SOURCE="fixture",
-        WEATHER_SOURCE="fixture",
-        AI_USAGE_SOURCE="fixture",
-        BRIEF_SOURCE="fixture",
-        HA_SOURCE="fixture",
-        DEVICE_SOURCE="fixture",
+    )
+
+
+def fixture_hub_settings() -> HubSettings:
+    """Seeded into a fresh hub's store (see ``create_app``'s docstring): every
+    source ``fixture``, the same story ``tests/conftest.py``'s session
+    fixture tells for the shared client."""
+    return HubSettings(
+        tasks=TasksSettings(source="fixture"),
+        calendar=CalendarSettings(source="fixture"),
+        weather=WeatherSettings(source="fixture"),
+        ai_usage=AIUsageSettings(source="fixture"),
+        brief=BriefSettings(source="fixture"),
+        home=HomeSettings(source="fixture"),
+        device=DeviceSettings(source="fixture"),
     )
 
 
@@ -75,8 +90,8 @@ class ClaimedHub:
     """One claimed hub: its app, a client, and the two plaintext secrets."""
 
     def __init__(self, data_dir: Path, name: str = "deskmate") -> None:
-        self.settings = hub_settings(data_dir)
-        self.app = create_app(self.settings)
+        self.env = hub_env(data_dir)
+        self.app = create_app(self.env, fixture_hub_settings())
         self.hub = self.app.state.hub
         self.client = TestClient(self.app)
         self.secrets: ClaimedSecrets = asyncio.run(
@@ -171,7 +186,7 @@ def test_backup_leaves_no_temp_file_behind(hub: ClaimedHub) -> None:
     """The VACUUM INTO target is deleted by the response's background task,
     so DATA_DIR holds nothing but the live database and its sidecars."""
     assert hub.client.post("/settings/backup", headers=auth(hub.token)).status_code == 200
-    leftovers = sorted(p.name for p in hub.settings.data_dir.glob("*.sqlite-tmp"))
+    leftovers = sorted(p.name for p in hub.env.data_dir.glob("*.sqlite-tmp"))
     assert leftovers == []
 
 
@@ -201,7 +216,7 @@ def assert_untouched(hub: ClaimedHub, response_status: int, response_text: str) 
     assert "Settings" in response_text
     assert hub.hub.identity.verify_token(hub.token) is True
     assert hub.hub.identity.verify_device_key(hub.device_key) is True
-    assert sorted(p.name for p in hub.settings.data_dir.glob("*.sqlite-tmp")) == []
+    assert sorted(p.name for p in hub.env.data_dir.glob("*.sqlite-tmp")) == []
 
 
 def test_restore_refuses_a_file_that_is_not_sqlite(hub: ClaimedHub, tmp_path: Path) -> None:
@@ -308,7 +323,7 @@ def test_restore_over_the_cap_is_413(
 
     assert response.status_code == 413
     assert hub.hub.identity.verify_token(hub.token) is True
-    assert sorted(p.name for p in hub.settings.data_dir.glob("*.sqlite-tmp")) == []
+    assert sorted(p.name for p in hub.env.data_dir.glob("*.sqlite-tmp")) == []
     assert MAX_RESTORE_BYTES == 64 * 1024 * 1024
 
 
@@ -346,7 +361,7 @@ def test_restore_with_no_declared_length_is_still_capped(
 
     assert response.status_code == 413
     assert hub.hub.identity.verify_token(hub.token) is True
-    assert sorted(p.name for p in hub.settings.data_dir.glob("*.sqlite-tmp")) == []
+    assert sorted(p.name for p in hub.env.data_dir.glob("*.sqlite-tmp")) == []
 
 
 def test_the_upload_counter_refuses_past_the_cap(
@@ -407,7 +422,7 @@ def test_restore_swaps_the_database_and_reloads(hub: ClaimedHub, tmp_path: Path)
 
     # Nothing left over: the server's copy of the upload was moved into
     # place, not left beside the database.
-    assert sorted(p.name for p in hub.settings.data_dir.glob("*.sqlite-tmp")) == []
+    assert sorted(p.name for p in hub.env.data_dir.glob("*.sqlite-tmp")) == []
 
     # Every cookie this hub signed is dead, the admin's own included.
     stale = TestClient(hub.app, cookies={COOKIE_NAME: admin_cookie})
@@ -599,4 +614,4 @@ def test_get_database_is_untouched_by_a_restore(hub: ClaimedHub, tmp_path: Path)
         **upload(backup),
     )
     assert response.status_code == 303
-    assert get_database(hub.settings.hub_db_file) is hub.hub.db
+    assert get_database(hub.env.hub_db_file) is hub.hub.db

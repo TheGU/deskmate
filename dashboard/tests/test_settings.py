@@ -1,51 +1,37 @@
 """Section models, ``HubSettings``, and the store that persists them.
 
-``test_defaults.py`` already asserts the seven ``*_SOURCE`` env defaults are
-the live selectors on ``config.py:Settings``; the tests below assert the same
-rule where it will actually live once 1.2b and 1.2c switch call sites: on the
-section models themselves.
+``test_defaults.py`` asserts the honest-empty-state guarantee end to end
+(every adapter still resolves to something against an empty ``DATA_DIR``);
+the tests below assert the narrower rule the section models and the store
+carry on their own: no section defaults to ``fixture``, every default
+matches what the hub has always shipped, and a saved section round-trips
+exactly, including through a live ``Hub.reload()``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.config import DEFAULT_HA_ENTITIES, Settings
-from app.db import Database
-from app.legacy import LegacyEnv, import_legacy
+from app.config import DEFAULT_HA_ENTITIES, Env
+from app.db import Database, close_databases
+from app.main import create_app
 from app.modules.calendar.settings import CalendarSettings, Feed
 from app.modules.general.settings import GeneralSettings
 from app.modules.home.settings import HomeSettings
+from app.modules.tasks.settings import TasksSettings
+from app.modules.weather.settings import WeatherSettings
 from app.settings import SECTIONS, HubSettings, SettingsStore
 
 
-#: Every variable a from_env test builds ``LegacyEnv``/``Settings`` from,
-#: cleared first so a developer's shell cannot leak into either side of the
-#: comparison (the same guard ``tests/test_legacy.py`` uses).
-_FROM_ENV_VARS = (
-    "TIMEZONE",
-    "UNITS",
-    "TASKS_SOURCE",
-    "CALENDAR_ICS_URLS",
-    "CALENDAR_NAMES",
-    "CALENDAR_COLORS",
-    "AI_USAGE_SOURCE",
-    "BRIEF_SOURCE",
-    "HA_URL",
-    "HA_TOKEN",
-    "HA_ENTITIES",
-)
-
-
-@pytest.fixture()
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in _FROM_ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
+def auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture()
@@ -72,9 +58,9 @@ def test_no_section_default_source_is_fixture() -> None:
 
 
 def test_defaults_match_todays_config_defaults() -> None:
-    """Every default below is the same value ``config.py:Settings`` ships,
-    so a fresh hub behaves exactly as an unconfigured ``.env`` deployment
-    did."""
+    """Every default below is the same value the hub has always shipped, so
+    a fresh hub with an empty settings store behaves exactly as an
+    unconfigured ``.env`` deployment used to."""
     hub = HubSettings()
     assert hub.general.timezone == "Asia/Bangkok"
     assert hub.general.units == "metric"
@@ -218,60 +204,61 @@ def test_secret_str_round_trips_through_the_store(
 
 
 # ---------------------------------------------------------------------------
-# from_env
+# the store is the source of HubSettings (1.2c)
 # ---------------------------------------------------------------------------
-def test_from_env_maps_the_same_way_legacy_import_does(
-    tmp_path: Path, database: Database, clean_env: None
-) -> None:
-    env = LegacyEnv(
-        _env_file=None,
-        TIMEZONE="Europe/Berlin",
-        CALENDAR_ICS_URLS="https://a.example/work.ics",
-        HA_URL="http://ha.lan:8123",
-        HA_TOKEN="ha-secret",
-    )
-    import_legacy(database, env, tmp_path / "data")
-    imported = SettingsStore(database)
+def test_config_settings_no_longer_exists() -> None:
+    """1.2c deletes ``config.py:Settings``, ``get_settings`` and
+    ``reset_settings_cache`` along with ``HubSettings.from_env``: the store is
+    the only source of a running hub's settings now."""
+    import app.config as config_module
 
-    settings = Settings(
-        _env_file=None,
-        TIMEZONE="Europe/Berlin",
-        CALENDAR_ICS_URLS="https://a.example/work.ics",
-        HA_URL="http://ha.lan:8123",
-        HA_TOKEN="ha-secret",
-    )
-    from_env = HubSettings.from_env(settings)
-
-    assert from_env.general == imported.load("general")
-    assert from_env.calendar.model_dump(mode="json") == imported.load(
-        "calendar"
-    ).model_dump(mode="json")
-    assert from_env.home.model_dump(mode="json") == imported.load("home").model_dump(
-        mode="json"
-    )
-    assert from_env.home.token.get_secret_value() == "ha-secret"
+    assert not hasattr(config_module, "Settings")
+    assert not hasattr(config_module, "get_settings")
+    assert not hasattr(config_module, "reset_settings_cache")
+    assert not hasattr(HubSettings, "from_env")
 
 
-def test_from_env_maps_pushed_sources_the_same_way(tmp_path: Path, clean_env: None) -> None:
-    settings = Settings(
-        _env_file=None,
-        DATA_DIR=tmp_path,
-        TASKS_SOURCE="auto",
-        AI_USAGE_SOURCE="file",
-        BRIEF_SOURCE="auto",
-    )
-    hub = HubSettings.from_env(settings)
-    assert hub.tasks.source == "push"
-    assert hub.ai_usage.source == "push"
-    assert hub.brief.source == "push"
+def test_reload_serves_a_section_saved_directly_through_the_store(tmp_path: Path) -> None:
+    """The plan's headline behavior for 1.2c: ``SettingsStore`` is the source
+    of ``HubSettings``, so a section saved straight on the store - never
+    handed to ``create_app`` as a seed - is what the next ``Hub.reload()``
+    serves, and what ``/healthz`` and ``/api/hub`` report from their
+    snapshot."""
+    env = Env(_env_file=None, DATA_DIR=tmp_path, LOG_LEVEL="WARNING")
+    app = create_app(env)
+    try:
+        with TestClient(app) as client:
+            hub = client.app.state.hub
+            token = asyncio.run(
+                hub.identity.claim(name="deskmate", base_url="http://dashboard-hub.lan:8080")
+            ).token
+
+            hub.settings_store.save("weather", WeatherSettings(source="fixture"))
+            hub.settings_store.save("tasks", TasksSettings(source="fixture"))
+            asyncio.run(hub.reload())
+
+            healthz = client.get("/healthz", headers=auth(token)).json()
+            assert healthz["adapters"]["weather"]["source"] == "fixture"
+
+            hub_info = client.get("/api/hub", headers=auth(token)).json()
+            assert hub_info["sources"]["tasks"]["source"] == "fixture"
+    finally:
+        close_databases()
 
 
-def test_from_env_default_entities_when_ha_entities_unset(
-    tmp_path: Path, clean_env: None
-) -> None:
-    settings = Settings(_env_file=None, DATA_DIR=tmp_path)
-    hub = HubSettings.from_env(settings)
-    assert hub.home.entity_map() == DEFAULT_HA_ENTITIES
+def test_create_apps_seed_never_overwrites_a_row_the_store_already_has(tmp_path: Path) -> None:
+    """``create_app(env, hub_settings=...)``'s seed is for a fresh store
+    only: once a section has a row (here, from the first start's seed
+    itself), a later seed for that same section must not clobber it."""
+    env = Env(_env_file=None, DATA_DIR=tmp_path, LOG_LEVEL="WARNING")
+    try:
+        first = create_app(env, HubSettings(general=GeneralSettings(timezone="Europe/Berlin")))
+        assert first.state.hub.hub_settings.general.timezone == "Europe/Berlin"
+
+        second = create_app(env, HubSettings(general=GeneralSettings(timezone="Asia/Tokyo")))
+        assert second.state.hub.hub_settings.general.timezone == "Europe/Berlin"
+    finally:
+        close_databases()
 
 
 # ---------------------------------------------------------------------------

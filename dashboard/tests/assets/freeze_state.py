@@ -22,8 +22,17 @@ This writes two files next to this script:
 
 ``dashboard/tests/test_render_gate.py`` re-renders every page from
 ``frozen-state.json`` and asserts its hash still matches ``frozen-hashes.json``.
-Re-run this script only when a change to the rendered pixels is intended;
-otherwise a mismatch is a regression to fix, not a hash to refresh.
+Re-run this script with no flag only when a change to the rendered pixels is
+intended; otherwise a mismatch there is a regression to fix, not a hash to
+refresh.
+
+Pass ``--check`` instead to prove the script still works (the point of
+running it at all outside of an intentional pixel change) without touching
+either committed file: it builds the state and renders every page the same
+way, then compares against what is already on disk instead of writing.
+Every page except ``system`` is compared byte-for-byte; ``system`` is
+compared only for freshness of its adapters, never its hash, for the reason
+in the note below.
 
 Note: this script is not itself idempotent across runs. The device block's
 fixture (app/adapters/device.py's ``load_device_fixture``) deliberately
@@ -34,11 +43,14 @@ of this script even though every timestamp on ``DashboardState`` itself is
 pinned above. That is fine for what this script is for: it freezes one
 snapshot to disk once, and everything downstream (the render gate) only ever
 renders that already-frozen, unchanging state, which is what makes the gate
-itself byte-for-byte reproducible.
+itself byte-for-byte reproducible. It is also why ``--check`` cannot compare
+the ``system`` page's hash against the committed one: a fresh run's device
+history is never the same as the one already frozen on disk, by design.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import hashlib
 import json
@@ -56,11 +68,20 @@ if str(DASHBOARD_DIR) not in sys.path:
     sys.path.insert(0, str(DASHBOARD_DIR))
 
 from app.alerts import AlertStore  # noqa: E402
-from app.config import REPO_ROOT, Settings  # noqa: E402
+from app.config import REPO_ROOT, Env  # noqa: E402
+from app.db import close_databases, get_database  # noqa: E402
 from app.models import DashboardState  # noqa: E402
+from app.modules.ai_usage.settings import AIUsageSettings  # noqa: E402
+from app.modules.brief.settings import BriefSettings  # noqa: E402
+from app.modules.calendar.settings import CalendarSettings  # noqa: E402
+from app.modules.device.settings import DeviceSettings  # noqa: E402
+from app.modules.general.settings import GeneralSettings  # noqa: E402
+from app.modules.home.settings import HomeSettings  # noqa: E402
+from app.modules.tasks.settings import TasksSettings  # noqa: E402
+from app.modules.weather.settings import WeatherSettings  # noqa: E402
 from app.renderer.render import PAGES, Renderer  # noqa: E402
+from app.settings import HubSettings  # noqa: E402
 from app.state import StateService  # noqa: E402
-from app.telemetry import close_telemetry_stores  # noqa: E402
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 ASSETS_DIR = Path(__file__).resolve().parent
@@ -72,26 +93,37 @@ HASHES_PATH = ASSETS_DIR / "frozen-hashes.json"
 #: value carries no meaning beyond being fixed.
 FROZEN_AT = datetime.fromisoformat("2026-09-19T09:00:00+07:00")
 
+#: The page whose rendered hash is never compared in --check: it draws the
+#: device block, whose fixture is wall-clock dependent (see module docstring).
+_WALL_CLOCK_DEPENDENT_PAGE = "system"
 
-def _settings(data_dir: Path) -> Settings:
-    """Same fixture settings as ``tests/conftest.py``'s session fixture,
+
+def _env(data_dir: Path) -> Env:
+    """Same environment knobs as ``tests/conftest.py``'s session fixture,
     except ``FIXTURE_RELATIVE_DATES=False``: the gate wants the literal
     fixture dates, not dates shifted to whatever day this script runs on.
     """
-    return Settings(
+    return Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         FIXTURE_RELATIVE_DATES=False,
         LOG_LEVEL="WARNING",
-        TASKS_SOURCE="fixture",
-        CALENDAR_SOURCE="fixture",
-        WEATHER_SOURCE="fixture",
-        AI_USAGE_SOURCE="fixture",
-        BRIEF_SOURCE="fixture",
-        HA_SOURCE="fixture",
-        DEVICE_SOURCE="fixture",
+    )
+
+
+def _hub_settings() -> HubSettings:
+    """Every source ``fixture``, the same story ``tests/conftest.py``'s
+    session ``hub_settings`` fixture tells for the shared renderer/state."""
+    return HubSettings(
+        general=GeneralSettings(timezone="Asia/Bangkok"),
+        tasks=TasksSettings(source="fixture"),
+        calendar=CalendarSettings(source="fixture"),
+        weather=WeatherSettings(source="fixture"),
+        ai_usage=AIUsageSettings(source="fixture"),
+        brief=BriefSettings(source="fixture"),
+        home=HomeSettings(source="fixture"),
+        device=DeviceSettings(source="fixture"),
     )
 
 
@@ -106,31 +138,34 @@ def _freeze_timestamps(state: DashboardState) -> DashboardState:
     return state.model_copy(update={"generated_at": FROZEN_AT, **frozen_blocks})
 
 
-async def _build_frozen_state(settings: Settings) -> DashboardState:
-    alerts = AlertStore(settings.alert_file, settings.timezone)
-    service = StateService(settings, alerts)
+async def _build_frozen_state(env: Env, hub_settings: HubSettings) -> DashboardState:
+    database = get_database(env.hub_db_file)
+    database.migrate()
+    alerts = AlertStore(database, hub_settings.general.timezone)
+    service = StateService(hub_settings, env, alerts)
     state = await service.build(force=True)
     return _freeze_timestamps(state)
 
 
-def _write_state(state: DashboardState) -> None:
-    payload = state.model_dump_json(indent=2)
-    STATE_PATH.write_text(payload + "\n", encoding="utf-8")
-
+def _dump_and_round_trip(state: DashboardState) -> str:
+    payload = state.model_dump_json(indent=2) + "\n"
     # Confirm the JSON round-trips: a change to models.py that makes a Block
     # subclass lose fields on the way back through model_validate_json would
-    # otherwise pass silently, since the DashboardState written above is never
-    # compared against anything else.
+    # otherwise pass silently, since the state built above is never compared
+    # against anything else in the write path.
     reloaded = DashboardState.model_validate_json(payload)
     if reloaded != state:
         raise RuntimeError(
-            "frozen-state.json does not round-trip: "
+            "the freshly built state does not round-trip: "
             "DashboardState.model_validate_json(...) != the model that produced it"
         )
+    return payload
 
 
-async def _render_hashes(settings: Settings, state: DashboardState) -> dict[str, str]:
-    renderer = Renderer(settings)
+async def _render_hashes(
+    env: Env, hub_settings: HubSettings, state: DashboardState
+) -> dict[str, str]:
+    renderer = Renderer(env, hub_settings)
     await renderer.start()
     try:
         hashes: dict[str, str] = {}
@@ -142,25 +177,86 @@ async def _render_hashes(settings: Settings, state: DashboardState) -> dict[str,
         await renderer.close()
 
 
-async def _main() -> None:
+async def _build(data_dir: Path) -> tuple[str, dict[str, str]]:
+    env = _env(data_dir)
+    hub_settings = _hub_settings()
+    try:
+        state = await _build_frozen_state(env, hub_settings)
+        payload = _dump_and_round_trip(state)
+        hashes = await _render_hashes(env, hub_settings, state)
+    finally:
+        # The database (and, through it, the fixture device adapter's
+        # telemetry check) is process-wide and keyed by path; close it before
+        # the temp directory is removed, or Windows refuses to delete a file
+        # that is still open.
+        close_databases()
+    return payload, hashes
+
+
+async def _check() -> int:
+    """Build fresh and compare against what is already committed, changing
+    nothing on disk. See the module docstring for why ``system`` is excluded
+    from the hash comparison.
+    """
     with tempfile.TemporaryDirectory() as tmp:
-        settings = _settings(Path(tmp))
-        try:
-            state = await _build_frozen_state(settings)
-            _write_state(state)
-            hashes = await _render_hashes(settings, state)
-        finally:
-            # The fixture device adapter still opens the (empty) telemetry
-            # sqlite file under DATA_DIR to check for pushed samples; close it
-            # before the temp directory is removed, or Windows refuses to
-            # delete a file that is still open.
-            close_telemetry_stores()
+        payload, hashes = await _build(Path(tmp))
 
+    ok = True
+
+    expected_payload = STATE_PATH.read_text(encoding="utf-8")
+    if payload != expected_payload:
+        print(
+            "frozen-state.json would differ from a fresh build "
+            "(expected for the wall-clock-dependent device block; "
+            "unexpected for anything else - diff the two payloads by hand)",
+            file=sys.stderr,
+        )
+        ok = False
+
+    expected_hashes = json.loads(HASHES_PATH.read_text(encoding="utf-8"))
+    for page in PAGES:
+        if page == _WALL_CLOCK_DEPENDENT_PAGE:
+            print(f"{page}: skipped (wall-clock dependent, see module docstring)")
+            continue
+        if hashes[page] != expected_hashes.get(page):
+            print(
+                f"{page}: hash mismatch (got {hashes[page]}, "
+                f"expected {expected_hashes.get(page)})",
+                file=sys.stderr,
+            )
+            ok = False
+        else:
+            print(f"{page}: matches frozen-hashes.json")
+
+    if ok:
+        print("freeze_state.py --check: still builds a matching state and PNGs")
+        return 0
+    return 1
+
+
+async def _write() -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        payload, hashes = await _build(Path(tmp))
+
+    STATE_PATH.write_text(payload, encoding="utf-8")
     HASHES_PATH.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
     for page in PAGES:
         print(f"{page}: {hashes[page]}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="render and compare against the committed frozen assets instead of writing them",
+    )
+    args = parser.parse_args()
+    if args.check:
+        return asyncio.run(_check())
+    return asyncio.run(_write())
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    raise SystemExit(main())
