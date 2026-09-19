@@ -4,12 +4,13 @@ check, claim_hub, the session cookie."""
 from __future__ import annotations
 
 import asyncio
-import json
+from collections.abc import Iterator
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 
 import pytest
 
+from app.db import Database
 from app.hub_config import (
     AlreadyConfigured,
     ClaimedSecrets,
@@ -29,6 +30,26 @@ from app.hub_config import (
     validate_base_url,
     write_hub_config,
 )
+
+
+@pytest.fixture()
+def database(tmp_path: Path) -> Iterator[Database]:
+    instance = Database(tmp_path / "deskmate.sqlite")
+    instance.migrate()
+    yield instance
+    instance.close()
+
+
+def corrupt_the_hub_row(database: Database) -> None:
+    """A row that is present but cannot be trusted: ``created_at`` is not a
+    timestamp. Present-but-broken must never read as "unconfigured"."""
+    with database.writing() as connection:
+        connection.execute(
+            "INSERT INTO hub (id, name, base_url, token_sha256, device_key_sha256,"
+            " session_secret, created_at) VALUES (1, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET created_at = excluded.created_at",
+            ("deskmate", "http://dashboard-hub.lan:8080", "x", "y", "s", "not-a-timestamp"),
+        )
 
 
 @pytest.mark.parametrize(
@@ -134,98 +155,62 @@ def test_claim_hub_succeeds_and_only_the_hash_is_kept() -> None:
     assert config.session_secret and len(config.session_secret) > 20
 
 
-def test_write_and_load_hub_config_round_trip(tmp_path: Path) -> None:
-    path = tmp_path / "hub.json"
+def test_write_and_load_hub_config_round_trip(database: Database) -> None:
     config, _token, _device_key = claim_hub(
         existing=None,
         name="deskmate",
         base_url="http://dashboard-hub.lan:8080",
     )
-    write_hub_config(path, config)
-    loaded = load_hub_config(path)
-    assert loaded == config
-    stored_text = path.read_text(encoding="utf-8")
-    assert '"session_secret"' in stored_text
-    assert '"device_key_sha256"' in stored_text
+    write_hub_config(database, config)
+    assert load_hub_config(database) == config
 
 
-def test_write_hub_config_is_atomic_and_leaves_no_tmp_file(tmp_path: Path) -> None:
-    path = tmp_path / "hub.json"
-    write_hub_config(path, _config())
-    leftovers = list(tmp_path.glob("*.tmp"))
-    assert leftovers == []
-    assert path.is_file()
+def test_write_hub_config_replaces_the_single_row(database: Database) -> None:
+    """``hub`` holds exactly one row, id 1: a second write is an update, not
+    a second identity sitting next to the first."""
+    write_hub_config(database, _config(token_sha256="first"))
+    write_hub_config(database, _config(token_sha256="second"))
+    with database.reading() as connection:
+        rows = connection.execute("SELECT id, token_sha256 FROM hub").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["id"] == 1
+    assert rows[0]["token_sha256"] == "second"
 
 
-def test_load_hub_config_returns_none_when_absent(tmp_path: Path) -> None:
-    """Absent means unconfigured: a fresh install, safe to hand out a claim code."""
-    assert load_hub_config(tmp_path / "missing.json") is None
+def test_load_hub_config_returns_none_when_the_row_is_absent(database: Database) -> None:
+    """Absent means unconfigured: a fresh install, safe to claim."""
+    assert load_hub_config(database) is None
 
 
-def test_load_hub_config_raises_for_corrupt_json(tmp_path: Path) -> None:
+def test_load_hub_config_raises_for_a_corrupt_row(database: Database) -> None:
     """Present but broken is not the same as absent: it must not be treated
-    as a fresh install (that would hand out a claim code next to a hub.json
-    nobody can read)."""
-    path = tmp_path / "hub.json"
-    path.write_text("{ not json", encoding="utf-8")
+    as a fresh install (that would mint a fresh token and device key next to
+    an identity nobody can read)."""
+    corrupt_the_hub_row(database)
     with pytest.raises(HubConfigUnreadable):
-        load_hub_config(path)
-
-
-def test_load_hub_config_raises_for_a_missing_key(tmp_path: Path) -> None:
-    """Schema matches, but a required key is missing - the from_json path,
-    not the schema-1 path (which has its own test above)."""
-    path = tmp_path / "hub.json"
-    path.write_text(json.dumps({"schema": 2, "name": "deskmate"}), encoding="utf-8")
-    with pytest.raises(HubConfigUnreadable):
-        load_hub_config(path)
-
-
-def test_load_hub_config_raises_for_the_wrong_schema(tmp_path: Path) -> None:
-    path = tmp_path / "hub.json"
-    config = _config()
-    payload = {**config.to_json(), "schema": 3}
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(HubConfigUnreadable):
-        load_hub_config(path)
-
-
-def test_load_hub_config_raises_a_pointed_message_for_schema_1(tmp_path: Path) -> None:
-    """Schema 1 predates the read key: there is no device key or session
-    secret to migrate, only a config to redo. The detail must send an
-    operator to /setup, not "fix the JSON"."""
-    path = tmp_path / "hub.json"
-    payload = {
-        "schema": 1,
-        "name": "deskmate",
-        "base_url": "http://dashboard-hub.lan:8080",
-        "token_sha256": "x",
-        "created_at": datetime.now(tz=dt_timezone.utc).isoformat(),
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(HubConfigUnreadable, match="/setup"):
-        load_hub_config(path)
+        load_hub_config(database)
 
 
 # -- HubIdentity: startup state and the claim race --------------------------
-def test_identity_with_an_unreadable_config_is_unconfigured_with_an_error(tmp_path: Path) -> None:
-    path = tmp_path / "hub.json"
-    path.write_text("{ not json", encoding="utf-8")
-    identity = HubIdentity(path)
+def test_identity_with_an_unreadable_config_is_unconfigured_with_an_error(
+    database: Database,
+) -> None:
+    corrupt_the_hub_row(database)
+    identity = HubIdentity(database)
     assert identity.configured is False
     assert identity.error is not None
-    assert str(path) in identity.error
+    assert str(database.path) in identity.error
 
 
-def test_identity_with_no_hub_json_is_unconfigured(tmp_path: Path) -> None:
-    identity = HubIdentity(tmp_path / "hub.json")
+def test_identity_with_no_hub_row_is_unconfigured(database: Database) -> None:
+    identity = HubIdentity(database)
     assert identity.configured is False
     assert identity.error is None
 
 
-def test_concurrent_claims_issue_exactly_one_token(tmp_path: Path) -> None:
+def test_concurrent_claims_issue_exactly_one_token(database: Database) -> None:
     async def scenario() -> None:
-        identity = HubIdentity(tmp_path / "hub.json")
+        identity = HubIdentity(database)
         results = await asyncio.gather(
             identity.claim(name="first", base_url="http://a.lan:8080"),
             identity.claim(name="second", base_url="http://b.lan:8080"),
@@ -239,6 +224,17 @@ def test_concurrent_claims_issue_exactly_one_token(tmp_path: Path) -> None:
         assert identity.configured is True
 
     asyncio.run(scenario())
+
+
+def test_a_claim_is_what_a_fresh_identity_reads_back(database: Database) -> None:
+    """The claim writes the row; a second HubIdentity over the same database
+    (what ``Hub.reload()`` builds) verifies the same token."""
+    identity = HubIdentity(database)
+    secrets = asyncio.run(identity.claim(name="deskmate", base_url="http://a.lan:8080"))
+    reloaded = HubIdentity(database)
+    assert reloaded.configured is True
+    assert reloaded.verify_token(secrets.token) is True
+    assert reloaded.verify_device_key(secrets.device_key) is True
 
 
 # -- session cookie -----------------------------------------------------

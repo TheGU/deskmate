@@ -1,15 +1,19 @@
-"""Hub identity: ``hub.json``, the bearer token, the device key, the
+"""Hub identity: the ``hub`` row, the bearer token, the device key, the
 browser session cookie, and the auth dependencies built on top of them.
 
-``hub.json`` lives in ``DATA_DIR`` (gitignored) and holds ``{"schema": 2,
-"name", "base_url", "token_sha256", "device_key_sha256", "session_secret",
-"created_at"}``. Only the token's and the device key's SHA-256 hex digests
-are ever written to disk; the plaintext values are shown once, on the
-setup-done page, and are not recoverable. ``session_secret`` is stored in
-plaintext (it never leaves the server; it only signs the browser session
-cookie). Losing any of this means stopping the container, deleting
-``data/hub.json``, and running ``/setup`` again: there is no edit or
-regenerate mode.
+The identity lives in the hub's one database (``DATA_DIR/deskmate.sqlite``,
+see ``app/db.py``) as the single row of the ``hub`` table: ``{name, base_url,
+token_sha256, device_key_sha256, session_secret, created_at}``. Only the
+token's and the device key's SHA-256 hex digests are ever stored; the
+plaintext values are shown once, on the setup-done page, and are not
+recoverable. ``session_secret`` is stored in plaintext (it never leaves the
+server; it only signs the browser session cookie). Losing any of this means
+stopping the container, deleting ``data/deskmate.sqlite``, and running
+``/setup`` again: there is no edit or regenerate mode yet.
+
+An install from before the database read ``data/hub.json``. That file is
+imported once by ``app/legacy.py`` and then left alone, which is the only
+thing :data:`HUB_CONFIG_SCHEMA` and :meth:`HubConfig.from_json` are still for.
 
 There is no claim code: the first ``POST /setup`` to reach an unconfigured
 hub claims it, first come first served. The only guard is the caller's
@@ -19,9 +23,9 @@ start, on this machine's own network.
 
 The functions below are pure (token generation, hashing, base URL
 validation, the private-address check, the claim decision, the session
-cookie mint/verify) or plain synchronous file I/O (``load_hub_config`` /
+cookie mint/verify) or plain synchronous database I/O (``load_hub_config`` /
 ``write_hub_config``), so a test can drive every rule with nothing more
-than a temp path. :class:`HubIdentity` is the thin, stateful wrapper
+than a temp database. :class:`HubIdentity` is the thin, stateful wrapper
 ``main.py`` holds for the life of the process.
 """
 
@@ -31,15 +35,12 @@ import asyncio
 import hashlib
 import hmac
 import ipaddress
-import json
 import logging
-import os
 import secrets
-import tempfile
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -47,6 +48,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
+from app.db import Database
 from app.logging_setup import log
 
 logger = logging.getLogger("app.hub_config")
@@ -68,6 +70,9 @@ _bearer_scheme = HTTPBearer(
 COOKIE_NAME = "deskmate_session"
 SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
+#: The ``schema`` number the old ``data/hub.json`` carried. Read only by the
+#: legacy import in ``app/legacy.py``; the ``hub`` row has no schema of its
+#: own (``meta.db_schema_version`` in ``app/db.py`` numbers the database).
 HUB_CONFIG_SCHEMA = 2
 
 
@@ -76,7 +81,7 @@ class HubConfigError(Exception):
 
 
 class AlreadyConfigured(HubConfigError):
-    """``hub.json`` already exists; there is no edit or regenerate mode."""
+    """The ``hub`` row already exists; there is no edit or regenerate mode."""
 
 
 class InvalidBaseURL(HubConfigError):
@@ -84,18 +89,27 @@ class InvalidBaseURL(HubConfigError):
 
 
 class HubConfigUnreadable(HubConfigError):
-    """``hub.json`` exists but cannot be trusted: bad JSON, a missing key, a
-    schema other than the current one, or (the schema-1 case) a file written
-    before the read key existed. Distinct from "absent" (which means
-    unconfigured): a present-but-broken file must never be treated as a
+    """The ``hub`` row exists but cannot be trusted: a missing value, or a
+    ``created_at`` that is not a timestamp. Distinct from "absent" (which
+    means unconfigured): a present-but-broken row must never be treated as a
     fresh install, or the hub would accept a new ``POST /setup`` and mint a
-    fresh token and device key next to a config file nobody can read.
+    fresh token and device key next to a config nobody can read.
+
+    The legacy import raises it for the same reason against a ``hub.json``
+    that is bad JSON, missing a key, or at a schema other than
+    :data:`HUB_CONFIG_SCHEMA` (the schema-1 case, a file written before the
+    read key existed, gets its own message: there is nothing to migrate).
     """
 
 
 @dataclass(frozen=True, slots=True)
 class HubConfig:
-    """The on-disk shape of ``hub.json``."""
+    """The hub's identity: one ``hub`` row, or one legacy ``hub.json``.
+
+    :meth:`to_json` and :meth:`from_json` describe that legacy file, not the
+    row; they survive because ``app/legacy.py`` reads ``hub.json`` once at
+    the first start after the upgrade.
+    """
 
     name: str
     base_url: str
@@ -263,54 +277,75 @@ def session_cookie_valid(session_secret: str, value: str, now: float) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# File I/O (synchronous; call through run_in_threadpool from async code)
+# Database I/O (synchronous; call through run_in_threadpool from async code)
 # ---------------------------------------------------------------------------
-def load_hub_config(path: Path) -> HubConfig | None:
-    """Read ``hub.json``.
+_HUB_COLUMNS = (
+    "name",
+    "base_url",
+    "token_sha256",
+    "device_key_sha256",
+    "session_secret",
+    "created_at",
+)
 
-    Returns ``None`` only when the file is absent: that means unconfigured,
-    and the next ``POST /setup`` to arrive claims the hub. When the file
-    exists but is corrupt JSON, not an object, missing a key, or ``schema``
-    does not match :data:`HUB_CONFIG_SCHEMA`, this raises
-    :class:`HubConfigUnreadable` instead of returning ``None`` - silently
-    treating a broken file as "unconfigured" would let a new ``POST /setup``
-    mint a fresh token and device key next to a config nobody can read. A
-    file at schema 1 (from before the read key existed, so it has no device
-    key or session secret to serve reads with) gets its own detail: there is
-    nothing to migrate, only to redo.
+
+def load_hub_config(db: Database) -> HubConfig | None:
+    """Read the single ``hub`` row (id 1).
+
+    Returns ``None`` only when the row is absent: that means unconfigured,
+    and the next ``POST /setup`` to arrive claims the hub. When the row is
+    there but a value is missing or ``created_at`` does not parse, this
+    raises :class:`HubConfigUnreadable` instead of returning ``None`` -
+    silently treating a broken row as "unconfigured" would let a new
+    ``POST /setup`` mint a fresh token and device key next to an identity
+    nobody can read.
     """
-    if not path.is_file():
+    with db.reading() as connection:
+        row = connection.execute(
+            "SELECT " + ", ".join(_HUB_COLUMNS) + " FROM hub WHERE id = 1"
+        ).fetchone()
+    if row is None:
         return None
-    message = f"hub config unreadable: {path}, fix or delete it"
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HubConfigUnreadable(message) from exc
-    if not isinstance(payload, dict):
-        raise HubConfigUnreadable(message)
-    schema = payload.get("schema")
-    if schema == 1:
-        raise HubConfigUnreadable(
-            "hub.json is schema 1, from before the read key; stop the container, "
-            "delete data/hub.json and run /setup again"
-        )
-    if schema != HUB_CONFIG_SCHEMA:
+    message = f"hub config unreadable in {db.path}, fix or delete the database"
+    values = dict(row)
+    if any(values.get(name) in (None, "") for name in _HUB_COLUMNS):
         raise HubConfigUnreadable(message)
     try:
-        return HubConfig.from_json(payload)
-    except (KeyError, ValueError) as exc:
+        created_at = datetime.fromisoformat(str(values["created_at"]))
+    except ValueError as exc:
         raise HubConfigUnreadable(message) from exc
-
-
-def write_hub_config(path: Path, config: HubConfig) -> None:
-    """Atomic: a temp file in the same directory, then ``os.replace``."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"
+    return HubConfig(
+        name=str(values["name"]),
+        base_url=str(values["base_url"]),
+        token_sha256=str(values["token_sha256"]),
+        device_key_sha256=str(values["device_key_sha256"]),
+        session_secret=str(values["session_secret"]),
+        created_at=created_at,
     )
-    with handle:
-        json.dump(config.to_json(), handle, indent=2)
-    os.replace(handle.name, path)
+
+
+def write_hub_config(db: Database, config: HubConfig) -> None:
+    """Write the single ``hub`` row (id 1), replacing whatever was there.
+
+    One statement inside one committed transaction, which is the whole
+    reason identity moved out of a JSON file: no temp file, no rename, no
+    window where the file is half a config.
+    """
+    with db.writing() as connection:
+        connection.execute(
+            "INSERT INTO hub (id, " + ", ".join(_HUB_COLUMNS) + ")"
+            " VALUES (1, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET "
+            + ", ".join(f"{name} = excluded.{name}" for name in _HUB_COLUMNS),
+            (
+                config.name,
+                config.base_url,
+                config.token_sha256,
+                config.device_key_sha256,
+                config.session_secret,
+                config.created_at.isoformat(),
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -320,10 +355,11 @@ class HubIdentity:
     """The hub's config, once claimed.
 
     One instance lives on ``Hub`` (``app/main.py``) for the life of the
-    process. Loads ``hub.json`` at construction time. When it exists but
-    cannot be trusted (:class:`HubConfigUnreadable`), ``self.error`` carries
-    the detail every 503 on this hub repeats until the file is fixed or
-    deleted.
+    process, and ``Hub.reload()`` builds a fresh one after the ``hub`` row
+    changes. Reads the row at construction time. When it exists but cannot
+    be trusted (:class:`HubConfigUnreadable`), ``self.error`` carries the
+    detail every 503 on this hub repeats until the row is fixed or the
+    database is deleted.
 
     Process assumes a single worker (see the ``workers=1`` note by the
     uvicorn command in ``Dockerfile``): the claim lock below serializes
@@ -331,14 +367,20 @@ class HubIdentity:
     processes.
     """
 
-    def __init__(self, path: Path) -> None:
-        self._path = path
+    def __init__(self, db: Database) -> None:
+        self._db = db
         self._claim_lock = asyncio.Lock()
         self.error: str | None = None
         try:
-            self.config: HubConfig | None = load_hub_config(path)
-        except HubConfigUnreadable as exc:
-            log(logger, logging.ERROR, "hub config unreadable", path=str(path), error=str(exc))
+            self.config: HubConfig | None = load_hub_config(db)
+        except (HubConfigUnreadable, sqlite3.Error) as exc:
+            log(
+                logger,
+                logging.ERROR,
+                "hub config unreadable",
+                path=str(db.path),
+                error=str(exc),
+            )
             self.config = None
             self.error = str(exc)
 
@@ -374,7 +416,7 @@ class HubIdentity:
                 name=name,
                 base_url=base_url,
             )
-            await run_in_threadpool(write_hub_config, self._path, config)
+            await run_in_threadpool(write_hub_config, self._db, config)
             self.config = config
             return ClaimedSecrets(token=token, device_key=device_key)
 

@@ -3,20 +3,38 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from app.alerts import AlertStore
+from app.alerts import DATASET_NAME, AlertStore
+from app.db import Database
 from app.models import ALERT_PRIORITY_RANK, AlertPriority, AlertRequest
 
 TIMEZONE = "Asia/Bangkok"
 
 
 @pytest.fixture()
-def store(tmp_path: Path) -> AlertStore:
-    return AlertStore(tmp_path / "alert.json", TIMEZONE)
+def database(tmp_path: Path) -> Iterator[Database]:
+    instance = Database(tmp_path / "deskmate.sqlite")
+    instance.migrate()
+    yield instance
+    instance.close()
+
+
+@pytest.fixture()
+def store(database: Database) -> AlertStore:
+    return AlertStore(database, TIMEZONE)
+
+
+def stored_row(database: Database) -> dict[str, str] | None:
+    with database.reading() as connection:
+        row = connection.execute(
+            "SELECT payload_json, received_at FROM datasets WHERE name = ?", (DATASET_NAME,)
+        ).fetchone()
+    return None if row is None else dict(row)
 
 
 def request(priority: str, title: str = "Test", duration: int = 90) -> AlertRequest:
@@ -72,33 +90,35 @@ def test_lower_priority_replaces_an_expired_alert(store: AlertStore) -> None:
     assert alert.title == "Laundry"
 
 
-def test_clear_removes_the_alert_and_the_file(tmp_path: Path) -> None:
-    path = tmp_path / "alert.json"
-    store = AlertStore(path, TIMEZONE)
+def test_clear_removes_the_alert_and_the_row(database: Database) -> None:
+    store = AlertStore(database, TIMEZONE)
     store.set(request("doorbell"))
-    assert path.is_file()
+    assert stored_row(database) is not None
     assert store.clear() is True
     assert store.current is None
-    assert not path.exists()
+    assert stored_row(database) is None
     assert store.clear() is False
 
 
-def test_alert_survives_a_restart(tmp_path: Path) -> None:
-    path = tmp_path / "alert.json"
-    first = AlertStore(path, TIMEZONE)
+def test_alert_survives_a_restart(database: Database) -> None:
+    first = AlertStore(database, TIMEZONE)
     first.set(request("doorbell", "Someone is at the door"))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["priority"] == "doorbell"
+    row = stored_row(database)
+    assert row is not None
+    assert json.loads(row["payload_json"])["priority"] == "doorbell"
 
-    second = AlertStore(path, TIMEZONE)
+    second = AlertStore(database, TIMEZONE)
     assert second.current is not None
     assert second.current.title == "Someone is at the door"
 
 
-def test_a_corrupt_alert_file_does_not_break_startup(tmp_path: Path) -> None:
-    path = tmp_path / "alert.json"
-    path.write_text("{ not json", encoding="utf-8")
-    store = AlertStore(path, TIMEZONE)
+def test_a_corrupt_alert_row_does_not_break_startup(database: Database) -> None:
+    with database.writing() as connection:
+        connection.execute(
+            "INSERT INTO datasets (name, payload_json, received_at) VALUES (?, ?, ?)",
+            (DATASET_NAME, "{ not json", "2026-09-19T00:00:00.000+00:00"),
+        )
+    store = AlertStore(database, TIMEZONE)
     assert store.current is None
 
 

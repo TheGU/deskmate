@@ -114,7 +114,6 @@ class Settings(BaseSettings):
 
     # -- device telemetry -----------------------------------------------
     device_source: DeviceSource = Field(default="store", alias="DEVICE_SOURCE")
-    telemetry_db_path: Path | None = Field(default=None, alias="TELEMETRY_DB_PATH")
     telemetry_retention_days: int = Field(
         default=30, ge=1, le=3650, alias="TELEMETRY_RETENTION_DAYS"
     )
@@ -170,16 +169,13 @@ class Settings(BaseSettings):
         return self.brief_dir or (self.data_dir / "brief")
 
     @property
-    def alert_file(self) -> Path:
-        return self.data_dir / "alert.json"
-
-    @property
-    def hub_config_file(self) -> Path:
-        return self.data_dir / "hub.json"
-
-    @property
-    def telemetry_db_file(self) -> Path:
-        return self.telemetry_db_path or (self.data_dir / "telemetry.sqlite")
+    def hub_db_file(self) -> Path:
+        """The one SQLite file the hub owns: identity, settings, pushed
+        datasets and telemetry (``app/db.py``). It replaces ``hub.json``,
+        ``alert.json`` and ``telemetry.sqlite``; those names now live only in
+        ``app/legacy.py``, which imports them once and leaves them on disk.
+        """
+        return self.data_dir / "deskmate.sqlite"
 
     @property
     def ics_sources(self) -> list[str]:

@@ -50,6 +50,7 @@ from app.adapters.ai_brief import current_mode
 from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
 from app.config import Settings, get_settings
+from app.db import get_database
 from app.hub_config import (
     AlreadyConfigured,
     COOKIE_NAME,
@@ -68,6 +69,7 @@ from app.hub_config import (
     require_token,
     validate_base_url,
 )
+from app.legacy import LegacyEnv, import_legacy
 from app.logging_setup import configure_logging, log
 from app.models import (
     AIUsagePush,
@@ -80,7 +82,7 @@ from app.models import (
 )
 from app.renderer.render import PAGE_TTL_SECONDS, PAGES, Renderer
 from app.state import StateService, state_fingerprint
-from app.telemetry import TelemetrySummary, get_telemetry_store, utc_now
+from app.telemetry import TelemetryStore, TelemetrySummary, utc_now
 from app.timeutil import to_local
 
 logger = logging.getLogger("app.main")
@@ -141,11 +143,18 @@ class Hub:
     def __init__(self, settings: Settings) -> None:
         _require_writable_data_dir(settings.data_dir)
         self.settings = settings
-        self.alerts = AlertStore(settings.alert_file, settings.timezone)
-        self.telemetry = get_telemetry_store(settings)
+        # The database is process-wide and keyed by path (app/db.py), so two
+        # create_app() calls over one DATA_DIR share one connection instead of
+        # racing through two. Hub holds the reference; it does not own the
+        # lifetime, which is what makes a restore able to swap the file.
+        self.db = get_database(settings.hub_db_file)
+        self.db.migrate()
+        import_legacy(self.db, LegacyEnv(), settings.data_dir)
+        self.alerts = AlertStore(self.db, settings.timezone)
+        self.telemetry = TelemetryStore(self.db, settings.telemetry_retention_days)
         self.state_service = StateService(settings, self.alerts)
         self.renderer = Renderer(settings)
-        self.identity = HubIdentity(settings.hub_config_file)
+        self.identity = HubIdentity(self.db)
         self._cache: dict[str, RenderCacheEntry] = {}
         self._cache_lock = asyncio.Lock()
         if not self.identity.configured:
@@ -155,6 +164,25 @@ class Hub:
                 "Hub not set up: open /setup on this hub's address now; until then it "
                 "serves nothing else",
             )
+
+    async def reload(self) -> None:
+        """Rebuild everything that reads the database, after it changed.
+
+        Used by the flows that rewrite the hub's own rows (rotate, restore,
+        and in phase 1.4 a settings save). The identity comes back from the
+        ``hub`` row, the state service is rebuilt so its adapters start from
+        nothing, the alert store re-reads its row (never resets: whatever the
+        panel is showing has to survive a settings save), and the render cache
+        is dropped under ``_cache_lock`` so a render already in flight
+        finishes on the old service while the next request sees the new one.
+        """
+        identity = await run_in_threadpool(HubIdentity, self.db)
+        self.identity = identity
+        await run_in_threadpool(self.alerts.load)
+        self.state_service = StateService(self.settings, self.alerts)
+        async with self._cache_lock:
+            self._cache.clear()
+        log(logger, logging.INFO, "hub reloaded", configured=self.identity.configured)
 
     async def state(self, *, force: bool = False) -> DashboardState:
         return await self.state_service.build(force=force)
@@ -362,16 +390,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             brief=settings.brief_source,
             home=settings.ha_source,
             device=settings.device_source,
-            telemetry_db=str(settings.telemetry_db_file),
+            database=str(settings.hub_db_file),
         )
         await hub.renderer.start()
         try:
             yield
         finally:
             await hub.renderer.close()
-            # The telemetry store is process-wide and may be shared with another
-            # app instance (tests build several), so shutdown leaves it open.
-            # Every insert commits, so nothing is lost when the process exits.
+            # The database is process-wide and may be shared with another app
+            # instance (tests build several), so shutdown leaves it open.
+            # Every write commits, so nothing is lost when the process exits.
             log(logger, logging.INFO, "dashboard-hub stopped")
 
     app = FastAPI(title="dashboard-hub", version=__version__, lifespan=lifespan)
