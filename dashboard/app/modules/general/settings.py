@@ -26,6 +26,7 @@ class GeneralSettings(BaseModel):
 
     timezone: str = Field(
         default="Asia/Bangkok",
+        max_length=64,
         description=(
             "IANA timezone name the hub renders every date and time in, "
             "for example Asia/Bangkok or Europe/Berlin."
@@ -41,7 +42,12 @@ class GeneralSettings(BaseModel):
     def _validate_timezone(cls, value: str) -> str:
         try:
             ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
+        except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
+            # ZoneInfo() looks the name up on the filesystem, so a name that
+            # is not a legal filename (too long, or carrying a character such
+            # as "<" on Windows) raises OSError rather than either of the
+            # "not a timezone" exceptions above - and would otherwise escape
+            # as an unhandled 500 from POST /settings/general.
             raise ValueError(f"unknown timezone {value!r}") from exc
         return value
 

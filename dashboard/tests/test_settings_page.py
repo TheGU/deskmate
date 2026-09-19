@@ -192,6 +192,37 @@ def test_a_bad_timezone_comes_back_on_the_field_and_saves_nothing(admin: AdminHu
     assert admin.hub.hub_settings.general.timezone == "Asia/Bangkok"
 
 
+def test_a_too_long_timezone_is_422_not_a_500(admin: AdminHub) -> None:
+    """``ZoneInfo()`` looks a name up on the filesystem, and a name over 255
+    bytes is not a legal filename: this used to escape as a 500."""
+    response = admin.client.post(
+        "/settings/general",
+        headers=admin.auth,
+        data={"timezone": "a" * 300, "units": "metric", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    assert 'class="field-error"' in response.text
+    assert admin.hub.hub_settings.general.timezone == "Asia/Bangkok"
+
+
+def test_a_timezone_with_an_illegal_filename_character_is_422_not_a_500(
+    admin: AdminHub,
+) -> None:
+    """"<" is not a legal Windows filename character: ``ZoneInfo()`` raises
+    ``OSError`` rather than ``ZoneInfoNotFoundError`` for it."""
+    response = admin.client.post(
+        "/settings/general",
+        headers=admin.auth,
+        data={"timezone": "<script>", "units": "metric", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    field_error = response.text.index('class="field-error"')
+    assert "unknown timezone" in response.text[field_error : field_error + 200]
+    assert admin.hub.hub_settings.general.timezone == "Asia/Bangkok"
+
+
 def test_a_secret_left_blank_survives_a_save_of_its_section(admin: AdminHub) -> None:
     first = admin.client.post(
         "/settings/home",

@@ -175,7 +175,9 @@ class LegacyEnv(BaseSettings):
 
         try:
             ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError) as exc:  # pragma: no cover
+        except (ZoneInfoNotFoundError, ValueError, OSError) as exc:  # pragma: no cover
+            # See app/modules/general/settings.py:_validate_timezone: ZoneInfo()
+            # touches the filesystem, so an illegal filename raises OSError.
             raise ValueError(f"unknown TIMEZONE {value!r}") from exc
         return value
 
