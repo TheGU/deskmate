@@ -150,9 +150,10 @@ stay open, and the redirects on `GET /` and the two HTML preview routes).
   (fonts). `GET /login` also stays open once configured; while unconfigured
   it simply redirects to `/setup`.
 - **Reset** (delete `data/hub.json`) rotates the session secret, so every
-  cookie stops working, and rotates the device key, so the device needs
-  `firmware/secrets.yaml`'s `hub_key` updated and a reflash (OTA is fine)
-  before it can fetch again.
+  cookie stops working, and rotates the device key, so the device's Hub
+  key field must be updated (its own web page, or the Home Assistant text
+  entity) before it can fetch again; a reflash is only needed for
+  firmware built before these runtime fields existed.
 
 `Bearer` is case-insensitive, checked by hashing and
 `hmac.compare_digest` against the stored hash. One error shape for the
@@ -348,8 +349,12 @@ footer entry through the existing footer-flag logic.
 - Framework esp-idf, PSRAM octal. Flash layout 16MB (chip has 32MB, but ESP-IDF needs an experimental flag for 32MB with OTA).
 - No business logic. Only: page list, current index, download, display,
   buttons, buzzer, sensors, alert timer.
-- Page URL base comes from `secrets.yaml` (`hub_base_url`), so no server
-  address is hard-coded in the YAML.
+- Page URL base and the device key are runtime text components
+  (`hub_base_url`, `hub_key`), not hard-coded in the YAML: `secrets.yaml`
+  only seeds their first-boot value, and both are edited afterwards on the
+  device's own web page or as Home Assistant text entities, with no
+  reflash. Wi-Fi is likewise provisioned at runtime, through the captive
+  portal or Improv, never from `secrets.yaml`.
 - Refresh policy on the device: a periodic timer (default 30 min)
   re-requests the current page URL; ESPHome sends the conditional request
   and only refreshes the panel when the image changed. Server-side TTLs
