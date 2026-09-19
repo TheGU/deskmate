@@ -66,7 +66,7 @@ from app.backup import (
     inspect_backup,
     restore_temp_path,
 )
-from app.config import Env, Settings
+from app.config import Env
 from app.db import get_database
 from app.hub_config import (
     ADMIN_SESSION_MAX_AGE_SECONDS,
@@ -104,7 +104,7 @@ from app.models import (
     TasksPush,
 )
 from app.renderer.render import PAGE_TTL_SECONDS, PAGES, Renderer
-from app.settings import HubSettings
+from app.settings import SECTIONS, HubSettings, SettingsStore
 from app.state import StateService, state_fingerprint
 from app.telemetry import TelemetryStore, TelemetrySummary, utc_now
 from app.timeutil import to_local
@@ -167,13 +167,34 @@ def _require_writable_data_dir(path: Path) -> None:
         ) from exc
 
 
+def _seed_missing_sections(store: SettingsStore, seed: HubSettings) -> None:
+    """Write every section of ``seed`` into ``store``, but only the ones the
+    store has no row for yet.
+
+    This is how ``create_app(env, hub_settings=...)`` lets a test hand the
+    hub a ready-made ``HubSettings`` (fixture sources, mostly) without that
+    seed ever clobbering a row a real deployment already saved through the
+    settings page, or one ``import_legacy`` just wrote from the old
+    environment: both of those ran first (``Hub.__init__`` calls this after
+    ``import_legacy``), so a section either of them touched already has a
+    row here and is left alone.
+    """
+    for section in SECTIONS:
+        if store.updated_at(section) is None:
+            store.save(section, getattr(seed, section))
+
+
 class Hub:
     """Everything the request handlers need, built once at startup."""
 
-    def __init__(self, env: Env, hub_settings: HubSettings) -> None:
+    def __init__(self, env: Env, hub_settings: HubSettings | None = None) -> None:
+        """``hub_settings``, when given, seeds the store's empty sections
+        only (see :func:`_seed_missing_sections`): it never overwrites a row
+        that is already there. The hub's real settings are always the
+        store's own snapshot, read fresh after any seeding.
+        """
         _require_writable_data_dir(env.data_dir)
         self.env = env
-        self.hub_settings = hub_settings
         # The database is process-wide and keyed by path (app/db.py), so two
         # create_app() calls over one DATA_DIR share one connection instead of
         # racing through two. Hub holds the reference; it does not own the
@@ -181,10 +202,14 @@ class Hub:
         self.db = get_database(env.hub_db_file)
         self.db.migrate()
         import_legacy(self.db, LegacyEnv(), env.data_dir)
-        self.alerts = AlertStore(self.db, hub_settings.general.timezone)
-        self.telemetry = TelemetryStore(self.db, hub_settings.device.retention_days)
-        self.state_service = StateService(hub_settings, env, self.alerts)
-        self.renderer = Renderer(env, hub_settings)
+        self.settings_store = SettingsStore(self.db)
+        if hub_settings is not None:
+            _seed_missing_sections(self.settings_store, hub_settings)
+        self.hub_settings = self.settings_store.snapshot()
+        self.alerts = AlertStore(self.db, self.hub_settings.general.timezone)
+        self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
+        self.state_service = StateService(self.hub_settings, env, self.alerts)
+        self.renderer = Renderer(env, self.hub_settings)
         self.identity = HubIdentity(self.db)
         self._cache: dict[str, RenderCacheEntry] = {}
         self._cache_lock = asyncio.Lock()
@@ -207,20 +232,20 @@ class Hub:
         """Rebuild everything that reads the database, after it changed.
 
         Used by the flows that rewrite the hub's own rows (rotate, restore,
-        and in phase 1.4 a settings save). The identity comes back from the
-        ``hub`` row, the settings snapshot is re-read (1.2c makes
-        ``SettingsStore`` the source; for now, like at startup, it is
-        ``HubSettings.from_env(Settings())``), the state service and the
-        renderer's own snapshot are rebuilt from it, the alert store re-reads
-        its row (never resets: whatever the panel is showing has to survive a
-        settings save), and the render cache is dropped under ``_cache_lock``
-        so a render already in flight finishes on the old service while the
-        next request sees the new one.
+        and a settings save in 1.4). The identity comes back from the ``hub``
+        row, the settings snapshot is re-read from ``self.settings_store``
+        (so a section saved through the store since the last read is what
+        this reload picks up), the state service and the renderer's own
+        snapshot are rebuilt from it, the alert store re-reads its row (never
+        resets: whatever the panel is showing has to survive a settings
+        save), and the render cache is dropped under ``_cache_lock`` so a
+        render already in flight finishes on the old service while the next
+        request sees the new one.
         """
         identity = await run_in_threadpool(HubIdentity, self.db)
         self.identity = identity
         await run_in_threadpool(self.alerts.load)
-        self.hub_settings = HubSettings.from_env(Settings())
+        self.hub_settings = await run_in_threadpool(self.settings_store.snapshot)
         self.state_service = StateService(self.hub_settings, self.env, self.alerts)
         self.renderer.hub_settings = self.hub_settings
         async with self._cache_lock:
@@ -479,8 +504,17 @@ def _telemetry_origin(request: Request) -> tuple[str | None, str | None]:
 
 
 def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) -> FastAPI:
+    """Build the FastAPI app and the one :class:`Hub` behind it.
+
+    ``hub_settings`` is a seed for tests, not the hub's real settings: any
+    section it carries is written into the settings store only if that
+    section has no row there yet (see :func:`_seed_missing_sections`), so a
+    seed can never clobber a row a real deployment already saved or one
+    ``import_legacy`` just wrote from the old environment. What every route
+    actually reads is always ``Hub.hub_settings``, the store's own snapshot,
+    taken fresh right after any seeding.
+    """
     env = env or Env()
-    hub_settings = hub_settings or HubSettings.from_env(Settings())
     configure_logging(env.log_level)
 
     @asynccontextmanager

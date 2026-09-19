@@ -16,14 +16,14 @@ fails validation is a WARNING and defaults, never a crash, so a hub with one
 bad section keeps serving the others (and its own honest empty state) while
 an admin fixes it on the settings page (1.4).
 
-:meth:`HubSettings.from_env` builds a snapshot directly from
-``config.Settings``, using the same mapping ``app/legacy.py:import_legacy``
-uses to write ``settings`` rows from the old environment
-(:func:`app.legacy.pushed_source`, :func:`app.legacy.feed_rows`,
-:func:`app.legacy.entity_rows`) so the two never drift apart. 1.2b builds a
-``HubSettings`` this way while ``SettingsStore`` is still unused at runtime;
-1.2c makes the store the real source and this method goes away with
-``Settings`` itself.
+``app/main.py:Hub`` is what makes the store real: it builds one over the
+hub's database at startup and reads its :meth:`SettingsStore.snapshot` as
+``HubSettings`` (and again on every :meth:`Hub.reload`), so a section saved
+here - through the settings page, or once through
+``app/legacy.py:import_legacy`` on the old environment - is what the running
+hub actually reads. There is no separate "build a HubSettings from the
+environment" path any more: ``app/legacy.py:LegacyEnv`` is read only inside
+that one-time import.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -40,15 +39,12 @@ from app.logging_setup import log
 from app.modules.ai_usage.settings import SECTION as _AI_USAGE_SECTION, AIUsageSettings
 from app.modules.alert.settings import SECTION as _ALERT_SECTION, AlertSettings
 from app.modules.brief.settings import SECTION as _BRIEF_SECTION, BriefSettings
-from app.modules.calendar.settings import SECTION as _CALENDAR_SECTION, CalendarSettings, Feed
+from app.modules.calendar.settings import SECTION as _CALENDAR_SECTION, CalendarSettings
 from app.modules.device.settings import SECTION as _DEVICE_SECTION, DeviceSettings
 from app.modules.general.settings import SECTION as _GENERAL_SECTION, GeneralSettings
-from app.modules.home.settings import SECTION as _HOME_SECTION, EntitySlot, HomeSettings
+from app.modules.home.settings import SECTION as _HOME_SECTION, HomeSettings
 from app.modules.tasks.settings import SECTION as _TASKS_SECTION, TasksSettings
 from app.modules.weather.settings import SECTION as _WEATHER_SECTION, WeatherSettings
-
-if TYPE_CHECKING:
-    from app import config
 
 logger = logging.getLogger("app.settings")
 
@@ -73,7 +69,7 @@ class HubSettings(BaseModel):
 
     Building one with no arguments is a hub that has never saved anything:
     every section is that model's own defaults, the same honest live
-    selectors ``config.py:Settings`` ships with (never ``fixture``).
+    selectors the hub has always shipped (never ``fixture``).
     """
 
     general: GeneralSettings = Field(default_factory=GeneralSettings)
@@ -85,74 +81,6 @@ class HubSettings(BaseModel):
     home: HomeSettings = Field(default_factory=HomeSettings)
     device: DeviceSettings = Field(default_factory=DeviceSettings)
     alert: AlertSettings = Field(default_factory=AlertSettings)
-
-    @classmethod
-    def from_env(cls, settings: "config.Settings") -> "HubSettings":
-        """Build a snapshot from ``config.Settings``, mapping the old
-        environment fields onto sections the same way
-        ``app/legacy.py:import_legacy`` maps them onto ``settings`` rows."""
-        from app.legacy import entity_rows, feed_rows, pushed_source
-
-        return cls(
-            general=GeneralSettings(
-                timezone=settings.timezone,
-                units=settings.units,
-            ),
-            tasks=TasksSettings(
-                source=pushed_source(settings.tasks_source),
-                obsidian_vault_path=settings.obsidian_vault_path,
-                obsidian_task_glob=settings.obsidian_task_glob,
-                max_priority_tasks=settings.max_priority_tasks,
-                ttl_seconds=settings.tasks_ttl_seconds,
-                stale_seconds=settings.tasks_stale_seconds,
-            ),
-            calendar=CalendarSettings(
-                source=settings.calendar_source,
-                feeds=[
-                    Feed(**row)
-                    for row in feed_rows(
-                        settings.calendar_ics_urls,
-                        settings.calendar_names,
-                        settings.calendar_colors,
-                    )
-                ],
-                agenda_days=settings.agenda_days,
-                ttl_seconds=settings.calendar_ttl_seconds,
-            ),
-            weather=WeatherSettings(
-                source=settings.weather_source,
-                latitude=settings.weather_latitude,
-                longitude=settings.weather_longitude,
-                location_name=settings.weather_location_name,
-                ttl_seconds=settings.weather_ttl_seconds,
-            ),
-            ai_usage=AIUsageSettings(
-                source=pushed_source(settings.ai_usage_source),
-                ttl_seconds=settings.ai_usage_ttl_seconds,
-                stale_seconds=settings.ai_usage_stale_seconds,
-            ),
-            brief=BriefSettings(
-                source=pushed_source(settings.brief_source),
-                evening_hour=settings.brief_evening_hour,
-                ttl_seconds=settings.brief_ttl_seconds,
-                stale_seconds=settings.brief_stale_seconds,
-            ),
-            home=HomeSettings(
-                source=settings.ha_source,
-                url=settings.ha_url,
-                token=settings.ha_token,
-                entities=[EntitySlot(**row) for row in entity_rows(settings.ha_entities_raw)],
-                ttl_seconds=settings.home_ttl_seconds,
-            ),
-            device=DeviceSettings(
-                source=settings.device_source,
-                retention_days=settings.telemetry_retention_days,
-                ttl_seconds=settings.device_ttl_seconds,
-            ),
-            alert=AlertSettings(
-                default_duration_seconds=settings.alert_default_duration_seconds,
-            ),
-        )
 
 
 class SettingsStore:

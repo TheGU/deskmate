@@ -238,14 +238,13 @@ def feed_rows(urls: str, names: str, colors: str) -> list[dict[str, str]]:
     """The three comma lists folded into one feed row per URL.
 
     The pure core of :func:`calendar_feeds`, taking the three raw strings
-    directly rather than a :class:`LegacyEnv`, so ``app/settings.py:
-    HubSettings.from_env`` can call it with ``config.Settings`` fields without
-    either duplicating this logic or pretending a ``Settings`` is a
-    ``LegacyEnv``.
+    directly rather than a :class:`LegacyEnv`, so :func:`section_documents`
+    stays the one place that maps the old environment onto a settings row.
 
     A feed nobody named falls back to the URL host, then to its number, the
-    way ``config.py:ics_calendar_name`` did; a feed nobody coloured takes the
-    next colour of the default cycle, the way ``view.py`` did at render time.
+    way the old ``config.py:Settings.ics_calendar_name`` did; a feed nobody
+    coloured takes the next colour of the default cycle, the way ``view.py``
+    did at render time.
     """
     url_list = _split(urls)
     name_list = _split(names)
@@ -276,8 +275,8 @@ def entity_rows(raw: str) -> list[dict[str, str]]:
     the defaults the hub was actually rendering.
 
     The pure core of :func:`home_entities`, taking the raw string directly so
-    ``app/settings.py:HubSettings.from_env`` can call it with a
-    ``config.Settings`` field the same way :func:`calendar_feeds` does.
+    :func:`section_documents` can call it with a :class:`LegacyEnv` field the
+    same way :func:`calendar_feeds` does.
     """
     text = raw.strip()
     mapping: dict[str, str] = dict(DEFAULT_HA_ENTITIES)
