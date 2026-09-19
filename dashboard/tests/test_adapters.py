@@ -33,7 +33,7 @@ from app.adapters.weather import (
     rain_window,
 )
 from app.config import Settings
-from app.models import AdapterStatus, BriefMode, HourlyRain, Priority, ServiceHealth
+from app.models import AdapterStatus, BriefMode, HourlyRain, Priority, ServiceHealth, Task
 from app.timeutil import today_local, zone
 from tests.conftest import run
 
