@@ -7,7 +7,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "jinja2>=3.1",
-    # Pinned: the Docker base image tag in dashboard/Dockerfile must match.
+    # Pinned: the browser build dashboard/Dockerfile installs
+    # (--only-shell chromium) must match this pip version.
     "playwright==1.62.0",
     "pillow>=11.0",
     "pydantic>=2.9",

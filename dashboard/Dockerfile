@@ -1,7 +1,8 @@
-# Playwright's own image: the tag must match the pinned playwright version in
-# dashboard/pyproject.toml (currently 1.62.0), otherwise the bundled browser
-# and the Python client disagree.
-FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+# Playwright's pip package version must match the pinned version in
+# dashboard/pyproject.toml (currently 1.62.0): the browser build Playwright
+# installs below (--only-shell chromium) has to agree with the Python client,
+# or the bundled browser and the client disagree at launch time.
+FROM python:3.12-slim-bookworm
 
 # uv resolves dashboard/uv.lock exactly (--frozen), so a rebuild months from
 # now installs the same versions the tests ran against. 0.7.19 wrote the lock.
@@ -10,10 +11,12 @@ COPY --from=ghcr.io/astral-sh/uv:0.7.19 /uv /uvx /bin/
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/app/dashboard/.venv \
-    UV_PYTHON=/usr/bin/python3 \
+    UV_PYTHON=/usr/local/bin/python3 \
     UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
+    # Kept at runtime too: the launcher looks for the headless shell here.
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     FIXTURES_DIR=/app/fixtures \
     DATA_DIR=/data
 
@@ -27,16 +30,25 @@ COPY dashboard/app ./app
 COPY fixtures /app/fixtures
 ENV PATH=/app/dashboard/.venv/bin:$PATH
 
+# --only-shell installs just the headless Chromium shell (no full Chrome UI
+# build), which is what the launcher in render.py picks when running
+# headless; --with-deps pulls in the OS libraries it needs as root, then the
+# apt lists it leaves behind are cleaned up so they do not bloat the image.
+RUN playwright install --with-deps --only-shell chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# uid/gid 1001 matches the PUID/PGID default in docker-compose.yml.
+RUN groupadd -g 1001 hub && useradd -u 1001 -g 1001 -M hub
+
 # Only matters for a plain `docker run` with no bind mount; under compose the
 # host directory's ownership wins over this.
-RUN mkdir -p /data && chown pwuser:pwuser /data
+RUN mkdir -p /data && chown hub:hub /data
 
 # Chromium and fontconfig write under HOME; /tmp is writable by any uid
 # compose maps this container's user to.
 ENV HOME=/tmp XDG_CACHE_HOME=/tmp
 
-# uid 1001 in this base image.
-USER pwuser
+USER hub
 
 EXPOSE 8080
 

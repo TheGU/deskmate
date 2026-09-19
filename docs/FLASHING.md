@@ -26,10 +26,15 @@ Copy-Item firmware\secrets.yaml.example firmware\secrets.yaml
 ```
 
 Edit `firmware/secrets.yaml`: Wi-Fi, `hub_base_url` (LAN address of
-dashboard-hub, for example `http://192.168.1.50:8080`), `hub_key` (the
+dashboard-hub, for example `http://192.168.1.50`), `hub_key` (the
 device key from the hub's setup-done page), and fresh random values for
 `api_encryption_key` (32 bytes base64), `ota_password`, `ap_password`.
 `secrets.yaml` is gitignored.
+
+A `.local` mDNS hostname does not resolve on the device: ESP-IDF's resolver
+sends a `.local` name to mDNS, and this firmware never joins that multicast
+group, so the lookup just fails. `hub_base_url` must be the server's IP
+address, or a DNS name the router or homelab's own DNS actually serves.
 
 ## Validate (non-destructive)
 

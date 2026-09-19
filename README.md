@@ -57,13 +57,13 @@ cd dashboard && uv run pytest
 cp .env.example .env      # optional, the defaults are fixture-only
 docker compose up -d --build
 docker compose logs dashboard-hub   # first run: prints the claim code
-curl -s http://127.0.0.1:8080/healthz
-curl -o today.png http://127.0.0.1:8080/display/today.png
+curl -s http://127.0.0.1/healthz
+curl -o today.png http://127.0.0.1/display/today.png
 ```
 
-If host port 8080 is already in use, set `HUB_PORT` in `.env` (for example
-`HUB_PORT=18080`) and use that port in the URLs above and in the device's
-`hub_base_url`.
+If host port 80 is already in use, or needs no privileges, set `HUB_PORT` in
+`.env` (for example `HUB_PORT=8080`) and use that port in the URLs above and
+in the device's `hub_base_url`.
 
 The compose service mounts `./data` read-write (files other agents write),
 `./fixtures` read-only, and optionally an Obsidian vault read-only at `/vault`.
@@ -74,7 +74,7 @@ A fresh hub is unconfigured: `GET /` redirects to `/setup`, and every write
 (pushes, alerts) answers `503` until it is claimed. Reads (`/display`,
 `/preview`, `/api/state`, `/api/hub`) stay open until then too, so an
 unclaimed hub shows demo pages to anyone who reaches it - claim it right
-after the first start. Open `http://127.0.0.1:8080/setup` (or the container
+after the first start. Open `http://127.0.0.1/setup` (or the container
 log line), enter a hub name, the public base URL, and the claim code from
 the log. The result page shows **two secrets**, each **once**; save both,
 there is no way to see either again: a bearer token for agents (read and

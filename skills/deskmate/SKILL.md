@@ -15,7 +15,7 @@ brief, and open tasks.
 
 Two environment variables, set by whoever runs you; never put either in a repo:
 
-- `DESKMATE_URL` - the hub's base URL, for example `http://deskmate.local:8080`.
+- `DESKMATE_URL` - the hub's base URL, for example `http://deskmate.local`.
 - `DESKMATE_TOKEN` - the bearer token, shown once on the hub's `/setup` page when the owner
   claimed it.
 

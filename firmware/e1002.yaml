@@ -20,7 +20,7 @@
 substitutions:
   name: reterminal-e1002
   friendly_name: reTerminal E1002
-  hub_base_url: !secret hub_base_url        # e.g. http://192.168.1.50:8080
+  hub_base_url: !secret hub_base_url        # e.g. http://192.168.1.50
   hub_key: !secret hub_key                  # device key from the hub's setup-done page
   page_count: "5"                           # today agenda weather brief system
   auto_refresh_interval: 30min              # conditional request, 304 means no panel refresh

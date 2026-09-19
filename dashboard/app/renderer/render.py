@@ -65,6 +65,8 @@ _BROWSER_ARGS: Final[list[str]] = [
     # quantization, so an unhinted stem lands as a smear of half-tones.
     "--font-render-hinting=full",
     "--disable-gpu",
+    # Docker's default /dev/shm is 64 MB; this is prophylactic, no crash observed.
+    "--disable-dev-shm-usage",
 ]
 
 
@@ -138,6 +140,8 @@ class Renderer:
             return self._browser
         if self._playwright is None:
             self._playwright = await async_playwright().start()
+        # The image ships only the headless shell, so this launch must stay
+        # headless with no channel.
         self._browser = await self._playwright.chromium.launch(args=_BROWSER_ARGS)
         log(logger, logging.INFO, "chromium started", version=self._browser.version)
         return self._browser

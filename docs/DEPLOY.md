@@ -19,17 +19,38 @@ a stable address before the first flash:
 Any of the three is fine; what matters is that the address does not change
 after you flash the device.
 
+A `.local` mDNS hostname (for example `myserver.local`) does not resolve on
+the device itself: ESP-IDF's resolver sends a `.local` name to mDNS, and this
+firmware never joins that multicast group, so the lookup just fails.
+`hub_base_url` must be the server's IP address, or a DNS name the router or
+homelab's own DNS actually serves, never a `.local` name.
+
 ## Compose
 
 The repository root ships `docker-compose.yml` and `.env.example`. The
 compose file uses the `env_file: [{path, required}]` form, which needs
-Docker Compose 2.24 or newer (`docker compose version`). On the server:
+Docker Compose 2.24 or newer (`docker compose version`). On an older Compose,
+replace that block in `docker-compose.yml` with the plain list form, and
+make sure `.env` exists before starting (the plain form has no
+`required: false`, so a missing file is an error, not a silent skip):
+
+```yaml
+    env_file:
+      - .env
+```
+
+The image is now built on a slim Python base with just the headless
+Chromium shell rather than the full Playwright image; measured at about
+1.65 GB on disk (down from 4.1 GB) with a 443 MB image content size (down
+from 1.16 GB).
+
+On the server:
 
 ```sh
 git clone <this repository> deskmate
 cd deskmate
 cp .env.example .env
-# edit .env: at minimum set HUB_PORT if 8080 is already used on this host
+# edit .env: at minimum set HUB_PORT if 80 is already used on this host
 mkdir -p data
 docker compose up -d --build
 ```
@@ -57,6 +78,16 @@ that one process's memory; a second worker would let two `POST /setup`
 calls race each other at the filesystem, or serve a claim code that another
 worker never generated. Scale by running one container, never by adding
 `--workers` or a second replica.
+
+## Upgrading an existing install
+
+The host port default moved from 8080 to 80 in this version; the container
+still listens on 8080 internally, only the host-side mapping changed. An
+install whose device was already flashed with `hub_base_url` pointing at
+`:8080` still needs the hub reachable there: either add `HUB_PORT=8080` to
+`.env` before running `docker compose up -d` again, so the old address keeps
+working, or reflash the device (`docs/FLASHING.md`) with `hub_base_url` set
+to the new, port-less address.
 
 ## First run and claiming the hub
 
