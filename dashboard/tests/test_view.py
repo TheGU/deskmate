@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from app.config import Settings
+from app.settings import HubSettings
 from app.models import (
     AdapterStatus,
     AIUsage,
@@ -124,21 +124,21 @@ def test_every_block_defaults_to_unavailable() -> None:
     assert not any(block.usable for block in state.blocks.values())
 
 
-def test_pages_render_context_when_everything_is_unavailable(settings: Settings) -> None:
+def test_pages_render_context_when_everything_is_unavailable(hub_settings: HubSettings) -> None:
     state = empty_state()
     for page in ("today", "agenda", "weather", "brief", "system", "alert"):
-        context = build_context(page, state, settings)
+        context = build_context(page, state, hub_settings)
         assert context["page"] == page
-    today = build_context("today", state, settings)
+    today = build_context("today", state, hub_settings)
     assert today["priorities"] == []
     assert today["header"]["weather"]["available"] is False
     assert "unavailable" in today["ai_note"]["text"]
-    weather = build_context("weather", state, settings)
+    weather = build_context("weather", state, hub_settings)
     assert weather["hero"]["available"] is False
-    brief = build_context("brief", state, settings)
+    brief = build_context("brief", state, hub_settings)
     assert brief["brief_available"] is False
     assert brief["lines"] == []
-    system = build_context("system", state, settings)
+    system = build_context("system", state, hub_settings)
     assert system["device"]["available"] is False
     assert system["home_rows"] == []
     assert len(system["hub"]) == 9
@@ -168,7 +168,7 @@ def test_task_order_puts_overdue_first_then_priority() -> None:
     assert [task.id for task in ordered] == ["b", "a", "c"]
 
 
-def test_priority_tasks_skips_completed_and_respects_the_limit(settings: Settings) -> None:
+def test_priority_tasks_skips_completed_and_respects_the_limit(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     state = DashboardState(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
@@ -184,7 +184,7 @@ def test_priority_tasks_skips_completed_and_respects_the_limit(settings: Setting
             ],
         ),
     )
-    rows = priority_tasks(state, TODAY, settings.max_priority_tasks)
+    rows = priority_tasks(state, TODAY, hub_settings.tasks.max_priority_tasks)
     assert len(rows) == 3
     assert "Done" not in [row["title"] for row in rows]
 
@@ -214,7 +214,7 @@ def test_brief_due_label_drops_the_due_word() -> None:
     assert "DUE" not in brief_due_label(TODAY + timedelta(days=5), TODAY)
 
 
-def test_today_priority_tasks_shows_weekday_for_tomorrow(settings: Settings) -> None:
+def test_today_priority_tasks_shows_weekday_for_tomorrow(hub_settings: HubSettings) -> None:
     state = DashboardState(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
         timezone="Asia/Bangkok",
@@ -223,7 +223,7 @@ def test_today_priority_tasks_shows_weekday_for_tomorrow(settings: Settings) -> 
             items=[Task(id="1", title="Ship it", due=TODAY + timedelta(days=1), priority=Priority.HIGH)],
         ),
     )
-    rows = today_priority_tasks(state, TODAY, settings.max_priority_tasks)
+    rows = today_priority_tasks(state, TODAY, hub_settings.tasks.max_priority_tasks)
     assert rows[0]["due_label"] == "SAT"
     assert "TOMORROW" not in rows[0]["due_label"]
 
@@ -581,10 +581,10 @@ def test_meter_cells_round_to_ten_blocks() -> None:
     assert sum(meter_cells(-5)) == 0
 
 
-def test_every_page_carries_the_header_and_the_window_list(settings: Settings) -> None:
+def test_every_page_carries_the_header_and_the_window_list(hub_settings: HubSettings) -> None:
     state = empty_state()
     for page in ("today", "agenda", "weather", "brief", "system", "alert"):
-        context = build_context(page, state, settings)
+        context = build_context(page, state, hub_settings)
         windows = context["footer"]["windows"]
         assert [window["name"] for window in windows] == [
             "TODAY",
@@ -602,7 +602,7 @@ def test_every_page_carries_the_header_and_the_window_list(settings: Settings) -
         assert context["header"]["battery"]["chip_accent"] == ""
 
 
-def test_overdue_segment_counts_only_open_late_tasks(settings: Settings) -> None:
+def test_overdue_segment_counts_only_open_late_tasks(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     state = DashboardState(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
@@ -617,14 +617,14 @@ def test_overdue_segment_counts_only_open_late_tasks(settings: Settings) -> None
             ],
         ),
     )
-    context = build_context("weather", state, settings)
+    context = build_context("weather", state, hub_settings)
     assert context["header"]["overdue_count"] == 2
 
 
-def _flagged(state: DashboardState, settings: Settings) -> set[str]:
+def _flagged(state: DashboardState, hub_settings: HubSettings) -> set[str]:
     return {
         window["name"]
-        for window in build_context("today", state, settings)["footer"]["windows"]
+        for window in build_context("today", state, hub_settings)["footer"]["windows"]
         if window["flag"]
     }
 
@@ -638,7 +638,7 @@ def _flag_state(**blocks: Any) -> DashboardState:
     )
 
 
-def test_window_list_flags_the_pages_that_need_attention(settings: Settings) -> None:
+def test_window_list_flags_the_pages_that_need_attention(hub_settings: HubSettings) -> None:
     state = _flag_state(
         tasks=TasksBlock(
             status=AdapterStatus.OK,
@@ -656,10 +656,10 @@ def test_window_list_flags_the_pages_that_need_attention(settings: Settings) -> 
             ),
         ),
     )
-    assert _flagged(state, settings) == {"AGENDA", "WEATHER", "SYSTEM"}
+    assert _flagged(state, hub_settings) == {"AGENDA", "WEATHER", "SYSTEM"}
 
 
-def test_window_list_flags_are_selective(settings: Settings) -> None:
+def test_window_list_flags_are_selective(hub_settings: HubSettings) -> None:
     """A degraded service, or a wet afternoon, is not worth a flag."""
     state = _flag_state(
         weather=WeatherBlock(
@@ -679,10 +679,10 @@ def test_window_list_flags_are_selective(settings: Settings) -> None:
             ),
         ),
     )
-    assert _flagged(state, settings) == set()
+    assert _flagged(state, hub_settings) == set()
 
 
-def test_window_list_flags_system_when_the_paper_goes_quiet(settings: Settings) -> None:
+def test_window_list_flags_system_when_the_paper_goes_quiet(hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 4, 12, 0, tzinfo=dt_timezone.utc)
     stale = DeviceState(
         status=DeviceStatus.STALE,
@@ -692,10 +692,10 @@ def test_window_list_flags_system_when_the_paper_goes_quiet(settings: Settings) 
         temperature=30.0,
     )
     state = _flag_state(device=DeviceBlock(status=AdapterStatus.OK, source="store", device=stale))
-    assert _flagged(state, settings) == {"SYSTEM"}
+    assert _flagged(state, hub_settings) == {"SYSTEM"}
 
 
-def test_window_list_has_no_flags_when_nothing_needs_attention(settings: Settings) -> None:
+def test_window_list_has_no_flags_when_nothing_needs_attention(hub_settings: HubSettings) -> None:
     state = _flag_state(
         weather=WeatherBlock(
             status=AdapterStatus.OK,
@@ -708,7 +708,7 @@ def test_window_list_has_no_flags_when_nothing_needs_attention(settings: Setting
             ),
         ),
     )
-    context = build_context("today", state, settings)
+    context = build_context("today", state, hub_settings)
     assert not any(window["flag"] for window in context["footer"]["windows"])
 
 
@@ -720,21 +720,21 @@ def test_worst_accent_takes_the_loudest() -> None:
     assert worst_accent([]) == "black"
 
 
-def test_today_has_no_title_accents_left_to_carry(settings: Settings) -> None:
+def test_today_has_no_title_accents_left_to_carry(hub_settings: HubSettings) -> None:
     """Today refuses the pane title bar entirely: nothing fills it any more."""
     state = empty_state()
-    assert build_context("today", state, settings)["title_accents"] == {}
+    assert build_context("today", state, hub_settings)["title_accents"] == {}
 
 
-def test_agenda_and_weather_have_no_title_accents_left_to_carry(settings: Settings) -> None:
+def test_agenda_and_weather_have_no_title_accents_left_to_carry(hub_settings: HubSettings) -> None:
     """Agenda and weather refuse the pane title bar too: their own route,
     month grid, readings and plates carry state directly."""
     state = empty_state()
-    assert build_context("agenda", state, settings)["title_accents"] == {}
-    assert build_context("weather", state, settings)["title_accents"] == {}
+    assert build_context("agenda", state, hub_settings)["title_accents"] == {}
+    assert build_context("weather", state, hub_settings)["title_accents"] == {}
 
 
-def test_ai_capacity_accent_never_goes_green(settings: Settings) -> None:
+def test_ai_capacity_accent_never_goes_green(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     state = DashboardState(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
@@ -751,13 +751,13 @@ def test_ai_capacity_accent_never_goes_green(settings: Settings) -> None:
             ],
         ),
     )
-    context = build_context("today", state, settings)
+    context = build_context("today", state, hub_settings)
     windows = context["providers"][0]["windows"]
     assert windows[0]["accent"] == "black"
     assert windows[1]["accent"] == "red"
 
 
-def test_header_carries_the_overdue_flag_and_a_neutral_battery(settings: Settings) -> None:
+def test_header_carries_the_overdue_flag_and_a_neutral_battery(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     state = DashboardState(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
@@ -767,7 +767,7 @@ def test_header_carries_the_overdue_flag_and_a_neutral_battery(settings: Setting
             items=[Task(id="1", title="Late", due=TODAY - timedelta(days=1))],
         ),
     )
-    header = build_context("today", state, settings)["header"]
+    header = build_context("today", state, hub_settings)["header"]
     assert header["day"] == "04"
     assert header["weekday"] == "FRI"
     assert header["month"] == "SEP"
@@ -966,7 +966,7 @@ def test_agenda_list_rows_nothing_scheduled_when_the_window_is_empty() -> None:
 
 
 def test_agenda_context_calendar_note_is_blank_when_the_calendar_is_just_empty(
-    settings: Settings,
+    hub_settings: HubSettings,
 ) -> None:
     """An empty but usable calendar has nothing wrong with it: the note must
     be blank so the template's default "Nothing scheduled" prints."""
@@ -975,13 +975,13 @@ def test_agenda_context_calendar_note_is_blank_when_the_calendar_is_just_empty(
         timezone="Asia/Bangkok",
         calendar=CalendarBlock(status=AdapterStatus.OK, items=[]),
     )
-    context = agenda_context(state, settings)
+    context = agenda_context(state, hub_settings)
     assert context["agenda_list"] == []
     assert context["calendar_note"] == ""
 
 
 def test_agenda_context_calendar_note_explains_an_unusable_calendar(
-    settings: Settings,
+    hub_settings: HubSettings,
 ) -> None:
     """When the calendar block itself is not usable (unset, or erroring),
     the empty agenda list must say why instead of the generic "Nothing
@@ -992,7 +992,7 @@ def test_agenda_context_calendar_note_explains_an_unusable_calendar(
         timezone="Asia/Bangkok",
         calendar=CalendarBlock(status=AdapterStatus.UNAVAILABLE),
     )
-    context = agenda_context(state, settings)
+    context = agenda_context(state, hub_settings)
     assert context["agenda_list"] == []
     assert context["calendar_note"] == block_note(AdapterStatus.UNAVAILABLE, "calendar")
     assert context["calendar_note"] == "calendar unavailable"
@@ -1138,25 +1138,25 @@ def _brief_state(brief: Brief | None, *, status: AdapterStatus = AdapterStatus.O
     )
 
 
-def test_brief_mode_label_and_generated_time(settings: Settings) -> None:
+def test_brief_mode_label_and_generated_time(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     brief = Brief(
         mode=BriefMode.MORNING,
         generated_at=datetime(2026, 9, 4, 7, 40, tzinfo=tz),
         headline="Two hard deadlines today",
     )
-    context = brief_context(_brief_state(brief), settings)
+    context = brief_context(_brief_state(brief), hub_settings)
     assert context["mode_label"] == "MORNING BRIEF"
     assert context["generated_label"] == "GENERATED 07:40"
 
 
-def test_brief_generated_label_is_not_generated_when_missing(settings: Settings) -> None:
+def test_brief_generated_label_is_not_generated_when_missing(hub_settings: HubSettings) -> None:
     brief = Brief(mode=BriefMode.EVENING, generated_at=None, headline="x")
-    context = brief_context(_brief_state(brief), settings)
+    context = brief_context(_brief_state(brief), hub_settings)
     assert context["generated_label"] == "NOT GENERATED"
 
 
-def test_brief_risk_sections_get_flagged(settings: Settings) -> None:
+def test_brief_risk_sections_get_flagged(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     brief = Brief(
         mode=BriefMode.MORNING,
@@ -1167,7 +1167,7 @@ def test_brief_risk_sections_get_flagged(settings: Settings) -> None:
             BriefSection(title="Key tasks", items=["Finish deck"]),
         ],
     )
-    context = brief_context(_brief_state(brief), settings)
+    context = brief_context(_brief_state(brief), hub_settings)
     headers = [line for line in context["lines"] if line["kind"] == "header"]
     assert headers[0]["risk"] is True
     assert headers[1]["risk"] is False
@@ -1196,8 +1196,8 @@ def test_brief_lines_never_cuts_leaving_a_bare_header() -> None:
     assert [line["kind"] for line in lines] == ["header", "item", "item"]
 
 
-def test_brief_unavailable_message_when_brief_is_missing(settings: Settings) -> None:
-    context = brief_context(_brief_state(None, status=AdapterStatus.UNAVAILABLE), settings)
+def test_brief_unavailable_message_when_brief_is_missing(hub_settings: HubSettings) -> None:
+    context = brief_context(_brief_state(None, status=AdapterStatus.UNAVAILABLE), hub_settings)
     assert context["brief_available"] is False
     assert context["unavailable_message"] == "No brief from the PC yet"
 
@@ -1208,17 +1208,17 @@ def test_brief_headline_fits_one_line_thresholds() -> None:
 
 
 def test_brief_context_headline_drops_to_24px_when_it_does_not_fit_one_line(
-    settings: Settings,
+    hub_settings: HubSettings,
 ) -> None:
     tz = zone("Asia/Bangkok")
     long_headline = "Two hard deadlines today, storms from 15:00"
     brief = Brief(mode=BriefMode.MORNING, generated_at=datetime(2026, 9, 4, 7, 0, tzinfo=tz), headline=long_headline)
-    context = brief_context(_brief_state(brief), settings)
+    context = brief_context(_brief_state(brief), hub_settings)
     assert context["headline_large"] is False
 
     short_headline = "Rent due Friday"
     brief = Brief(mode=BriefMode.MORNING, generated_at=datetime(2026, 9, 4, 7, 0, tzinfo=tz), headline=short_headline)
-    context = brief_context(_brief_state(brief), settings)
+    context = brief_context(_brief_state(brief), hub_settings)
     assert context["headline_large"] is True
 
 
@@ -1346,7 +1346,7 @@ def test_brief_title_budget_ordered_by_chip_width() -> None:
     assert min(budgets) >= BRIEF_TITLE_MAX_CHARS
 
 
-def test_today_priorities_title_beside_a_weekday_chip_is_not_clipped(settings: Settings) -> None:
+def test_today_priorities_title_beside_a_weekday_chip_is_not_clipped(hub_settings: HubSettings) -> None:
     """The fixture's own regression: a title that stemmed beside a narrow
     "MON" chip under the old uniform budget now reads whole, because that
     row's own (lighter) chip hands its title the extra room."""
@@ -1392,18 +1392,18 @@ def _device_state(**overrides: Any) -> DeviceState:
     return DeviceState(**base)
 
 
-def test_device_panel_hatches_the_battery_block_when_level_is_none(settings: Settings) -> None:
+def test_device_panel_hatches_the_battery_block_when_level_is_none(hub_settings: HubSettings) -> None:
     state = DashboardState(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
         timezone="Asia/Bangkok",
         device=DeviceBlock(status=AdapterStatus.OK, device=_device_state(battery_level=None)),
     )
-    panel = device_panel(state, settings)
+    panel = device_panel(state, hub_settings)
     assert panel["available"] is True
     assert panel["battery_available"] is False
 
 
-def test_device_panel_flags_stale_with_a_tell_tale_and_age(settings: Settings) -> None:
+def test_device_panel_flags_stale_with_a_tell_tale_and_age(hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc)
     device = _device_state(
         status=DeviceStatus.STALE, received_at=now - timedelta(hours=2), age_seconds=7200.0
@@ -1411,7 +1411,7 @@ def test_device_panel_flags_stale_with_a_tell_tale_and_age(settings: Settings) -
     state = DashboardState(
         generated_at=now, timezone="Asia/Bangkok", device=DeviceBlock(status=AdapterStatus.OK, device=device)
     )
-    panel = device_panel(state, settings)
+    panel = device_panel(state, hub_settings)
     assert panel["stale"] is True
     assert panel["age_text"] == "2 H AGO"
     assert desk_accent(state) == "yellow"
@@ -1440,7 +1440,7 @@ def test_service_mark_per_health() -> None:
     assert service_mark("unknown") == "hatch"
 
 
-def test_system_context_sensor_and_service_rows(settings: Settings) -> None:
+def test_system_context_sensor_and_service_rows(hub_settings: HubSettings) -> None:
     state = DashboardState(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
         timezone="Asia/Bangkok",
@@ -1454,7 +1454,7 @@ def test_system_context_sensor_and_service_rows(settings: Settings) -> None:
             ),
         ),
     )
-    context = system_context(state, settings)
+    context = system_context(state, hub_settings)
     home_rows = context["home_rows"]
     sensor_row = next(row for row in home_rows if row["kind"] == "sensor")
     service_row = next(row for row in home_rows if row["kind"] == "service")
@@ -1466,7 +1466,7 @@ def test_system_context_sensor_and_service_rows(settings: Settings) -> None:
     assert home_rows[1]["kind"] == "service"
 
 
-def test_home_rows_merge_sensors_and_services_under_one_budget(settings: Settings) -> None:
+def test_home_rows_merge_sensors_and_services_under_one_budget(hub_settings: HubSettings) -> None:
     """A merged HOME column with more sensors and services than fit is
     capped to HOME_ROW_BUDGET total, sensors first, not per half."""
     sensors = [
@@ -1482,7 +1482,7 @@ def test_home_rows_merge_sensors_and_services_under_one_budget(settings: Setting
         timezone="Asia/Bangkok",
         home=HomeBlock(status=AdapterStatus.OK, home=HomeState(sensors=sensors, services=services)),
     )
-    context = system_context(state, settings)
+    context = system_context(state, hub_settings)
     home_rows = context["home_rows"]
     assert len(home_rows) == HOME_ROW_BUDGET
     assert all(row["kind"] == "sensor" for row in home_rows)
@@ -1502,7 +1502,7 @@ def test_strip_scheme_drops_the_scheme_only() -> None:
     assert strip_scheme("http://hub.local") == "hub.local"
 
 
-def test_hub_rows_mark_a_stale_pushed_dataset_yellow(settings: Settings) -> None:
+def test_hub_rows_mark_a_stale_pushed_dataset_yellow(hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     state = DashboardState(
         generated_at=now,
@@ -1514,13 +1514,13 @@ def test_hub_rows_mark_a_stale_pushed_dataset_yellow(settings: Settings) -> None
             received_at=now - timedelta(hours=20),
         ),
     )
-    rows = hub_rows(state, settings, now)
+    rows = hub_rows(state, hub_settings, now)
     tasks_row = next(row for row in rows if row["name"] == "TASKS")
     assert tasks_row["value"] == "20 H"
     assert tasks_row["accent"] == "yellow"
 
 
-def test_hub_rows_device_origin_from_device_state(settings: Settings) -> None:
+def test_hub_rows_device_origin_from_device_state(hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     device = DeviceState(
         status=DeviceStatus.OK,
@@ -1536,7 +1536,7 @@ def test_hub_rows_device_origin_from_device_state(settings: Settings) -> None:
         timezone="Asia/Bangkok",
         device=DeviceBlock(status=AdapterStatus.OK, device=device),
     )
-    rows = hub_rows(state, settings, now)
+    rows = hub_rows(state, hub_settings, now)
     by_name = {row["name"]: row for row in rows}
     assert by_name["DEVICE SYNC"]["value"] == "5 MIN"
     assert by_name["DEVICE IP"]["value"] == "192.0.2.10"
@@ -1566,7 +1566,7 @@ def _alert_state(alert: Alert | None) -> DashboardState:
     )
 
 
-def test_alert_band_colour_per_priority(settings: Settings) -> None:
+def test_alert_band_colour_per_priority(hub_settings: HubSettings) -> None:
     assert ALERT_BAND_ACCENT[AlertPriority.CRITICAL] == "red"
     assert ALERT_BAND_ACCENT[AlertPriority.DOORBELL] == "red"
     assert ALERT_BAND_ACCENT[AlertPriority.IMPORTANT] == "yellow"
@@ -1576,11 +1576,11 @@ def test_alert_band_colour_per_priority(settings: Settings) -> None:
     alert = Alert(
         title="Smoke", priority=AlertPriority.CRITICAL, created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz)
     )
-    context = alert_context(_alert_state(alert), settings)
+    context = alert_context(_alert_state(alert), hub_settings)
     assert context["band_accent"] == "red"
 
 
-def test_alert_band_label_falls_back_to_alert_without_a_source(settings: Settings) -> None:
+def test_alert_band_label_falls_back_to_alert_without_a_source(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     unnamed = Alert(
         title="Doorbell",
@@ -1588,7 +1588,7 @@ def test_alert_band_label_falls_back_to_alert_without_a_source(settings: Setting
         created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz),
         source=None,
     )
-    assert alert_context(_alert_state(unnamed), settings)["band_label"] == "ALERT"
+    assert alert_context(_alert_state(unnamed), hub_settings)["band_label"] == "ALERT"
 
     named = Alert(
         title="Doorbell",
@@ -1596,20 +1596,20 @@ def test_alert_band_label_falls_back_to_alert_without_a_source(settings: Setting
         created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz),
         source="Front door",
     )
-    assert alert_context(_alert_state(named), settings)["band_label"] == "FRONT DOOR"
+    assert alert_context(_alert_state(named), hub_settings)["band_label"] == "FRONT DOOR"
 
 
-def test_alert_band_right_carries_the_priority_word_and_time(settings: Settings) -> None:
+def test_alert_band_right_carries_the_priority_word_and_time(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     alert = Alert(
         title="Smoke", priority=AlertPriority.CRITICAL, created_at=datetime(2026, 9, 4, 15, 6, tzinfo=tz)
     )
-    context = alert_context(_alert_state(alert), settings)
+    context = alert_context(_alert_state(alert), hub_settings)
     assert context["band_right"] == "CRITICAL 15:06"
 
 
-def test_alert_context_without_an_active_alert(settings: Settings) -> None:
-    context = alert_context(_alert_state(None), settings)
+def test_alert_context_without_an_active_alert(hub_settings: HubSettings) -> None:
+    context = alert_context(_alert_state(None), hub_settings)
     assert context["band_label"] == "ALERT"
     assert context["band_accent"] == "black"
     assert context["title"] == "NO ACTIVE ALERT"
@@ -1649,7 +1649,7 @@ def _empty_state_with(**blocks: Any) -> DashboardState:
     return DashboardState(generated_at=NOW, timezone="Asia/Bangkok", **blocks)
 
 
-def test_ai_usage_stale_uses_the_oldest_providers_collected_at(settings: Settings) -> None:
+def test_ai_usage_stale_uses_the_oldest_providers_collected_at(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=7)
     newer = NOW - timedelta(hours=1)
     state = _empty_state_with(
@@ -1662,10 +1662,10 @@ def test_ai_usage_stale_uses_the_oldest_providers_collected_at(settings: Setting
             ],
         )
     )
-    assert ai_usage_stale(state, settings, NOW) == "7 H AGO"
+    assert ai_usage_stale(state, hub_settings, NOW) == "7 H AGO"
 
 
-def test_ai_usage_stale_is_none_for_a_fixture(settings: Settings) -> None:
+def test_ai_usage_stale_is_none_for_a_fixture(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(days=10)
     state = _empty_state_with(
         ai_usage=AIUsageBlock(
@@ -1674,10 +1674,10 @@ def test_ai_usage_stale_is_none_for_a_fixture(settings: Settings) -> None:
             providers=[AIUsage(provider="claude", collected_at=old)],
         )
     )
-    assert ai_usage_stale(state, settings, NOW) is None
+    assert ai_usage_stale(state, hub_settings, NOW) is None
 
 
-def test_brief_stale_uses_generated_at(settings: Settings) -> None:
+def test_brief_stale_uses_generated_at(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=11)
     state = _empty_state_with(
         brief=BriefBlock(
@@ -1686,27 +1686,27 @@ def test_brief_stale_uses_generated_at(settings: Settings) -> None:
             brief=Brief(headline="x", generated_at=old, source="file"),
         )
     )
-    assert brief_stale(state, settings, NOW) == "11 H AGO"
+    assert brief_stale(state, hub_settings, NOW) == "11 H AGO"
 
 
-def test_brief_stale_is_none_without_a_brief(settings: Settings) -> None:
+def test_brief_stale_is_none_without_a_brief(hub_settings: HubSettings) -> None:
     state = _empty_state_with(brief=BriefBlock(status=AdapterStatus.UNAVAILABLE, source="file"))
-    assert brief_stale(state, settings, NOW) is None
+    assert brief_stale(state, hub_settings, NOW) is None
 
 
-def test_tasks_stale_uses_received_at(settings: Settings) -> None:
+def test_tasks_stale_uses_received_at(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=11)
     state = _empty_state_with(tasks=TasksBlock(status=AdapterStatus.OK, source="file", received_at=old))
-    assert tasks_stale(state, settings, NOW) == "11 H AGO"
+    assert tasks_stale(state, hub_settings, NOW) == "11 H AGO"
 
 
-def test_tasks_stale_is_none_for_a_fixture(settings: Settings) -> None:
+def test_tasks_stale_is_none_for_a_fixture(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(days=5)
     state = _empty_state_with(tasks=TasksBlock(status=AdapterStatus.OK, source="fixture", received_at=old))
-    assert tasks_stale(state, settings, NOW) is None
+    assert tasks_stale(state, hub_settings, NOW) is None
 
 
-def test_window_flags_adds_today_when_ai_usage_is_stale(settings: Settings) -> None:
+def test_window_flags_adds_today_when_ai_usage_is_stale(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=7)
     state = _empty_state_with(
         ai_usage=AIUsageBlock(
@@ -1715,16 +1715,16 @@ def test_window_flags_adds_today_when_ai_usage_is_stale(settings: Settings) -> N
             providers=[AIUsage(provider="claude", collected_at=old)],
         )
     )
-    assert "today" in window_flags(state, settings, NOW, overdue_count=0)
+    assert "today" in window_flags(state, hub_settings, NOW, overdue_count=0)
 
 
-def test_window_flags_adds_brief_when_tasks_is_stale(settings: Settings) -> None:
+def test_window_flags_adds_brief_when_tasks_is_stale(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=11)
     state = _empty_state_with(tasks=TasksBlock(status=AdapterStatus.OK, source="file", received_at=old))
-    assert "brief" in window_flags(state, settings, NOW, overdue_count=0)
+    assert "brief" in window_flags(state, hub_settings, NOW, overdue_count=0)
 
 
-def test_window_flags_adds_today_when_brief_is_stale(settings: Settings) -> None:
+def test_window_flags_adds_today_when_brief_is_stale(hub_settings: HubSettings) -> None:
     """Today draws the brief note too (view.py:brief_note), so a stale brief
     must flag Today's own footer entry, not only Brief's."""
     old = NOW - timedelta(hours=11)
@@ -1735,16 +1735,16 @@ def test_window_flags_adds_today_when_brief_is_stale(settings: Settings) -> None
             brief=Brief(headline="x", generated_at=old, source="file"),
         )
     )
-    assert "today" in window_flags(state, settings, NOW, overdue_count=0)
+    assert "today" in window_flags(state, hub_settings, NOW, overdue_count=0)
 
 
-def test_window_flags_does_not_flag_today_or_brief_when_nothing_is_stale(settings: Settings) -> None:
-    flagged = window_flags(_empty_state_with(), settings, NOW, overdue_count=0)
+def test_window_flags_does_not_flag_today_or_brief_when_nothing_is_stale(hub_settings: HubSettings) -> None:
+    flagged = window_flags(_empty_state_with(), hub_settings, NOW, overdue_count=0)
     assert "today" not in flagged
     assert "brief" not in flagged
 
 
-def test_page_shows_demo_data_checks_only_that_pages_own_datasets(settings: Settings) -> None:
+def test_page_shows_demo_data_checks_only_that_pages_own_datasets(hub_settings: HubSettings) -> None:
     state = _empty_state_with(
         ai_usage=AIUsageBlock(status=AdapterStatus.OK, source="fixture"),
         brief=BriefBlock(
@@ -1757,15 +1757,15 @@ def test_page_shows_demo_data_checks_only_that_pages_own_datasets(settings: Sett
     assert page_shows_demo_data(state, "agenda") is False  # agenda has no tracked dataset
 
 
-def test_footer_context_demo_flag(settings: Settings) -> None:
+def test_footer_context_demo_flag(hub_settings: HubSettings) -> None:
     state = _empty_state_with(ai_usage=AIUsageBlock(status=AdapterStatus.OK, source="fixture"))
-    footer = footer_context(state, settings, NOW.date(), NOW, "today")
+    footer = footer_context(state, hub_settings, NOW.date(), NOW, "today")
     assert footer["demo"] is True
-    footer = footer_context(state, settings, NOW.date(), NOW, "agenda")
+    footer = footer_context(state, hub_settings, NOW.date(), NOW, "agenda")
     assert footer["demo"] is False
 
 
-def test_today_context_carries_the_stale_labels(settings: Settings) -> None:
+def test_today_context_carries_the_stale_labels(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=7)
     state = _empty_state_with(
         ai_usage=AIUsageBlock(
@@ -1774,12 +1774,12 @@ def test_today_context_carries_the_stale_labels(settings: Settings) -> None:
             providers=[AIUsage(provider="claude", collected_at=old)],
         )
     )
-    context = today_context(state, settings)
+    context = today_context(state, hub_settings)
     assert context["capacity_stale"] == "7 H AGO"
     assert context["priorities_stale"] is None
 
 
-def test_brief_context_carries_the_stale_label(settings: Settings) -> None:
+def test_brief_context_carries_the_stale_label(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=11)
     state = _empty_state_with(
         brief=BriefBlock(
@@ -1788,5 +1788,5 @@ def test_brief_context_carries_the_stale_label(settings: Settings) -> None:
             brief=Brief(headline="x", generated_at=old, source="file"),
         )
     )
-    context = brief_context(state, settings)
+    context = brief_context(state, hub_settings)
     assert context["brief_stale"] == "11 H AGO"

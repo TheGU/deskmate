@@ -21,8 +21,9 @@ from app.adapters.tasks import (
     parse_task_line,
     read_vault,
 )
-from app.config import Settings
+from app.config import Env
 from app.models import Priority
+from app.settings import HubSettings
 from tests.conftest import run
 
 HIGH = next(char for char, value in EMOJI_PRIORITY.items() if value is Priority.HIGH)
@@ -129,16 +130,17 @@ def test_reading_the_vault_does_not_modify_it(vault: Path) -> None:
     assert before == after
 
 
-def test_adapter_uses_the_configured_vault(settings: Settings, vault: Path) -> None:
-    adapter = ObsidianTasksAdapter(
-        settings.model_copy(update={"obsidian_vault_path": vault, "tasks_source": "obsidian"})
+def test_adapter_uses_the_configured_vault(hub_settings: HubSettings, env: Env, vault: Path) -> None:
+    tasks = hub_settings.tasks.model_copy(
+        update={"obsidian_vault_path": vault, "source": "obsidian"}
     )
-    tasks = run(adapter.fetch())
-    assert tasks
-    assert all(task.source == "obsidian" for task in tasks)
+    adapter = ObsidianTasksAdapter(tasks, env)
+    result = run(adapter.fetch())
+    assert result
+    assert all(task.source == "obsidian" for task in result)
 
 
-def test_glob_can_narrow_the_scan(settings: Settings, vault: Path) -> None:
+def test_glob_can_narrow_the_scan(hub_settings: HubSettings, env: Env, vault: Path) -> None:
     tasks = read_vault(vault, "projects/*.md")
     assert {task.title for task in tasks} == {
         "Review PR 482 auth refactor",

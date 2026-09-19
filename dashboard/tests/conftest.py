@@ -18,10 +18,17 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.alerts import AlertStore
-from app.config import REPO_ROOT, Settings
+from app.config import REPO_ROOT, Env
 from app.db import close_databases, get_database
 from app.main import create_app
 from app.models import DashboardState
+from app.modules.ai_usage.settings import AIUsageSettings
+from app.modules.brief.settings import BriefSettings
+from app.modules.calendar.settings import CalendarSettings
+from app.modules.device.settings import DeviceSettings
+from app.modules.home.settings import HomeSettings
+from app.modules.tasks.settings import TasksSettings
+from app.modules.weather.settings import WeatherSettings
 from app.renderer.render import Renderer
 from app.settings import HubSettings
 from app.state import StateService
@@ -50,41 +57,43 @@ def session_loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 
 @pytest.fixture(scope="session")
-def settings(tmp_path_factory: pytest.TempPathFactory) -> Settings:
+def env(tmp_path_factory: pytest.TempPathFactory) -> Env:
     data_dir: Path = tmp_path_factory.mktemp("data")
     # _env_file=None keeps a developer's .env out of the test run.
-    return Settings(
+    return Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
+        FIXTURES_DIR=FIXTURES_DIR,
         LOG_LEVEL="WARNING",
-        # Every *_SOURCE now defaults to a live selector so a real deployment
-        # never shows demo data by accident; the shared renderer/state
-        # fixtures below pin all seven back to fixture so tests keep
-        # exercising fixture data as before.
-        TASKS_SOURCE="fixture",
-        CALENDAR_SOURCE="fixture",
-        WEATHER_SOURCE="fixture",
-        AI_USAGE_SOURCE="fixture",
-        BRIEF_SOURCE="fixture",
-        HA_SOURCE="fixture",
-        DEVICE_SOURCE="fixture",
     )
 
 
 @pytest.fixture(scope="session")
-def hub_settings(settings: Settings) -> HubSettings:
-    """A ``HubSettings`` built from the shared ``settings`` fixture, the same
-    way 1.2b will build one at startup. Unused by any test until 1.2b
-    switches call sites; it exists now so those tests do not also have to
-    add this fixture."""
-    return HubSettings.from_env(settings)
+def hub_settings() -> HubSettings:
+    """Every section built directly from its own model, not from ``Settings``
+    (config.py) through ``from_env``: this is the settings-page/database
+    world 1.2b's call sites read, and the point of this fixture is that
+    tests stop depending on ``config.Settings`` wherever they can. Every
+    source pinned to ``fixture`` so the shared ``renderer``/``state``/
+    ``client`` fixtures below keep exercising fixture data, the same as the
+    old ``settings`` fixture's seven ``*_SOURCE=fixture`` overrides did.
+    """
+    return HubSettings(
+        tasks=TasksSettings(source="fixture"),
+        calendar=CalendarSettings(source="fixture"),
+        weather=WeatherSettings(source="fixture"),
+        ai_usage=AIUsageSettings(source="fixture"),
+        brief=BriefSettings(source="fixture"),
+        home=HomeSettings(source="fixture"),
+        device=DeviceSettings(source="fixture"),
+    )
 
 
 @pytest.fixture(scope="session")
-def renderer(settings: Settings, session_loop: asyncio.AbstractEventLoop) -> Iterator[Renderer]:
-    instance = Renderer(settings)
+def renderer(
+    env: Env, hub_settings: HubSettings, session_loop: asyncio.AbstractEventLoop
+) -> Iterator[Renderer]:
+    instance = Renderer(env, hub_settings)
     run(instance.start())
     yield instance
     run(instance.close())
@@ -100,17 +109,19 @@ def close_open_databases() -> Iterator[None]:
 
 
 @pytest.fixture(scope="session")
-def state(settings: Settings, session_loop: asyncio.AbstractEventLoop) -> DashboardState:
-    database = get_database(settings.hub_db_file)
+def state(
+    env: Env, hub_settings: HubSettings, session_loop: asyncio.AbstractEventLoop
+) -> DashboardState:
+    database = get_database(env.hub_db_file)
     database.migrate()
-    alerts = AlertStore(database, settings.timezone)
-    service = StateService(settings, alerts)
+    alerts = AlertStore(database, hub_settings.general.timezone)
+    service = StateService(hub_settings, env, alerts)
     return run(service.build(force=True))
 
 
 @pytest.fixture(scope="session")
-def client(settings: Settings) -> Iterator[TestClient]:
-    app = create_app(settings)
+def client(env: Env, hub_settings: HubSettings) -> Iterator[TestClient]:
+    app = create_app(env, hub_settings)
     with TestClient(app) as test_client:
         yield test_client
 

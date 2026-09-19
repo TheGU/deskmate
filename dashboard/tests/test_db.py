@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import REPO_ROOT, Settings
+from app.config import REPO_ROOT, Env
 from app.db import (
     DB_SCHEMA_VERSION,
     VERSION_KEY,
@@ -37,10 +37,9 @@ def database(tmp_path: Path) -> Iterator[Database]:
     instance.close()
 
 
-def hub_settings(tmp_path: Path) -> Settings:
-    return Settings(
+def make_env(tmp_path: Path) -> Env:
+    return Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
@@ -141,7 +140,7 @@ def test_a_newer_database_stops_create_app(tmp_path: Path) -> None:
     seed.meta_set(VERSION_KEY, str(DB_SCHEMA_VERSION + 1))
     seed.close()
     with pytest.raises(RuntimeError, match="newer dashboard-hub"):
-        create_app(hub_settings(tmp_path))
+        create_app(make_env(tmp_path))
     close_databases()
 
 
@@ -210,9 +209,9 @@ def test_reopen_brings_a_closed_database_back(tmp_path: Path) -> None:
 # Hub over the shared database
 # ---------------------------------------------------------------------------
 def test_two_apps_over_one_data_dir_share_one_database(tmp_path: Path) -> None:
-    settings = hub_settings(tmp_path)
-    first = create_app(settings)
-    second = create_app(settings)
+    env = make_env(tmp_path)
+    first = create_app(env)
+    second = create_app(env)
     try:
         assert first.state.hub.db is second.state.hub.db
         assert first.state.hub.db.path == tmp_path / "deskmate.sqlite"
@@ -223,8 +222,8 @@ def test_two_apps_over_one_data_dir_share_one_database(tmp_path: Path) -> None:
 def test_reload_rebuilds_the_identity_from_the_hub_row(tmp_path: Path) -> None:
     """Write a new ``hub`` row behind the running Hub, reload, and the token
     it was verifying a moment ago stops verifying."""
-    settings = hub_settings(tmp_path)
-    app = create_app(settings)
+    env = make_env(tmp_path)
+    app = create_app(env)
     try:
         with TestClient(app) as client:
             hub = client.app.state.hub
@@ -256,8 +255,8 @@ def test_reload_rebuilds_the_identity_from_the_hub_row(tmp_path: Path) -> None:
 
 
 def test_reload_keeps_the_alert_and_drops_the_render_cache(tmp_path: Path) -> None:
-    settings = hub_settings(tmp_path)
-    app = create_app(settings)
+    env = make_env(tmp_path)
+    app = create_app(env)
     try:
         hub = app.state.hub
         hub.alerts.set(AlertRequest(title="Someone is at the door"))

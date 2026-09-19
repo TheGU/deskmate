@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.alerts import AlertStore
-from app.config import REPO_ROOT, Settings
+from app.config import REPO_ROOT, Env
 from app.db import LEGACY_IMPORTED_KEY, Database, close_databases
 from app.hub_config import HubConfigUnreadable, HubIdentity, claim_hub
 from app.legacy import (
@@ -447,15 +447,14 @@ def test_a_started_hub_comes_up_claimed_from_the_old_files(
     data_dir = tmp_path / "data"
     _path, token, _device_key = write_hub_json(data_dir)
     write_legacy_telemetry(data_dir, rows=2)
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )
     try:
-        app = create_app(settings)
+        app = create_app(env)
         with TestClient(app) as client:
             hub = client.app.state.hub
             assert hub.identity.configured is True
@@ -464,7 +463,7 @@ def test_a_started_hub_comes_up_claimed_from_the_old_files(
 
             # A second start over the same DATA_DIR does not import again.
             stamp = hub.db.meta_get(LEGACY_IMPORTED_KEY)
-            second = create_app(settings)
+            second = create_app(env)
             assert second.state.hub.db.meta_get(LEGACY_IMPORTED_KEY) == stamp
     finally:
         close_databases()
