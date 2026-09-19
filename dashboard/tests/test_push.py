@@ -29,12 +29,8 @@ def auth(token: str) -> dict[str, str]:
 
 def _claim(client: TestClient) -> str:
     hub = client.app.state.hub
-    code = hub.identity.claim_code
-    assert code is not None
     secrets = asyncio.run(
-        hub.identity.claim(
-            submitted_code=code, name="deskmate", base_url="http://dashboard-hub.lan:8080"
-        )
+        hub.identity.claim(name="deskmate", base_url="http://dashboard-hub.lan:8080")
     )
     return secrets.token
 

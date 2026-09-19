@@ -55,12 +55,8 @@ def hub_claim(client: TestClient) -> ClaimedSecrets:
     dependency on any other test.
     """
     hub = client.app.state.hub
-    code = hub.identity.claim_code
-    assert code is not None
     return asyncio.run(
-        hub.identity.claim(
-            submitted_code=code, name="deskmate", base_url="http://dashboard-hub.lan:8080"
-        )
+        hub.identity.claim(name="deskmate", base_url="http://dashboard-hub.lan:8080")
     )
 
 
@@ -119,27 +115,22 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
     with TestClient(app) as flow_client:
         hub = flow_client.app.state.hub
         assert hub.identity.configured is False
-        assert hub.identity.claim_code is not None
 
         redirect = flow_client.get("/", follow_redirects=False)
-        assert redirect.status_code in (307, 308)
+        assert redirect.status_code == 303
         assert redirect.headers["location"] == "/setup"
 
         unconfigured_page = flow_client.get("/setup")
         assert unconfigured_page.status_code == 200
-        assert "claim code" in unconfigured_page.text.lower()
+        assert "claim code" not in unconfigured_page.text.lower()
 
         assert flow_client.post("/api/alert", json={"title": "x"}).status_code == 503
         assert flow_client.delete("/api/alert").status_code == 503
 
-        form = {"name": "deskmate", "base_url": "http://dashboard-hub.lan:8080"}
-        wrong = flow_client.post("/setup", data={**form, "claim_code": "0000-0000"})
-        assert wrong.status_code == 403
-        assert hub.identity.configured is False
-
-        code = hub.identity.claim_code
-        assert code is not None
-        right = flow_client.post("/setup", data={**form, "claim_code": code})
+        # A name distinct from the generic "deskmate" page title, so the
+        # no-leak assertion below cannot pass by accident.
+        form = {"name": "My Test Hub", "base_url": "http://dashboard-hub.lan:8080"}
+        right = flow_client.post("/setup", data=form)
         assert right.status_code == 200
         assert right.headers["cache-control"] == "no-store"
         assert right.headers["pragma"] == "no-cache"
@@ -149,7 +140,6 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
         assert len(token) > 20
 
         assert hub.identity.configured is True
-        assert hub.identity.claim_code is None
         stored_text = hub.settings.hub_config_file.read_text(encoding="utf-8")
         stored = json.loads(stored_text)
         assert stored["token_sha256"] != token
@@ -158,8 +148,12 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
         configured_page = flow_client.get("/setup")
         assert configured_page.status_code == 200
         assert "already set up" in configured_page.text.lower()
+        # An anonymous caller must not learn the name, base URL or creation
+        # time of a configured hub from GET /setup.
+        assert form["name"] not in configured_page.text
+        assert form["base_url"] not in configured_page.text
 
-        second = flow_client.post("/setup", data={**form, "claim_code": "AAAA-AAAA"})
+        second = flow_client.post("/setup", data=form)
         assert second.status_code == 409
 
         denied = flow_client.post("/api/alert", json={"title": "x"})
@@ -169,6 +163,78 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
         )
         assert allowed.status_code == 201
         flow_client.delete("/api/alert", headers=auth(token))
+
+
+def test_post_setup_rejects_a_non_private_client(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    app = create_app(settings)
+    # 8.8.8.8 (unlike the RFC 5737 documentation ranges, which Python's
+    # ipaddress module - surprisingly - classifies as "private") is squarely
+    # public.
+    public_client = TestClient(app, client=("8.8.8.8", 12345))
+    response = public_client.post(
+        "/setup", data={"name": "deskmate", "base_url": "http://dashboard-hub.lan:8080"}
+    )
+    assert response.status_code == 403
+    assert "local network" in response.json()["detail"]
+    assert public_client.app.state.hub.identity.configured is False
+
+
+def test_reads_and_device_telemetry_503_while_unconfigured(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    unconfigured_client = TestClient(create_app(settings))
+    assert unconfigured_client.get("/api/state").status_code == 503
+    assert unconfigured_client.get("/display/today.png").status_code == 503
+    assert (
+        unconfigured_client.post(
+            "/api/device/telemetry", json={"device": "reterminal-e1002"}
+        ).status_code
+        == 503
+    )
+
+
+def test_preview_and_root_redirect_to_setup_while_unconfigured(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    unconfigured_client = TestClient(create_app(settings))
+    preview_redirect = unconfigured_client.get("/preview", follow_redirects=False)
+    assert preview_redirect.status_code == 303
+    assert preview_redirect.headers["location"] == "/setup"
+
+    root_redirect = unconfigured_client.get("/", follow_redirects=False)
+    assert root_redirect.status_code == 303
+    assert root_redirect.headers["location"] == "/setup"
+
+
+def test_healthz_minimal_body_while_unconfigured(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    unconfigured_client = TestClient(create_app(settings))
+    response = unconfigured_client.get("/healthz")
+    assert response.status_code == 200
+    assert set(response.json()) == {"status", "version", "renderer"}
 
 
 def test_post_setup_rejects_a_form_over_the_cap(tmp_path: Path) -> None:
@@ -203,7 +269,6 @@ def test_a_corrupt_hub_config_503s_setup_and_writes_but_the_panel_keeps_working(
     with TestClient(app) as broken_client:
         hub = broken_client.app.state.hub
         assert hub.identity.error is not None
-        assert hub.identity.claim_code is None
 
         setup = broken_client.get("/setup")
         assert setup.status_code == 503
@@ -298,7 +363,10 @@ def test_healthz_on_a_claimed_hub_hides_adapters_until_authenticated(
 
 def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Path) -> None:
     """No ``with`` lifespan: Chromium never launches and no adapter has ever
-    fetched, so /healthz must still answer 200 without triggering either."""
+    fetched, so /healthz must still answer 200 without triggering either.
+    Claimed (but with no reader auth on this bare TestClient) so the full
+    body - and the adapter statuses this test is about - is visible.
+    """
     settings = Settings(
         _env_file=None,
         FIXTURES_DIR=FIXTURES_DIR,
@@ -307,7 +375,12 @@ def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Pa
     )
     app = create_app(settings)
     fresh_client = TestClient(app)
-    response = fresh_client.get("/healthz")
+    secrets = asyncio.run(
+        fresh_client.app.state.hub.identity.claim(
+            name="deskmate", base_url="http://dashboard-hub.lan:8080"
+        )
+    )
+    response = fresh_client.get("/healthz", headers=auth(secrets.token))
     assert response.status_code == 200
     payload = response.json()
     assert payload["renderer"]["connected"] is False
@@ -491,12 +564,8 @@ def test_device_telemetry_post_accepts_the_device_key_bearer_on_a_claimed_hub(
     app = create_app(settings)
     with TestClient(app) as isolated_client:
         hub = isolated_client.app.state.hub
-        code = hub.identity.claim_code
-        assert code is not None
         secrets = asyncio.run(
-            hub.identity.claim(
-                submitted_code=code, name="deskmate", base_url="http://dashboard-hub.lan:8080"
-            )
+            hub.identity.claim(name="deskmate", base_url="http://dashboard-hub.lan:8080")
         )
         response = isolated_client.post(
             "/api/device/telemetry",

@@ -17,13 +17,13 @@ Two environment variables, set by whoever runs you; never put either in a repo:
 
 - `DESKMATE_URL` - the hub's base URL, for example `http://deskmate.local`.
 - `DESKMATE_TOKEN` - the bearer token, shown once on the hub's `/setup` page when the owner
-  claimed it.
+  set it up.
 
 Every write below sends `Authorization: Bearer <token>`. The scheme is case-insensitive but the
 header is required on every push and on the alert endpoints.
 
-Confirm the hub before posting anything. Once the hub is claimed, reads need the token too; a
-`401` here means the token is wrong.
+Confirm the hub before posting anything. Reads need the token too; a `401` means the token is
+wrong, a `503` means the hub itself is not set up yet - that is the owner's step, not yours.
 
 ```sh
 curl -s -H "Authorization: Bearer $DESKMATE_TOKEN" "$DESKMATE_URL/api/hub"
@@ -104,9 +104,9 @@ The Brief page has room for 9 lines total: each section title and each item coun
 and whatever does not fit past that budget is cut, so put the sections that matter most first. A
 headline over about 30 characters drops to a smaller size on the panel. `note` doubles as the
 Today page's AI NOTE bar (falling back to `headline` when empty), so leaving it blank degrades
-Today too. Write the brief from `GET /api/state` (send the same `Authorization` header once the
-hub is claimed): it returns the calendar, weather, home and task state the panel is already
-rendering, so build the brief from that rather than guessing. Suggested sections - morning:
+Today too. Write the brief from `GET /api/state` (send the same `Authorization` header): it
+returns the calendar, weather, home and task state the panel is already rendering, so build the
+brief from that rather than guessing. Suggested sections - morning:
 today's schedule, key tasks, suggested focus, things at risk, unfinished work from yesterday.
 Evening: work completed, open tasks, things that changed, what should happen tomorrow.
 
@@ -173,13 +173,13 @@ Every error is JSON with a `detail` string (or a list of pydantic problems under
 | Status | Meaning |
 | --- | --- |
 | 401 | Missing or wrong bearer token. |
-| 403 | Wrong claim code on `/setup` (the owner's step, not yours). |
+| 403 | `/setup` was called from off the hub's local network (the owner's step, not yours). |
 | 422 | Body rejected: unknown field, `schema_version` other than 1, a length or count cap, a duplicate task id, or a naive datetime. |
 | 503 | The hub is not set up yet, or its `hub.json` is unreadable (detail says which). |
 | (connection refused, DNS failure, timeout) | The hub is unreachable: wrong `DESKMATE_URL`, the hub is down, or a network problem sits between you and it. |
 
 401, 422 and 503 are permanent for this run: fix the cause (a corrected token, a corrected body,
-the owner claiming the hub) before trying again, and do not push the other datasets blind once one
+the owner setting the hub up) before trying again, and do not push the other datasets blind once one
 has failed this way - report the `detail` and stop. A connection refused, a DNS failure, a
 timeout, or any 5xx other than 503 is worth exactly one retry after a short pause; if that retry
 also fails, stop and report. Never loop.

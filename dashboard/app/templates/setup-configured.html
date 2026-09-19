@@ -18,24 +18,10 @@
   }
   h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
   p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
-  .hint { font-size: 13px; font-weight: 600; margin-top: 8px; }
-  code { border: 2px solid #000000; padding: 0 4px; font-family: inherit; font-weight: 700; }
 </style>
 </head>
 <body>
-  <h1>deskmate is already set up</h1>
-  <p class="sub">
-    Hub <strong>{{ name }}</strong> at <strong>{{ base_url }}</strong>,
-    configured {{ created_at }}.
-  </p>
-  <p class="hint">
-    The pages are at <a href="/preview">/preview</a>, after signing in at
-    <a href="/login">/login</a>.
-  </p>
-  <p class="hint">
-    Lost the token or device key? Stop the container, delete
-    <code>data/hub.json</code>, restart, and open <code>/setup</code>
-    again. There is no edit or regenerate mode.
-  </p>
+  <h1>This hub is already set up</h1>
+  <p class="sub">Sign in at <a href="/login">/login</a>.</p>
 </body>
 </html>

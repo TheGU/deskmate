@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -666,14 +667,48 @@ def test_system_page_drops_the_home_room_rows(settings: Settings, state: Dashboa
 # ---------------------------------------------------------------------------
 # endpoints
 # ---------------------------------------------------------------------------
+class _DeviceKeyClient:
+    """A thin wrapper around a plain ``TestClient``, injecting the device
+    key bearer on every ``get()``/``post()``: /api/device/*, /api/state and
+    /healthz all now require a reader credential once the hub is set up
+    (see hub_config.py), and this fixture's whole point is to test those
+    routes, not the auth gate itself.
+    """
+
+    def __init__(self, client: TestClient, device_key: str) -> None:
+        self._client = client
+        self._device_key = device_key
+        self.app = client.app
+
+    def _auth_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {self._device_key}", **kwargs.pop("headers", {})}
+        kwargs["headers"] = headers
+        return kwargs
+
+    def get(self, url: str, **kwargs: Any) -> Any:
+        return self._client.get(url, **self._auth_kwargs(kwargs))
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        return self._client.post(url, **self._auth_kwargs(kwargs))
+
+
 @pytest.fixture()
-def device_client(device_settings: Settings) -> TestClient:
+def device_client(device_settings: Settings) -> _DeviceKeyClient:
     """No lifespan on purpose: none of these endpoints renders, so the test
-    does not need to pay for a Chromium start."""
-    return TestClient(create_app(device_settings))
+    does not need to pay for a Chromium start. Claims the hub so the
+    endpoints below are reachable at all, then hands back a client that
+    sends the device key on every call.
+    """
+    client = TestClient(create_app(device_settings))
+    secrets = asyncio.run(
+        client.app.state.hub.identity.claim(
+            name="deskmate", base_url="http://dashboard-hub.lan:8080"
+        )
+    )
+    return _DeviceKeyClient(client, secrets.device_key)
 
 
-def test_post_telemetry_is_accepted_and_stored(device_client: TestClient) -> None:
+def test_post_telemetry_is_accepted_and_stored(device_client: _DeviceKeyClient) -> None:
     response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD)
     assert response.status_code == 202
     body = response.json()
@@ -689,7 +724,7 @@ def test_post_telemetry_is_accepted_and_stored(device_client: TestClient) -> Non
     assert latest["summary"]["retention_days"] == 30
 
 
-def test_post_telemetry_stores_and_returns_the_power_fields(device_client: TestClient) -> None:
+def test_post_telemetry_stores_and_returns_the_power_fields(device_client: _DeviceKeyClient) -> None:
     response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD_WITH_POWER)
     assert response.status_code == 202
 
@@ -699,7 +734,7 @@ def test_post_telemetry_stores_and_returns_the_power_fields(device_client: TestC
     assert latest["charge_state"] == "charging"
 
 
-def test_post_telemetry_without_power_fields_is_still_accepted(device_client: TestClient) -> None:
+def test_post_telemetry_without_power_fields_is_still_accepted(device_client: _DeviceKeyClient) -> None:
     """The exact payload today's firmware sends, with no power fields at all."""
     response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD)
     assert response.status_code == 202
@@ -710,7 +745,7 @@ def test_post_telemetry_without_power_fields_is_still_accepted(device_client: Te
     assert latest["charge_state"] is None
 
 
-def test_post_telemetry_stores_and_returns_the_wake_cause(device_client: TestClient) -> None:
+def test_post_telemetry_stores_and_returns_the_wake_cause(device_client: _DeviceKeyClient) -> None:
     payload = dict(DEVICE_PAYLOAD, wake_cause="button_left")
     response = device_client.post("/api/device/telemetry", json=payload)
     assert response.status_code == 202
@@ -719,7 +754,7 @@ def test_post_telemetry_stores_and_returns_the_wake_cause(device_client: TestCli
     assert latest["wake_cause"] == "button_left"
 
 
-def test_post_telemetry_without_wake_cause_is_still_accepted(device_client: TestClient) -> None:
+def test_post_telemetry_without_wake_cause_is_still_accepted(device_client: _DeviceKeyClient) -> None:
     """Older firmware that never sends ``wake_cause`` still posts fine."""
     response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD)
     assert response.status_code == 202
@@ -728,14 +763,14 @@ def test_post_telemetry_without_wake_cause_is_still_accepted(device_client: Test
     assert latest["wake_cause"] is None
 
 
-def test_post_telemetry_rejects_an_unrecognized_charge_state(device_client: TestClient) -> None:
+def test_post_telemetry_rejects_an_unrecognized_charge_state(device_client: _DeviceKeyClient) -> None:
     payload = dict(DEVICE_PAYLOAD, charge_state="fully_charged")
     response = device_client.post("/api/device/telemetry", json=payload)
     assert response.status_code == 400
     assert response.json()["accepted"] is False
 
 
-def test_post_telemetry_accepts_null_numeric_fields(device_client: TestClient) -> None:
+def test_post_telemetry_accepts_null_numeric_fields(device_client: _DeviceKeyClient) -> None:
     payload = dict(DEVICE_PAYLOAD, temperature=None, humidity=None, battery_level=None)
     response = device_client.post("/api/device/telemetry", json=payload)
     assert response.status_code == 202
@@ -748,7 +783,7 @@ def test_post_telemetry_accepts_null_numeric_fields(device_client: TestClient) -
     "body",
     ["not json at all", "{", '{"device": }'],
 )
-def test_post_telemetry_rejects_a_non_json_body(device_client: TestClient, body: str) -> None:
+def test_post_telemetry_rejects_a_non_json_body(device_client: _DeviceKeyClient, body: str) -> None:
     response = device_client.post(
         "/api/device/telemetry",
         content=body,
@@ -758,7 +793,7 @@ def test_post_telemetry_rejects_a_non_json_body(device_client: TestClient, body:
     assert response.json()["accepted"] is False
 
 
-def test_post_telemetry_rejects_a_body_over_the_cap(device_client: TestClient) -> None:
+def test_post_telemetry_rejects_a_body_over_the_cap(device_client: _DeviceKeyClient) -> None:
     oversized = json.dumps({"device": "reterminal-e1002", "note": "x" * MAX_OPEN_BODY_BYTES})
     response = device_client.post(
         "/api/device/telemetry",
@@ -779,14 +814,14 @@ def test_post_telemetry_rejects_a_body_over_the_cap(device_client: TestClient) -
     ],
 )
 def test_post_telemetry_rejects_an_invalid_payload(
-    device_client: TestClient, payload: object
+    device_client: _DeviceKeyClient, payload: object
 ) -> None:
     response = device_client.post("/api/device/telemetry", json=payload)
     assert response.status_code == 400
     assert response.json()["accepted"] is False
 
 
-def test_get_telemetry_on_an_empty_store(device_client: TestClient) -> None:
+def test_get_telemetry_on_an_empty_store(device_client: _DeviceKeyClient) -> None:
     payload = device_client.get("/api/device/telemetry").json()
     assert payload["status"] == "unavailable"
     assert payload["latest"] is None
@@ -794,7 +829,7 @@ def test_get_telemetry_on_an_empty_store(device_client: TestClient) -> None:
     assert payload["summary"]["sample_count"] == 0
 
 
-def test_history_endpoint_downsamples_to_the_ceiling(device_client: TestClient) -> None:
+def test_history_endpoint_downsamples_to_the_ceiling(device_client: _DeviceKeyClient) -> None:
     empty = device_client.get("/api/device/history").json()
     assert empty["samples"] == []
     assert empty["sample_count"] == 0
@@ -815,12 +850,12 @@ def test_history_endpoint_downsamples_to_the_ceiling(device_client: TestClient) 
     assert payload["samples"][0]["received_at"].endswith("+07:00")
 
 
-def test_history_endpoint_rejects_a_bad_window(device_client: TestClient) -> None:
+def test_history_endpoint_rejects_a_bad_window(device_client: _DeviceKeyClient) -> None:
     assert device_client.get("/api/device/history", params={"hours": 0}).status_code == 422
     assert device_client.get("/api/device/history", params={"hours": -1}).status_code == 422
 
 
-def test_state_and_healthz_carry_the_device_block(device_client: TestClient) -> None:
+def test_state_and_healthz_carry_the_device_block(device_client: _DeviceKeyClient) -> None:
     # /healthz only replays the last outcome, so force one before reading it.
     device_client.get("/api/state")
     health = device_client.get("/healthz").json()

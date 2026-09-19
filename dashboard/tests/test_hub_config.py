@@ -1,11 +1,10 @@
-"""Pure functions behind hub identity: claim code, token, base URL, claim_hub,
-the session cookie."""
+"""Pure functions behind hub identity: token, base URL, the private-address
+check, claim_hub, the session cookie."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import re
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 
@@ -19,11 +18,10 @@ from app.hub_config import (
     HubIdentity,
     InvalidBaseURL,
     SESSION_MAX_AGE_SECONDS,
-    WrongClaimCode,
     claim_hub,
-    generate_claim_code,
     generate_token,
     hash_token,
+    is_private_client_host,
     load_hub_config,
     mint_session_cookie,
     session_cookie_valid,
@@ -33,14 +31,25 @@ from app.hub_config import (
 )
 
 
-def test_claim_code_matches_the_xxxx_xxxx_shape() -> None:
-    code = generate_claim_code()
-    assert re.fullmatch(r"[A-Z0-9]{4}-[A-Z0-9]{4}", code)
+@pytest.mark.parametrize(
+    "host",
+    ["127.0.0.1", "10.1.2.3", "192.168.1.5", "172.16.0.1", "169.254.1.1", "::1", "fe80::1"],
+)
+def test_is_private_client_host_accepts_local_addresses(host: str) -> None:
+    assert is_private_client_host(host) is True
 
 
-def test_claim_code_excludes_ambiguous_characters() -> None:
-    codes = "".join(generate_claim_code() for _ in range(200))
-    assert not set(codes) & set("O0I1-").difference({"-"})
+@pytest.mark.parametrize("host", ["8.8.8.8", "1.1.1.1"])
+def test_is_private_client_host_rejects_public_addresses(host: str) -> None:
+    assert is_private_client_host(host) is False
+
+
+def test_is_private_client_host_allows_a_missing_or_unparseable_host() -> None:
+    """``None`` (no client in the ASGI scope) and a non-IP host (Starlette's
+    TestClient default, "testclient") are both treated as allowed - a real
+    deployment always hands this a real client IP."""
+    assert is_private_client_host(None) is True
+    assert is_private_client_host("testclient") is True
 
 
 def test_token_hash_round_trips() -> None:
@@ -87,23 +96,10 @@ def _config(token_sha256: str = "x", device_key_sha256: str = "y") -> HubConfig:
     )
 
 
-def test_claim_hub_rejects_the_wrong_code() -> None:
-    with pytest.raises(WrongClaimCode):
-        claim_hub(
-            existing=None,
-            expected_code="AAAA-AAAA",
-            submitted_code="BBBB-BBBB",
-            name="deskmate",
-            base_url="http://dashboard-hub.lan:8080",
-        )
-
-
 def test_claim_hub_rejects_when_already_configured() -> None:
     with pytest.raises(AlreadyConfigured):
         claim_hub(
             existing=_config(),
-            expected_code="AAAA-AAAA",
-            submitted_code="AAAA-AAAA",
             name="deskmate",
             base_url="http://dashboard-hub.lan:8080",
         )
@@ -112,8 +108,6 @@ def test_claim_hub_rejects_when_already_configured() -> None:
 def test_claim_hub_succeeds_and_only_the_hash_is_kept() -> None:
     config, token, device_key = claim_hub(
         existing=None,
-        expected_code="AAAA-AAAA",
-        submitted_code="aaaa-aaaa",
         name="  My Hub  ",
         base_url="http://dashboard-hub.lan:8080/",
     )
@@ -134,8 +128,6 @@ def test_write_and_load_hub_config_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "hub.json"
     config, _token, _device_key = claim_hub(
         existing=None,
-        expected_code="AAAA-AAAA",
-        submitted_code="AAAA-AAAA",
         name="deskmate",
         base_url="http://dashboard-hub.lan:8080",
     )
@@ -206,31 +198,27 @@ def test_load_hub_config_raises_a_pointed_message_for_schema_1(tmp_path: Path) -
 
 
 # -- HubIdentity: startup state and the claim race --------------------------
-def test_identity_with_an_unreadable_config_serves_no_claim_code(tmp_path: Path) -> None:
+def test_identity_with_an_unreadable_config_is_unconfigured_with_an_error(tmp_path: Path) -> None:
     path = tmp_path / "hub.json"
     path.write_text("{ not json", encoding="utf-8")
     identity = HubIdentity(path)
     assert identity.configured is False
-    assert identity.claim_code is None
     assert identity.error is not None
     assert str(path) in identity.error
 
 
-def test_identity_with_no_hub_json_gets_a_claim_code(tmp_path: Path) -> None:
+def test_identity_with_no_hub_json_is_unconfigured(tmp_path: Path) -> None:
     identity = HubIdentity(tmp_path / "hub.json")
     assert identity.configured is False
     assert identity.error is None
-    assert identity.claim_code is not None
 
 
 def test_concurrent_claims_issue_exactly_one_token(tmp_path: Path) -> None:
     async def scenario() -> None:
         identity = HubIdentity(tmp_path / "hub.json")
-        code = identity.claim_code
-        assert code is not None
         results = await asyncio.gather(
-            identity.claim(submitted_code=code, name="first", base_url="http://a.lan:8080"),
-            identity.claim(submitted_code=code, name="second", base_url="http://b.lan:8080"),
+            identity.claim(name="first", base_url="http://a.lan:8080"),
+            identity.claim(name="second", base_url="http://b.lan:8080"),
             return_exceptions=True,
         )
         secrets = [item for item in results if isinstance(item, ClaimedSecrets)]

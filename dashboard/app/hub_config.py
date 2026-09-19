@@ -1,6 +1,5 @@
-"""Hub identity: ``hub.json``, the claim code, the bearer token, the device
-key, the browser session cookie, and the auth dependencies built on top of
-them.
+"""Hub identity: ``hub.json``, the bearer token, the device key, the
+browser session cookie, and the auth dependencies built on top of them.
 
 ``hub.json`` lives in ``DATA_DIR`` (gitignored) and holds ``{"schema": 2,
 "name", "base_url", "token_sha256", "device_key_sha256", "session_secret",
@@ -12,12 +11,18 @@ cookie). Losing any of this means stopping the container, deleting
 ``data/hub.json``, and running ``/setup`` again: there is no edit or
 regenerate mode.
 
-The functions below are pure (claim code and token generation, hashing,
-base URL validation, the claim decision, the session cookie mint/verify) or
-plain synchronous file I/O (``load_hub_config`` / ``write_hub_config``), so
-a test can drive every rule with nothing more than a temp path.
-:class:`HubIdentity` is the thin, stateful wrapper ``main.py`` holds for the
-life of the process.
+There is no claim code: the first ``POST /setup`` to reach an unconfigured
+hub claims it, first come first served. The only guard is the caller's
+address (see :func:`is_private_client_host`) - loopback, RFC1918/ULA
+private, or link-local only - so open ``/setup`` right after the first
+start, on this machine's own network.
+
+The functions below are pure (token generation, hashing, base URL
+validation, the private-address check, the claim decision, the session
+cookie mint/verify) or plain synchronous file I/O (``load_hub_config`` /
+``write_hub_config``), so a test can drive every rule with nothing more
+than a temp path. :class:`HubIdentity` is the thin, stateful wrapper
+``main.py`` holds for the life of the process.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -64,17 +70,9 @@ SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 HUB_CONFIG_SCHEMA = 2
 
-#: Uppercase letters and digits with the ambiguous ones (0/O, 1/I) removed,
-#: so a code read off a log line is never misheard.
-_CLAIM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-
 
 class HubConfigError(Exception):
     """Base for the setup-flow errors ``main.py`` turns into HTTP responses."""
-
-
-class WrongClaimCode(HubConfigError):
-    """The submitted claim code does not match the one printed at startup."""
 
 
 class AlreadyConfigured(HubConfigError):
@@ -132,10 +130,23 @@ class HubConfig:
 # ---------------------------------------------------------------------------
 # Pure functions
 # ---------------------------------------------------------------------------
-def generate_claim_code() -> str:
-    """An 8-character human-typed code, grouped ``XXXX-XXXX``."""
-    raw = "".join(secrets.choice(_CLAIM_CODE_ALPHABET) for _ in range(8))
-    return f"{raw[:4]}-{raw[4:]}"
+def is_private_client_host(host: str | None) -> bool:
+    """True for loopback, RFC1918/ULA private, or link-local: the only
+    callers ``POST /setup`` accepts on an unconfigured hub, now that there
+    is no claim code to guard it instead.
+
+    ``None`` (the ASGI scope carries no client at all) and a value that is
+    not a parseable IP address (Starlette's ``TestClient`` uses the literal
+    host ``"testclient"``) are both treated as allowed: a real deployment
+    always hands this a real client IP.
+    """
+    if host is None:
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return addr.is_loopback or addr.is_private or addr.is_link_local
 
 
 def generate_token() -> str:
@@ -181,8 +192,6 @@ def validate_base_url(value: str) -> str:
 def claim_hub(
     *,
     existing: HubConfig | None,
-    expected_code: str,
-    submitted_code: str,
     name: str,
     base_url: str,
 ) -> tuple[HubConfig, str, str]:
@@ -193,15 +202,12 @@ def claim_hub(
     (write routes); the device key is for the firmware and doubles as a
     reader credential (bearer or /login) once the hub is claimed.
 
-    Raises :class:`AlreadyConfigured`, :class:`WrongClaimCode` or
-    :class:`InvalidBaseURL`. Touches no filesystem; the caller persists the
-    result with :func:`write_hub_config` (typically inside
-    ``run_in_threadpool``).
+    Raises :class:`AlreadyConfigured` or :class:`InvalidBaseURL`. Touches no
+    filesystem; the caller persists the result with :func:`write_hub_config`
+    (typically inside ``run_in_threadpool``).
     """
     if existing is not None:
         raise AlreadyConfigured("hub is already configured")
-    if not hmac.compare_digest(submitted_code.strip().upper(), expected_code.strip().upper()):
-        raise WrongClaimCode("wrong claim code")
     clean_name = name.strip() or "deskmate"
     clean_url = validate_base_url(base_url)
     token = generate_token()
@@ -305,14 +311,13 @@ def write_hub_config(path: Path, config: HubConfig) -> None:
 # Process-lifetime identity
 # ---------------------------------------------------------------------------
 class HubIdentity:
-    """The hub's config (once claimed) plus the in-memory claim code.
+    """The hub's config, once claimed.
 
     One instance lives on ``Hub`` (``app/main.py``) for the life of the
-    process. Loads ``hub.json`` at construction time; when it is absent, a
-    claim code is generated and kept only in memory until the hub is
-    claimed. When it exists but cannot be trusted (:class:`HubConfigUnreadable`),
-    no claim code is generated either: ``self.error`` carries the detail
-    every 503 on this hub repeats until the file is fixed or deleted.
+    process. Loads ``hub.json`` at construction time. When it exists but
+    cannot be trusted (:class:`HubConfigUnreadable`), ``self.error`` carries
+    the detail every 503 on this hub repeats until the file is fixed or
+    deleted.
 
     Process assumes a single worker (see the ``workers=1`` note by the
     uvicorn command in ``Dockerfile``): the claim lock below serializes
@@ -330,9 +335,6 @@ class HubIdentity:
             log(logger, logging.ERROR, "hub config unreadable", path=str(path), error=str(exc))
             self.config = None
             self.error = str(exc)
-        self.claim_code: str | None = (
-            None if (self.config is not None or self.error is not None) else generate_claim_code()
-        )
 
     @property
     def configured(self) -> bool:
@@ -350,7 +352,7 @@ class HubIdentity:
         it at /login)."""
         return self.verify_token(value) or self.verify_device_key(value)
 
-    async def claim(self, *, submitted_code: str, name: str, base_url: str) -> "ClaimedSecrets":
+    async def claim(self, *, name: str, base_url: str) -> "ClaimedSecrets":
         """Validate and persist a setup submission. Returns both plaintext
         secrets (the caller shows each once; only their hashes are stored).
 
@@ -363,14 +365,11 @@ class HubIdentity:
         async with self._claim_lock:
             config, token, device_key = claim_hub(
                 existing=self.config,
-                expected_code=self.claim_code or "",
-                submitted_code=submitted_code,
                 name=name,
                 base_url=base_url,
             )
             await run_in_threadpool(write_hub_config, self._path, config)
             self.config = config
-            self.claim_code = None
             return ClaimedSecrets(token=token, device_key=device_key)
 
 
@@ -393,6 +392,14 @@ class LoginRedirect(Exception):
     def __init__(self, next_path: str) -> None:
         self.next_path = next_path
         super().__init__(next_path)
+
+
+class SetupRedirect(Exception):
+    """Raised by :func:`require_reader_html` instead of an HTTPException
+    when the hub is not set up yet: a browser hitting a preview route
+    should land on ``/setup``, not a bare 503. ``main.py`` registers the
+    exception handler that turns this into the actual redirect.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -445,9 +452,9 @@ async def require_device(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> None:
-    """``POST /api/device/telemetry``: open (no credential at all) until the
-    hub is claimed, matching today's firmware; token or device key bearer
-    required afterward. The session cookie is never accepted here - a
+    """``POST /api/device/telemetry``: 503 until the hub is set up (see
+    :func:`require_token`'s detail string, reused here), then the bearer
+    token or the device key. The session cookie is never accepted here - a
     browser tab must not be able to inject a reading just by being signed
     in to /preview.
     """
@@ -455,7 +462,7 @@ async def require_device(
     if identity.error is not None:
         raise HTTPException(status_code=503, detail=identity.error)
     if not identity.configured:
-        return
+        raise HTTPException(status_code=503, detail="hub is not set up; open /setup")
     if credentials is None:
         raise HTTPException(status_code=401, detail="missing bearer token")
     value = credentials.credentials.strip()
@@ -467,14 +474,14 @@ async def require_reader(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> None:
-    """Read routes (JSON and images): open until the hub is claimed, then
-    the bearer token, the device key, or a signed-in browser session.
+    """Read routes (JSON and images): 503 until the hub is set up, then the
+    bearer token, the device key, or a signed-in browser session.
     """
     identity: HubIdentity = request.app.state.hub.identity
     if identity.error is not None:
         raise HTTPException(status_code=503, detail=identity.error)
     if not identity.configured:
-        return
+        raise HTTPException(status_code=503, detail="hub is not set up; open /setup")
     if not reader_authenticated(request, credentials):
         raise HTTPException(status_code=401, detail="sign in at /login or send a bearer token")
 
@@ -484,12 +491,14 @@ async def require_reader_html(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> None:
     """Same rule as :func:`require_reader`, for the two HTML preview routes:
-    a browser without a credential is sent to /login instead of a bare 401.
+    a browser is sent to /setup while the hub is unconfigured, or to /login
+    when it is configured but the browser carries no credential, instead of
+    a bare 503 or 401.
     """
     identity: HubIdentity = request.app.state.hub.identity
     if identity.error is not None:
         raise HTTPException(status_code=503, detail=identity.error)
     if not identity.configured:
-        return
+        raise SetupRedirect()
     if not reader_authenticated(request, credentials):
         raise LoginRedirect(request.url.path)

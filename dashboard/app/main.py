@@ -58,8 +58,9 @@ from app.hub_config import (
     InvalidBaseURL,
     LoginRedirect,
     SESSION_MAX_AGE_SECONDS,
-    WrongClaimCode,
+    SetupRedirect,
     _bearer_scheme,
+    is_private_client_host,
     mint_session_cookie,
     reader_authenticated,
     require_device,
@@ -86,17 +87,17 @@ from app.timeutil import to_local
 logger = logging.getLogger("app.main")
 
 #: Matches uvicorn.run's own port in ``main()`` below; there is no
-#: configurable bind host/port setting today, so the claim-code log line
-#: always names 0.0.0.0 with a note to use the LAN address instead.
+#: configurable bind host/port setting today.
 DEFAULT_PORT = 8080
 
-#: /setup and /login are the only POST routes with no bearer token (they are
-#: how a credential is obtained or exchanged for a session in the first
-#: place); /api/device/telemetry is open too, but only until the hub is
-#: claimed (see the trade-off note on the telemetry route below). Until then
-#: anyone on the LAN can point any of the three at this single-worker
-#: container. Cap what any of them will buffer in memory before validation
-#: ever runs.
+#: /setup and /login are the only POST routes with no bearer token: /setup
+#: because that is how the hub's first credential is minted, /login because
+#: it exchanges a credential for a session rather than requiring one
+#: already. POST /setup is further restricted to a private/loopback caller
+#: (see is_private_client_host in hub_config.py) while the hub is
+#: unconfigured; every other route, including /api/device/telemetry, is 503
+#: until then. Cap what either open POST route will buffer in memory before
+#: validation ever runs.
 MAX_OPEN_BODY_BYTES = 64 * 1024
 
 
@@ -146,9 +147,8 @@ class Hub:
             log(
                 logger,
                 logging.WARNING,
-                f"Setup needed: open http://0.0.0.0:{DEFAULT_PORT}/setup and enter "
-                f"claim code {self.identity.claim_code}",
-                note="0.0.0.0 is not reachable from another device; use this machine's LAN address",
+                "Hub not set up: open /setup on this hub's address now; until then it "
+                "serves nothing else",
             )
 
     async def state(self, *, force: bool = False) -> DashboardState:
@@ -356,11 +356,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CachedAdapter failure backoff in adapters/base.py). GET /api/state
         is what forces every adapter to fetch and reports live status.
 
-        Unconfigured: the full body, same as always - there is no secret yet
-        to protect. Configured: a caller without a reader credential (token,
-        device key, or session cookie) gets only status/version/renderer, so
-        an unauthenticated probe from the LAN cannot enumerate adapter names
-        or alert state; a reader gets the full body.
+        Unconfigured, or configured but without a reader credential (token,
+        device key, or session cookie): only status/version/renderer, so an
+        unauthenticated probe from the LAN cannot tell an unset-up hub from
+        a configured one, let alone enumerate adapter names or alert state.
+        A reader on a configured hub gets the full body.
         """
         hub: Hub = app.state.hub
         minimal: dict[str, Any] = {
@@ -368,7 +368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "version": __version__,
             "renderer": {"connected": hub.renderer.connected},
         }
-        if hub.identity.configured and not reader_authenticated(request, credentials):
+        if not reader_authenticated(request, credentials):
             return JSONResponse(minimal)
         adapters: dict[str, dict[str, Any]] = {}
         for name, cached in hub.state_service.adapters.items():
@@ -545,9 +545,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # -- device telemetry ------------------------------------------------
     # firmware/e1002.yaml sends "Authorization: Bearer ${hub_key}" on this
     # POST, ${hub_key} being the device key /setup hands out. require_device
-    # checks it once the hub is claimed; open (no credential at all) only
-    # before that, so a fresh install still works out of the box and older
-    # firmware without the header gets 401 here rather than a silent accept.
+    # 503s until the hub is set up (there is no key to send yet), then
+    # requires it; older firmware without the header gets 401 rather than a
+    # silent accept.
     @app.post("/api/device/telemetry", dependencies=[Depends(require_device)])
     async def post_device_telemetry(request: Request) -> JSONResponse:
         hub: Hub = app.state.hub
@@ -648,16 +648,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if hub.identity.error is not None:
             raise HTTPException(status_code=503, detail=hub.identity.error)
         if hub.identity.configured:
-            config = hub.identity.config
-            assert config is not None
             template = hub.renderer.environment.get_template("setup-configured.html")
-            html = template.render(
-                name=config.name,
-                base_url=config.base_url,
-                created_at=to_local(config.created_at, settings.timezone).isoformat(),
-            )
-            return HTMLResponse(html)
-        guessed_base_url = f"{request.url.scheme}://{request.headers.get('host', '')}"
+            return HTMLResponse(template.render())
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        scheme = forwarded_proto.split(",")[0].strip() if forwarded_proto else request.url.scheme
+        guessed_base_url = f"{scheme}://{request.headers.get('host', '')}"
         template = hub.renderer.environment.get_template("setup.html")
         html = template.render(default_name="deskmate", default_base_url=guessed_base_url)
         return HTMLResponse(html)
@@ -667,11 +662,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hub: Hub = app.state.hub
         if hub.identity.error is not None:
             raise HTTPException(status_code=503, detail=hub.identity.error)
+        if not hub.identity.configured:
+            # No claim code any more: a caller off the local network is
+            # refused outright, rather than allowed to race for the claim.
+            client_host = request.client.host if request.client is not None else None
+            if not is_private_client_host(client_host):
+                raise HTTPException(
+                    status_code=403, detail="setup is only allowed from the local network"
+                )
         await _cap_form_body(request)
         form = await request.form()
         name = str(form.get("name", "")).strip()
         base_url = str(form.get("base_url", ""))
-        claim_code = str(form.get("claim_code", ""))
         # Capped before claim_hub's own base-URL validation runs, so an
         # absurd or empty name/base_url is a plain 422, not whatever urlsplit
         # or a downstream write does with it.
@@ -680,13 +682,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if len(base_url) > 200:
             raise HTTPException(status_code=422, detail="base_url must be 200 characters or fewer")
         try:
-            secrets = await hub.identity.claim(
-                submitted_code=claim_code, name=name, base_url=base_url
-            )
+            secrets = await hub.identity.claim(name=name, base_url=base_url)
         except AlreadyConfigured as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except WrongClaimCode as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except InvalidBaseURL as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         config = hub.identity.config
@@ -758,7 +756,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def root() -> RedirectResponse:
         hub: Hub = app.state.hub
         if not hub.identity.configured:
-            return RedirectResponse("/setup")
+            return RedirectResponse("/setup", status_code=303)
         return RedirectResponse("/preview")
 
     @app.get("/preview", response_class=HTMLResponse, dependencies=[Depends(require_reader_html)])
@@ -816,6 +814,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # safe="/": the path's own slashes must survive quoting unescaped,
         # or "/login?next=/preview" would come out as "...next=%2Fpreview".
         return RedirectResponse(f"/login?next={quote(exc.next_path, safe='/')}", status_code=303)
+
+    @app.exception_handler(SetupRedirect)
+    async def setup_redirect_handler(request: Request, exc: SetupRedirect) -> RedirectResponse:
+        return RedirectResponse("/setup", status_code=303)
 
     return app
 
