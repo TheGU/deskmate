@@ -254,6 +254,13 @@ class Env(BaseSettings):
     def static_dir(self) -> Path:
         return APP_DIR / "static"
 
+    @property
+    def hub_db_file(self) -> Path:
+        """The one SQLite file the hub owns. Mirrors ``Settings.hub_db_file``
+        (``app/db.py``, ``app/telemetry.py``): every call site that only had
+        an ``Env`` to work with (1.2b onward) reads it from here instead."""
+        return self.data_dir / "deskmate.sqlite"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

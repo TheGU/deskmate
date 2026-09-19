@@ -28,7 +28,6 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Final
 
-from app.config import Settings
 from app.db import Database, get_database
 from app.logging_setup import log
 from app.models import DeviceSample, DeviceTelemetry
@@ -240,17 +239,17 @@ def _to_sample(row: sqlite3.Row) -> DeviceSample:
     return DeviceSample.model_validate(values)
 
 
-def get_telemetry_store(settings: Settings) -> TelemetryStore:
-    """The store over the process-wide database for this ``DATA_DIR``.
+def get_telemetry_store(db_path: Path, retention_days: int) -> TelemetryStore:
+    """The store over the process-wide database at ``db_path``.
 
     The database is shared; only this thin wrapper is new per call, so the
     device adapter can ask for it on every fetch. :meth:`Database.migrate` is
     a no-op after the first call in this process, and it is what lets an
     adapter run in a test that never built a ``Hub``.
     """
-    database = get_database(settings.hub_db_file)
+    database = get_database(db_path)
     database.migrate()
-    return TelemetryStore(database, settings.telemetry_retention_days)
+    return TelemetryStore(database, retention_days)
 
 
 __all__ = [

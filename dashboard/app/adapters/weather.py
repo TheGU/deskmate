@@ -17,9 +17,11 @@ import httpx
 
 from app.adapters.base import AdapterUnavailable
 from app.adapters.fixtures import day_delta, load_fixture, shift_tree
-from app.config import Settings
+from app.config import Env
 from app.logging_setup import log
 from app.models import DailyForecast, HourlyRain, Weather
+from app.modules.general.settings import GeneralSettings
+from app.modules.weather.settings import WeatherSettings
 from app.timeutil import now_local, to_local, today_local
 
 logger = logging.getLogger("app.adapters.weather")
@@ -112,29 +114,32 @@ class FixtureWeatherAdapter:
     name = "weather"
     source = "fixture"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, weather: WeatherSettings, general: GeneralSettings, env: Env) -> None:
+        self._weather = weather
+        self._general = general
+        self._env = env
 
     async def fetch(self) -> Weather:
-        settings = self._settings
-        payload = load_fixture(settings.fixtures_dir / "weather.json")
+        env = self._env
+        timezone_name = self._general.timezone
+        payload = load_fixture(env.fixtures_dir / "weather.json")
         delta = day_delta(
-            payload, today_local(settings.timezone), enabled=settings.fixture_relative_dates
+            payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
         raw: Any = shift_tree(payload.get("weather", {}), delta, DATE_KEYS)
         weather = Weather.model_validate(raw)
         if weather.observed_at is not None:
-            weather.observed_at = to_local(weather.observed_at, settings.timezone)
+            weather.observed_at = to_local(weather.observed_at, timezone_name)
         weather.hourly_rain = [
             HourlyRain(
-                at=to_local(item.at, settings.timezone),
+                at=to_local(item.at, timezone_name),
                 probability_percent=item.probability_percent,
                 precipitation_mm=item.precipitation_mm,
             )
             for item in weather.hourly_rain
         ]
-        if settings.weather_location_name:
-            weather.location_name = settings.weather_location_name
+        if self._weather.location_name:
+            weather.location_name = self._weather.location_name
         return weather
 
 
@@ -144,18 +149,20 @@ class OpenMeteoWeatherAdapter:
     name = "weather"
     source = "open_meteo"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, weather: WeatherSettings, general: GeneralSettings, env: Env) -> None:
+        self._weather = weather
+        self._general = general
+        self._env = env
 
     async def fetch(self) -> Weather:
-        settings = self._settings
-        if settings.weather_latitude is None or settings.weather_longitude is None:
-            raise AdapterUnavailable("WEATHER_LATITUDE / WEATHER_LONGITUDE are not set")
+        weather = self._weather
+        if weather.latitude is None or weather.longitude is None:
+            raise AdapterUnavailable("weather latitude / longitude are not set")
 
         common = {
-            "latitude": settings.weather_latitude,
-            "longitude": settings.weather_longitude,
-            "timezone": settings.timezone,
+            "latitude": weather.latitude,
+            "longitude": weather.longitude,
+            "timezone": self._general.timezone,
         }
         forecast_params = {
             **common,
@@ -163,11 +170,11 @@ class OpenMeteoWeatherAdapter:
             "hourly": "precipitation_probability,precipitation",
             "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max",
             "forecast_days": 6,
-            "temperature_unit": "celsius" if settings.units == "metric" else "fahrenheit",
+            "temperature_unit": "celsius" if self._general.units == "metric" else "fahrenheit",
         }
         air_params = {**common, "current": "pm2_5,us_aqi"}
 
-        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=self._env.http_timeout_seconds) as client:
             forecast_response = await client.get(FORECAST_URL, params=forecast_params)
             forecast_response.raise_for_status()
             forecast: dict[str, Any] = forecast_response.json()
@@ -183,7 +190,8 @@ class OpenMeteoWeatherAdapter:
         return self._build(forecast, air)
 
     def _build(self, forecast: dict[str, Any], air: dict[str, Any]) -> Weather:
-        settings = self._settings
+        weather = self._weather
+        timezone_name = self._general.timezone
         current: dict[str, Any] = forecast.get("current", {}) or {}
         daily_raw: dict[str, Any] = forecast.get("daily", {}) or {}
         hourly_raw: dict[str, Any] = forecast.get("hourly", {}) or {}
@@ -203,11 +211,11 @@ class OpenMeteoWeatherAdapter:
                 )
             )
 
-        reference = now_local(settings.timezone)
+        reference = now_local(timezone_name)
         horizon = reference + timedelta(hours=24)
         hourly: list[HourlyRain] = []
         for index, stamp in enumerate(hourly_raw.get("time", []) or []):
-            moment = to_local(datetime.fromisoformat(stamp), settings.timezone)
+            moment = to_local(datetime.fromisoformat(stamp), timezone_name)
             if moment < reference - timedelta(hours=1) or moment > horizon:
                 continue
             probability = _int_at(hourly_raw.get("precipitation_probability"), index)
@@ -222,18 +230,18 @@ class OpenMeteoWeatherAdapter:
         rain_from, rain_until = rain_window(hourly, reference)
         observed_at: datetime | None = None
         if current.get("time"):
-            observed_at = to_local(datetime.fromisoformat(current["time"]), settings.timezone)
+            observed_at = to_local(datetime.fromisoformat(current["time"]), timezone_name)
 
         air_current: dict[str, Any] = air.get("current", {}) or {}
         aqi_value = air_current.get("us_aqi")
         aqi = int(round(aqi_value)) if isinstance(aqi_value, (int, float)) else None
 
-        today = today_local(settings.timezone)
+        today = today_local(timezone_name)
         today_daily = next((item for item in daily if item.day == today), None)
 
         return Weather(
-            location_name=settings.weather_location_name
-            or f"{settings.weather_latitude:.2f},{settings.weather_longitude:.2f}",
+            location_name=weather.location_name
+            or f"{weather.latitude:.2f},{weather.longitude:.2f}",
             observed_at=observed_at,
             temperature_c=current.get("temperature_2m"),
             feels_like_c=current.get("apparent_temperature"),
@@ -274,7 +282,9 @@ def _as_int(value: Any) -> int | None:
     return int(round(value)) if isinstance(value, (int, float)) else None
 
 
-def build_weather_adapter(settings: Settings) -> FixtureWeatherAdapter | OpenMeteoWeatherAdapter:
-    if settings.weather_source == "open_meteo":
-        return OpenMeteoWeatherAdapter(settings)
-    return FixtureWeatherAdapter(settings)
+def build_weather_adapter(
+    weather: WeatherSettings, general: GeneralSettings, env: Env
+) -> FixtureWeatherAdapter | OpenMeteoWeatherAdapter:
+    if weather.source == "open_meteo":
+        return OpenMeteoWeatherAdapter(weather, general, env)
+    return FixtureWeatherAdapter(weather, general, env)

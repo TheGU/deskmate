@@ -9,6 +9,31 @@ Rules that every adapter obeys:
 * :class:`CachedAdapter` never lets an exception escape. On failure it hands
   back the previous value (status ``stale``) when it has one, otherwise no
   value at all. It never fabricates.
+
+**Constructor shape (1.2b).** Every adapter class and ``build_*_adapter``
+function in this package takes the section's own settings model plus
+``app.config.Env``, in that order, and (only when the adapter needs the
+timezone: date shifting, localizing a fetched timestamp, or the brief's
+morning/evening switch) ``app.modules.general.settings.GeneralSettings`` as
+the middle argument::
+
+    build_tasks_adapter(tasks: TasksSettings, general: GeneralSettings, env: Env)
+    build_calendar_adapter(calendar: CalendarSettings, general: GeneralSettings, env: Env)
+    build_weather_adapter(weather: WeatherSettings, general: GeneralSettings, env: Env)
+    build_ai_usage_adapter(ai_usage: AIUsageSettings, general: GeneralSettings, env: Env)
+    build_brief_adapter(brief: BriefSettings, general: GeneralSettings, env: Env)
+    build_home_adapter(home: HomeSettings, env: Env)
+    build_device_adapter(device: DeviceSettings, env: Env)
+
+``home`` and ``device`` never touch a timezone (Home Assistant states and
+device telemetry are shown as-is or timestamped in UTC upstream), so they
+skip ``general`` entirely rather than accept and ignore it. Within a builder,
+an individual adapter class only stores the pieces it actually reads (for
+example ``ObsidianTasksAdapter`` keeps ``tasks`` and ``env`` but not
+``general``, since a vault scan never shifts a date); the builder function
+itself always takes the full triple (or pair) so every source under one
+dataset is constructed the same way. This replaces the single
+``config.Settings`` object every adapter took through 1.2a.
 """
 
 from __future__ import annotations

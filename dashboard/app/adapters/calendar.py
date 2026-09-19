@@ -20,9 +20,11 @@ from icalendar import Calendar as ICalendar
 
 from app.adapters.base import AdapterUnavailable
 from app.adapters.fixtures import day_delta, load_fixture, shift_iso
-from app.config import Settings
+from app.config import Env
 from app.logging_setup import log
 from app.models import Event
+from app.modules.calendar.settings import CalendarSettings
+from app.modules.general.settings import GeneralSettings
 from app.timeutil import to_local, today_local, zone
 
 logger = logging.getLogger("app.adapters.calendar")
@@ -39,14 +41,17 @@ class FixtureCalendarAdapter:
     name = "calendar"
     source = "fixture"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, calendar: CalendarSettings, general: GeneralSettings, env: Env) -> None:
+        self._calendar = calendar
+        self._general = general
+        self._env = env
 
     async def fetch(self) -> list[Event]:
-        settings = self._settings
-        payload = load_fixture(settings.fixtures_dir / "calendar.json")
+        env = self._env
+        timezone_name = self._general.timezone
+        payload = load_fixture(env.fixtures_dir / "calendar.json")
         delta = day_delta(
-            payload, today_local(settings.timezone), enabled=settings.fixture_relative_dates
+            payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
         events: list[Event] = []
         raw_events: Any = payload.get("events", [])
@@ -56,9 +61,9 @@ class FixtureCalendarAdapter:
             item["end"] = shift_iso(item.get("end"), delta)
             item.setdefault("source", "fixture")
             event = Event.model_validate(item)
-            event.start = to_local(event.start, settings.timezone)
+            event.start = to_local(event.start, timezone_name)
             if event.end is not None:
-                event.end = to_local(event.end, settings.timezone)
+                event.end = to_local(event.end, timezone_name)
             events.append(event)
         events.sort(key=lambda item: (item.start, item.title))
         return events
@@ -70,13 +75,15 @@ class IcsCalendarAdapter:
     name = "calendar"
     source = "ics"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, calendar: CalendarSettings, general: GeneralSettings, env: Env) -> None:
+        self._calendar = calendar
+        self._general = general
+        self._env = env
 
     async def fetch(self) -> list[Event]:
-        sources = self._settings.ics_sources
+        sources = [feed.url for feed in self._calendar.feeds]
         if not sources:
-            raise AdapterUnavailable("CALENDAR_ICS_URLS is not set")
+            raise AdapterUnavailable("no calendar feeds are configured")
         # Fetched concurrently: sequentially, N feeds cost up to
         # N x HTTP_TIMEOUT_SECONDS, which is what made the container flap
         # during an outage against the compose healthcheck's 10s timeout.
@@ -84,7 +91,7 @@ class IcsCalendarAdapter:
         # behaviour the old sequential loop had: the first feed *by
         # position* to fail aborts the whole fetch, exactly as it did when a
         # later feed was never even reached.
-        async with httpx.AsyncClient(timeout=self._settings.http_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=self._env.http_timeout_seconds) as client:
             results = await asyncio.gather(
                 *(_read_ics(client, reference) for reference in sources),
                 return_exceptions=True,
@@ -94,7 +101,7 @@ class IcsCalendarAdapter:
             if isinstance(result, BaseException):
                 raise result
             texts.append((reference, result))
-        timezone_name = self._settings.timezone
+        timezone_name = self._general.timezone
         today = today_local(timezone_name)
         window_start = datetime.combine(
             today - timedelta(days=WINDOW_BEFORE_DAYS), time.min, tzinfo=zone(timezone_name)
@@ -110,7 +117,7 @@ class IcsCalendarAdapter:
                     timezone_name,
                     window_start,
                     window_end,
-                    calendar_name=self._settings.ics_calendar_name(index, reference),
+                    calendar_name=self._calendar.feed_name(index),
                 )
             )
         events.sort(key=lambda item: (item.start, item.title))
@@ -222,7 +229,9 @@ def _expand(
     return occurrences
 
 
-def build_calendar_adapter(settings: Settings) -> FixtureCalendarAdapter | IcsCalendarAdapter:
-    if settings.calendar_source == "ics":
-        return IcsCalendarAdapter(settings)
-    return FixtureCalendarAdapter(settings)
+def build_calendar_adapter(
+    calendar: CalendarSettings, general: GeneralSettings, env: Env
+) -> FixtureCalendarAdapter | IcsCalendarAdapter:
+    if calendar.source == "ics":
+        return IcsCalendarAdapter(calendar, general, env)
+    return FixtureCalendarAdapter(calendar, general, env)
