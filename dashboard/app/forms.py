@@ -63,6 +63,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, SecretStr, ValidationError
 from pydantic.fields import FieldInfo
+from starlette.datastructures import FormData
 
 #: How many rows one ``list[Model]`` field may hold. A settings row is JSON
 #: in one SQLite cell and every row is fetched on a render, so this is a
@@ -459,7 +460,7 @@ def render_section(
     )
 
 
-def _last(form: Any, name: str) -> str | None:
+def _last(form: FormData, name: str) -> str | None:
     """The last value submitted under ``name``, or ``None`` if there is none.
 
     Last, never first: a bool is a hidden ``0`` followed by a checkbox
@@ -471,12 +472,12 @@ def _last(form: Any, name: str) -> str | None:
     return values[-1]
 
 
-def _checked(form: Any, name: str) -> bool:
+def _checked(form: FormData, name: str) -> bool:
     value = _last(form, name)
     return value is not None and value.strip().lower() in _TRUE_VALUES
 
 
-def _parse_scalar(form: Any, name: str, spec: _Spec, current: Any) -> Any:
+def _parse_scalar(form: FormData, name: str, spec: _Spec, current: Any) -> Any:
     """One submitted input as the value its model field expects."""
     if spec.kind == "checkbox":
         return _checked(form, name)
@@ -498,7 +499,9 @@ def _parse_scalar(form: Any, name: str, spec: _Spec, current: Any) -> Any:
     return text
 
 
-def parse_section(model: type[BaseModel], form: Any, current: BaseModel | None = None) -> ParsedForm:
+def parse_section(
+    model: type[BaseModel], form: FormData, current: BaseModel | None = None
+) -> ParsedForm:
     """Turn a submitted form into values for ``model.model_validate``.
 
     ``current`` is the section as it is stored, and is read for one purpose:

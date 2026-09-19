@@ -53,7 +53,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
 from starlette.formparsers import MultiPartException
 
 from app import __version__
@@ -72,6 +72,7 @@ from app.backup import (
 from app.config import Env, Settings
 from app.db import get_database
 from app.forms import (
+    FormErrors,
     SectionForm,
     errors_from_parse,
     form_errors,
@@ -436,7 +437,7 @@ def _section_form(
     section: str,
     *,
     values: dict[str, Any] | None = None,
-    errors: Any = None,
+    errors: FormErrors | None = None,
     search: PlaceSearch | None = None,
     search_url: str = "/settings/geocode",
 ) -> SectionForm:
@@ -496,7 +497,7 @@ def _settings_html(
     return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
-def _apply_place(values: dict[str, Any], form: Any) -> None:
+def _apply_place(values: dict[str, Any], form: FormData) -> None:
     """Fold a chosen search result into the weather section's values.
 
     The radio carries ``"<latitude>,<longitude>,<name>"``
@@ -518,7 +519,7 @@ def _apply_place(values: dict[str, Any], form: Any) -> None:
 
 
 async def _save_section(
-    hub: "Hub", section: str, form: Any, *, search_url: str
+    hub: "Hub", section: str, form: FormData, *, search_url: str
 ) -> SectionForm | None:
     """Validate and store one settings section, then reload the hub.
 
