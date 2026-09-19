@@ -8,36 +8,20 @@
 .ag-head { display: flex; align-items: baseline; gap: 12px; height: 24px; margin-bottom: 8px; }
 .ag-date { font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
 
-/* The route: all-day rows (hollow dot, calendar color), then the timed
-   route itself, a vertical scale from 06:00 to 24:00. Left to right: hour
-   numerals, hour ticks, one 4 px line per calendar with an event today,
-   then the label column (time in the calendar color, title in black). */
-.route-allday { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-.route-allday-row { display: flex; align-items: center; gap: 8px; height: 22px; }
-.route-allday-dot {
-  width: 14px; height: 14px; border-radius: 50%; border-width: 2px; border-style: solid;
-  background: #FFFFFF; flex: 0 0 auto;
+/* The plain list: one fixed-height row per event (time in the calendar
+   color, title in black) or, where a later day is reached, a divider row
+   naming it. Row count and title clipping are both decided once in
+   app/view.py (agenda_list_rows); the template only draws what it is given. */
+.ag-list { display: flex; flex-direction: column; }
+.ag-row {
+  display: flex; align-items: center; gap: 12px;
+  height: 28px; flex: 0 0 28px; font-size: 20px; font-weight: 500;
 }
-.route-allday-title { font-size: 20px; font-weight: 500; }
-
-.route-body { position: relative; }
-.route-hournum {
-  position: absolute; left: 0; width: 24px; text-align: right;
-  font-size: 16px; font-weight: 500; transform: translateY(-50%);
-}
-.route-tick { position: absolute; left: 30px; width: 8px; height: 2px; background: #000000; }
-.route-line { position: absolute; top: 0; bottom: 0; width: 4px; }
-.route-dot { position: absolute; width: 14px; height: 14px; border-radius: 50%; transform: translate(-50%, -50%); }
-.route-bar { position: absolute; width: 2px; background: #000000; }
-.route-label { position: absolute; left: 108px; font-size: 20px; white-space: nowrap; transform: translateY(-50%); }
-.route-label .t { font-weight: 700; }
-.route-label .n { font-weight: 500; color: #000000; max-width: 300px; display: inline-block; vertical-align: bottom; }
-.route-now { position: absolute; left: 46px; right: 0; height: 2px; background: #000000; }
-.route-now-label {
-  position: absolute; right: 0; font-size: 16px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.04em; transform: translateY(-50%); background: #FFFFFF; padding-left: 4px;
-}
-.route-empty { position: absolute; left: 46px; font-size: 20px; font-weight: 500; transform: translateY(-50%); }
+.ag-time { flex: 0 0 68px; font-weight: 700; }
+.ag-title { flex: 1 1 auto; min-width: 0; }
+.ag-more { font-size: 20px; font-weight: 500; }
+.ag-divider { display: flex; align-items: center; gap: 8px; height: 28px; flex: 0 0 28px; }
+.ag-divider-rule { flex: 1 1 auto; height: 2px; background: #000000; }
 
 /* Month grid: today inverted, a dot under any day with an event. */
 .month-weekdays { display: flex; }
@@ -66,44 +50,27 @@
     <span class="ag-date">{{ long_date }}</span>
   </div>
 
-  {% if route.allday %}
-  <div class="route-allday">
-    {% for item in route.allday %}
-    <div class="route-allday-row">
-      <span class="route-allday-dot t-{{ item.color }}" style="border-color: currentColor;"></span>
-      <span class="route-allday-title clip">{{ item.title }}</span>
+  {% if agenda_list %}
+  <div class="ag-list">
+    {% for row in agenda_list %}
+    {% if row.kind == 'divider' %}
+    <div class="ag-divider">
+      <span class="label">{{ row.label }}</span>
+      <span class="ag-divider-rule"></span>
     </div>
+    {% elif row.kind == 'more' %}
+    <div class="ag-row"><span class="ag-more">+{{ row.count }} more</span></div>
+    {% else %}
+    <div class="ag-row">
+      <span class="ag-time num t-{{ row.color }}">{{ row.when }}</span>
+      <span class="ag-title clip">{{ row.title }}</span>
+    </div>
+    {% endif %}
     {% endfor %}
   </div>
+  {% else %}
+  <div class="empty">Nothing scheduled</div>
   {% endif %}
-
-  <div class="route-body" style="height: {{ route.height_px }}px;">
-    {% for hour in route.hours %}
-    <div class="route-tick" style="top: {{ hour.pct }}%;"></div>
-    {% if hour.labeled %}
-    <div class="route-hournum" style="top: {{ hour.pct }}%;">{{ hour.label }}</div>
-    {% endif %}
-    {% endfor %}
-
-    {% for line in route.lines %}
-    <div class="route-line bar-{{ line.color }}" style="left: calc(46px + {{ line.x }}px);"></div>
-    {% endfor %}
-
-    {% for marker in route.markers %}
-    <div class="route-bar" style="left: calc(46px + {{ marker.x }}px + 1px); top: {{ marker.bar_top }}px; height: {{ marker.bar_height }}px;"></div>
-    <div class="route-dot bar-{{ marker.color }}" style="left: calc(46px + {{ marker.x }}px + 2px); top: {{ marker.dot_top }}px;"></div>
-    <div class="route-label" style="top: {{ marker.label_top }}px;">
-      <span class="t t-{{ marker.color }}">{{ marker.time }}</span> <span class="n clip">{{ marker.title }}</span>
-    </div>
-    {% endfor %}
-
-    {% if route.empty %}
-    <div class="route-empty" style="top: {{ route.empty_top_px }}px;">Nothing scheduled</div>
-    {% endif %}
-
-    <div class="route-now" style="top: {{ route.now_pct }}%;"></div>
-    <div class="route-now-label" style="top: {{ route.now_pct }}%;">NOW</div>
-  </div>
 </div>
 
 <div class="rule-v"></div>

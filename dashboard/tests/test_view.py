@@ -39,15 +39,14 @@ from app.models import (
 )
 from app.timeutil import zone
 from app.view import (
-    SCALE_END_HOUR,
-    SCALE_START_HOUR,
     ALERT_BAND_ACCENT,
+    AGENDA_LIST_ROW_LIMIT,
     BRIEF_CHIP_WIDTH_PX,
     BRIEF_TITLE_MAX_CHARS,
     PAGES_WITH_OWN_OVERDUE_CHIP,
     PRIORITY_TITLE_MAX_CHARS,
     TODAY_CHIP_WIDTH_PX,
-    agenda_route,
+    agenda_list_rows,
     ai_capacity_rows,
     ai_usage_stale,
     alert_context,
@@ -78,7 +77,6 @@ from app.view import (
     power_label,
     priority_tasks,
     priority_title_budget,
-    scale_position,
     sensor_accent,
     sensor_value,
     service_mark,
@@ -417,15 +415,6 @@ def test_wifi_level_thresholds() -> None:
     assert wifi_level(-68) == "low"
     assert wifi_level(-67) == "strong"
     assert wifi_level(-20) == "strong"
-
-
-def test_scale_position_endpoints_and_a_mid_afternoon_time() -> None:
-    assert scale_position(6 * 60) == 0.0
-    assert scale_position(24 * 60) == 100.0
-    assert scale_position(15 * 60 + 6) == pytest.approx(50.6, abs=0.05)
-    # Outside the 06:00-24:00 span clamps rather than going negative or past 100.
-    assert scale_position(1 * 60) == 0.0
-    assert scale_position(25 * 60) == 100.0
 
 
 def test_today_next_rows_orders_future_events_and_labels_by_day() -> None:
@@ -815,64 +804,144 @@ def test_cap_duration_only_touches_a_trailing_duration() -> None:
 
 
 # ---------------------------------------------------------------------------
-# agenda: the route strip, the month grid, the next-seven-days strip
+# agenda: the plain event list, the month grid, the next-seven-days strip
 # ---------------------------------------------------------------------------
-def test_agenda_route_positions_and_midnight_clamp() -> None:
+def test_agenda_list_rows_today_all_day_first_then_time_including_past() -> None:
+    """Today's own block: all-day events first, then timed events in start
+    order, including ones that have already ended (unlike Today's own
+    agenda list, which drops them)."""
     tz = zone("Asia/Bangkok")
-    today = date(2026, 9, 5)
-    reference = datetime(2026, 9, 5, 8, 0, tzinfo=tz)
+    today = date(2026, 9, 4)
+    reference = datetime(2026, 9, 4, 12, 0, tzinfo=tz)
     events = CalendarBlock(
         status=AdapterStatus.OK,
         items=[
             Event(
                 id="a",
-                title="Late shift",
+                title="Morning standup",
                 calendar="work",
-                start=datetime(2026, 9, 5, 23, 0, tzinfo=tz),
-                end=datetime(2026, 9, 6, 1, 0, tzinfo=tz),
-            )
+                start=datetime(2026, 9, 4, 9, 0, tzinfo=tz),
+                end=datetime(2026, 9, 4, 9, 15, tzinfo=tz),
+            ),
+            Event(
+                id="b",
+                title="Offsite",
+                calendar="personal",
+                start=datetime(2026, 9, 4, 0, 0, tzinfo=tz),
+                end=datetime(2026, 9, 5, 0, 0, tzinfo=tz),
+                all_day=True,
+            ),
+            Event(
+                id="c",
+                title="Evening class",
+                calendar="personal",
+                start=datetime(2026, 9, 4, 19, 0, tzinfo=tz),
+            ),
         ],
     )
     state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
-    route = agenda_route(state, {"work": "blue"}, today, reference)
-    assert route["hours"][0]["pct"] == 0.0
-    assert route["hours"][-1]["pct"] == 100.0
-    marker = route["markers"][0]
-    # An event that runs past midnight clamps to the bottom of the route
-    # rather than wrapping its end time back to the small hours.
-    assert marker["bar_top"] + marker["bar_height"] == pytest.approx(route["height_px"], abs=0.5)
+    rows = agenda_list_rows(state, {"work": "blue", "personal": "green"}, today)
+    assert [row["kind"] for row in rows] == ["event", "event", "event"]
+    assert rows[0]["when"] == "ALL DAY"
+    assert rows[1]["when"] == "09:00"  # already ended by noon, still shown
+    assert rows[2]["when"] == "19:00"
 
 
-def test_agenda_route_stacks_labels_that_would_collide() -> None:
+def test_agenda_list_rows_inserts_a_divider_once_today_runs_out() -> None:
     tz = zone("Asia/Bangkok")
-    today = date(2026, 9, 5)
-    reference = datetime(2026, 9, 5, 7, 0, tzinfo=tz)
+    today = date(2026, 9, 4)
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
     events = CalendarBlock(
         status=AdapterStatus.OK,
         items=[
-            Event(id="a", title="Standup", calendar="work", start=datetime(2026, 9, 5, 9, 0, tzinfo=tz)),
-            Event(id="b", title="Sync", calendar="personal", start=datetime(2026, 9, 5, 9, 0, tzinfo=tz)),
+            Event(id="a", title="Standup", start=datetime(2026, 9, 4, 9, 0, tzinfo=tz)),
+            Event(id="b", title="Sprint planning", start=datetime(2026, 9, 5, 9, 30, tzinfo=tz)),
         ],
     )
     state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
-    route = agenda_route(state, {"work": "blue", "personal": "green"}, today, reference)
-    first, second = route["markers"]
-    # Same start time on two calendars (an interchange): both dots land on
-    # the same row, but the labels still keep their minimum clearance.
-    assert first["dot_top"] == pytest.approx(second["dot_top"])
-    assert second["label_top"] - first["label_top"] >= 22.0 - 0.01
+    rows = agenda_list_rows(state, {}, today)
+    assert rows[0]["kind"] == "event"
+    # The next day is announced by name, never by its weekday.
+    assert rows[1] == {"kind": "divider", "label": "TOMORROW"}
+    assert rows[2]["kind"] == "event"
+    assert rows[2]["when"] == "09:30"
 
 
-def test_agenda_route_empty_still_carries_hours_and_now() -> None:
+def test_agenda_list_rows_divider_names_weekday_and_date_for_a_later_day() -> None:
     tz = zone("Asia/Bangkok")
-    today = date(2026, 9, 5)
-    reference = datetime(2026, 9, 5, 10, 0, tzinfo=tz)
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
-    route = agenda_route(state, {}, today, reference)
-    assert route["empty"] is True
-    assert route["markers"] == []
-    assert len(route["hours"]) == SCALE_END_HOUR - SCALE_START_HOUR + 1
-    assert route["now_pct"] > 0.0
+    today = date(2026, 9, 4)  # a Friday
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[Event(id="a", title="QBR", start=datetime(2026, 9, 7, 13, 0, tzinfo=tz))],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    rows = agenda_list_rows(state, {}, today)
+    assert rows[0] == {"kind": "divider", "label": "MON 07 SEP"}
+    assert rows[1]["when"] == "13:00"
+
+
+def test_agenda_list_rows_shows_more_when_the_budget_is_exceeded() -> None:
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 4)
+    reference = datetime(2026, 9, 4, 6, 0, tzinfo=tz)
+    total_events = AGENDA_LIST_ROW_LIMIT + 4
+    events = CalendarBlock(
+        status=AdapterStatus.OK,
+        items=[
+            Event(
+                id=f"e{i}",
+                title=f"Event {i}",
+                start=datetime(2026, 9, 4, 7, 0, tzinfo=tz) + timedelta(minutes=i),
+            )
+            for i in range(total_events)
+        ],
+    )
+    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    rows = agenda_list_rows(state, {}, today)
+    assert len(rows) == AGENDA_LIST_ROW_LIMIT
+    assert rows[-1]["kind"] == "more"
+    # N counts only the events cut, not the row it replaces.
+    assert rows[-1]["count"] == total_events - AGENDA_LIST_ROW_LIMIT + 1
+
+
+def test_agenda_list_rows_never_exceeds_the_row_budget() -> None:
+    """Many events across many days, so dividers and events both compete for
+    the same fixed row budget: the packed list never runs past it."""
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 4)
+    reference = datetime(2026, 9, 4, 6, 0, tzinfo=tz)
+    items = [
+        Event(
+            id=f"e{day_offset}-{hour}",
+            title=f"Event {day_offset}-{hour}",
+            start=datetime(2026, 9, 4, tzinfo=tz) + timedelta(days=day_offset, hours=8 + hour),
+        )
+        for day_offset in range(10)
+        for hour in range(5)
+    ]
+    state = DashboardState(
+        generated_at=reference,
+        timezone="Asia/Bangkok",
+        calendar=CalendarBlock(status=AdapterStatus.OK, items=items),
+    )
+    rows = agenda_list_rows(state, {}, today)
+    assert len(rows) <= AGENDA_LIST_ROW_LIMIT
+    assert rows[-1]["kind"] == "more"
+
+
+def test_agenda_list_rows_nothing_scheduled_when_the_window_is_empty() -> None:
+    tz = zone("Asia/Bangkok")
+    today = date(2026, 9, 4)
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
+    unusable = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
+    assert agenda_list_rows(unusable, {}, today) == []
+    usable_but_empty = DashboardState(
+        generated_at=reference,
+        timezone="Asia/Bangkok",
+        calendar=CalendarBlock(status=AdapterStatus.OK, items=[]),
+    )
+    assert agenda_list_rows(usable_but_empty, {}, today) == []
 
 
 def test_month_grid_starts_monday_and_marks_today() -> None:
