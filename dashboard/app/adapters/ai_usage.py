@@ -1,22 +1,23 @@
-"""AI quota adapters: fixtures and a plain JSON file another agent writes.
+"""AI quota adapters: fixtures and the ``ai_usage`` dataset another agent
+pushes.
 
 There is no supported public API for Claude or Codex quota, so the hub never
-scrapes anything. A separate collector writes ``data/ai-usage.json``; if the
-file is missing, stale or malformed the page prints "unknown". See
-docs/DATA-SOURCES.md for the schema.
+scrapes anything. A separate collector posts ``POST /api/ai-usage``; if
+nothing has ever been pushed, or the stored row is stale or malformed, the
+page prints "unknown". See docs/DATA-SOURCES.md for the schema.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
-from app.adapters.base import AdapterUnavailable, received_at_or_mtime
+from app.adapters.base import AdapterUnavailable
 from app.adapters.fixtures import day_delta, load_fixture, shift_tree
 from app.config import Env
+from app.datasets import read_dataset
+from app.db import get_database
 from app.models import AIUsage
 from app.modules.ai_usage.settings import AIUsageSettings
 from app.modules.general.settings import GeneralSettings
@@ -49,8 +50,7 @@ class FixtureAIUsageAdapter:
 
     def resolve(self) -> str:
         """The source a fetch would use right now, without fetching. Fixed
-        for this adapter; see :class:`AutoAIUsageAdapter` for the live check.
-        """
+        for this adapter: it never falls back to anything else."""
         return self.source
 
     async def fetch(self) -> list[AIUsage]:
@@ -65,109 +65,47 @@ class FixtureAIUsageAdapter:
         return _localize(providers, timezone_name)
 
 
-class FileAIUsageAdapter:
-    """Quota from ``DATA_DIR/ai-usage.json``, the shape ``POST /api/ai-usage``
-    writes."""
+class PushAIUsageAdapter:
+    """Quota from the ``ai_usage`` row of the ``datasets`` table, the shape
+    ``POST /api/ai-usage`` stores."""
 
     name = "ai_usage"
-    source = "file"
+    source = "push"
 
     def __init__(self, ai_usage: AIUsageSettings, general: GeneralSettings, env: Env) -> None:
         self._ai_usage = ai_usage
         self._general = general
         self._env = env
-        #: Set on every successful fetch: the file's own ``received_at``, or
-        #: its mtime. Read by ``CachedAdapter`` for ``AIUsageBlock.received_at``.
+        #: Set on every successful fetch: the dataset row's own
+        #: ``received_at``. Read by ``CachedAdapter`` for
+        #: ``AIUsageBlock.received_at``.
         self.last_received_at: datetime | None = None
 
     def resolve(self) -> str:
         return self.source
 
-    @property
-    def _path(self) -> Path:
-        return self._env.data_dir / "ai-usage.json"
-
     async def fetch(self) -> list[AIUsage]:
-        path = self._path
-        if not path.is_file():
-            raise AdapterUnavailable(f"ai usage file not found: {path}")
-        with path.open("r", encoding="utf-8") as handle:
-            payload: Any = json.load(handle)
+        database = get_database(self._env.hub_db_file)
+        database.migrate()
+        found = read_dataset(database, "ai_usage")
+        if found is None:
+            raise AdapterUnavailable("nothing pushed yet for ai_usage")
+        payload, received_at = found
         raw: Any
-        received_raw: Any = None
         if isinstance(payload, dict):
             raw = payload.get("providers", [])
-            received_raw = payload.get("received_at")
         elif isinstance(payload, list):
             raw = payload
         else:
-            raise ValueError(f"{path} must contain an object or a list")
+            raise ValueError("the ai_usage dataset must hold an object or a list")
         providers = [AIUsage.model_validate(item) for item in raw]
-        self.last_received_at = received_at_or_mtime(received_raw, path, self._general.timezone)
+        self.last_received_at = to_local(received_at, self._general.timezone)
         return _localize(providers, self._general.timezone)
-
-
-class AutoAIUsageAdapter:
-    """"auto": the file adapter when its file exists, else fixture.
-
-    Re-checked on every ``fetch()``, not just at startup, so a push made
-    while the process is running switches the effective source once the
-    endpoint calls ``invalidate()``. The file delegate is also given a
-    chance whenever its file merely looks present: if it raises
-    ``AdapterUnavailable``, or the file vanishes between this adapter's own
-    ``is_file()`` check and the delegate's own read (TOCTOU), this falls
-    back to fixture instead of surfacing an ``error`` block.
-    """
-
-    name = "ai_usage"
-
-    def __init__(self, ai_usage: AIUsageSettings, general: GeneralSettings, env: Env) -> None:
-        self._env = env
-        self._file = FileAIUsageAdapter(ai_usage, general, env)
-        self._fixture = FixtureAIUsageAdapter(ai_usage, general, env)
-        #: Mirrors whichever delegate last ran, for ``CachedAdapter``.
-        self.last_received_at: datetime | None = None
-        #: The delegate actually used on the last fetch, set only inside
-        #: fetch(). ``source`` reports this, not a fresh stat, so it keeps
-        #: saying "file" between fetches even if the file is later deleted
-        #: (it stays correct until the TTL or an invalidate() triggers the
-        #: next real fetch).
-        self._last_source = "fixture"
-
-    @property
-    def source(self) -> str:
-        return self._last_source
-
-    def resolve(self) -> str:
-        """A pure, live check of what the *next* ``fetch()`` would use: does
-        not fetch and does not update ``source``/``last_received_at``.
-        ``source`` above instead tracks the last actual fetch, which is what
-        the DEMO mark needs (it must match what is currently drawn, not what
-        is about to be).
-        """
-        return "file" if self._file._path.is_file() else "fixture"
-
-    async def fetch(self) -> list[AIUsage]:
-        if self._file._path.is_file():
-            try:
-                value = await self._file.fetch()
-            except (AdapterUnavailable, OSError):
-                pass
-            else:
-                self._last_source = "file"
-                self.last_received_at = getattr(self._file, "last_received_at", None)
-                return value
-        value = await self._fixture.fetch()
-        self._last_source = "fixture"
-        self.last_received_at = getattr(self._fixture, "last_received_at", None)
-        return value
 
 
 def build_ai_usage_adapter(
     ai_usage: AIUsageSettings, general: GeneralSettings, env: Env
-) -> FixtureAIUsageAdapter | FileAIUsageAdapter:
-    """``push`` is today's ``FileAIUsageAdapter`` (see ``adapters/base.py``'s
-    docstring); 1.2d replaces this with the ``datasets`` row."""
+) -> FixtureAIUsageAdapter | PushAIUsageAdapter:
     if ai_usage.source == "push":
-        return FileAIUsageAdapter(ai_usage, general, env)
+        return PushAIUsageAdapter(ai_usage, general, env)
     return FixtureAIUsageAdapter(ai_usage, general, env)

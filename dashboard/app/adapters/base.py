@@ -43,12 +43,10 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
-from pathlib import Path
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 from app.logging_setup import log
 from app.models import AdapterStatus
-from app.timeutil import to_local
 
 T = TypeVar("T")
 
@@ -90,31 +88,17 @@ class Outcome(Generic[T]):
     source: str
     updated_at: datetime | None = None
     error: str | None = None
-    #: When the underlying file was received (its own ``received_at`` key, or
-    #: its mtime). Only the file adapters for ai_usage, brief and tasks set
-    #: this (via ``last_received_at`` on the adapter instance); every other
-    #: adapter leaves it ``None`` and it is silently dropped when the block
-    #: model has no such field (pydantic's default ``extra="ignore"``).
+    #: When the dataset row was received (the ``datasets`` table's own
+    #: ``received_at`` column, ``app/datasets.py:read_dataset``). Only the
+    #: push adapters for ai_usage, brief and tasks set this (via
+    #: ``last_received_at`` on the adapter instance); every other adapter
+    #: leaves it ``None`` and it is silently dropped when the block model has
+    #: no such field (pydantic's default ``extra="ignore"``).
     received_at: datetime | None = None
 
 
 def _now() -> datetime:
     return datetime.now(tz=dt_timezone.utc)
-
-
-def received_at_or_mtime(value: Any, path: Path, timezone_name: str) -> datetime:
-    """A pushed file's own ``received_at`` string, or its mtime, localized.
-
-    Shared by the file adapters for ai_usage, brief and tasks so the three
-    ``received_at``-bearing blocks (models.py) get one consistent rule.
-    """
-    if isinstance(value, str):
-        try:
-            return to_local(datetime.fromisoformat(value), timezone_name)
-        except ValueError:
-            pass
-    stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=dt_timezone.utc)
-    return to_local(stamp, timezone_name)
 
 
 class CachedAdapter(Generic[T]):
@@ -154,11 +138,12 @@ class CachedAdapter(Generic[T]):
 
     def resolve(self) -> str:
         """What the underlying adapter's *next* fetch would use, checked
-        live and without fetching. Adapters with an ambiguous source (the
-        Auto adapters for ai_usage/brief/tasks) define their own pure
-        ``resolve()``; anything else falls back to the static ``source``
-        above. Distinct from ``source``, which mirrors the *last* fetch and
-        is what the DEMO mark needs (it must match what is currently drawn).
+        live and without fetching. An adapter with an ambiguous source may
+        define its own pure ``resolve()``; every adapter in this codebase
+        today falls back to the static ``source`` below, since the dropped
+        ``auto`` selector (the plan's Non-goals) was the only ambiguous one.
+        Distinct from ``source``, which mirrors the *last* fetch and is what
+        the DEMO mark needs (it must match what is currently drawn).
         """
         resolver = getattr(self._adapter, "resolve", None)
         return resolver() if resolver is not None else self.source
@@ -189,7 +174,7 @@ class CachedAdapter(Generic[T]):
     def _received_at(self) -> datetime | None:
         """The adapter's own ``last_received_at``, when it tracks one.
 
-        Only the file adapters for ai_usage, brief and tasks set this
+        Only the push adapters for ai_usage, brief and tasks set this
         instance attribute; every other adapter has none, so this is
         ``None`` for them. It reflects the *last successful* fetch, so it
         stays correct through a cache hit or a subsequent failure too.
@@ -214,9 +199,9 @@ class CachedAdapter(Generic[T]):
                 failed_at, outcome = self._failure
                 if (time.monotonic() - failed_at) < self._backoff_seconds():
                     # Replaying the outcome as-is freezes its `source`. That
-                    # is inert today - the Auto adapters (ai_usage, brief,
-                    # tasks) never raise, they fall back to fixture
-                    # themselves - but would matter if that changed.
+                    # is inert today - no adapter changes its own source
+                    # mid-fetch since the `auto` selector (ai_usage, brief,
+                    # tasks) was dropped - but would matter if that changed.
                     self.last_outcome = outcome
                     return outcome
 
