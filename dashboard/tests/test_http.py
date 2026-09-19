@@ -25,7 +25,6 @@ flow, and keeps its explicit ``auth(token)`` headers for the write routes
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -34,6 +33,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import REPO_ROOT, Settings
+from app.db import Database
 from app.hub_config import COOKIE_NAME, ClaimedSecrets
 from app.main import MAX_OPEN_BODY_BYTES, create_app, etag_matches
 from app.renderer.palette import DISPLAY_SIZE
@@ -144,10 +144,12 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
         assert len(token) > 20
 
         assert hub.identity.configured is True
-        stored_text = hub.settings.hub_config_file.read_text(encoding="utf-8")
-        stored = json.loads(stored_text)
+        with hub.db.reading() as connection:
+            stored = dict(connection.execute("SELECT * FROM hub WHERE id = 1").fetchone())
+        # Only the hash is stored; the plaintext token is not recoverable
+        # from any column of the row.
         assert stored["token_sha256"] != token
-        assert token not in stored_text
+        assert token not in [str(value) for value in stored.values()]
 
         configured_page = flow_client.get("/setup")
         assert configured_page.status_code == 200
@@ -311,7 +313,18 @@ def test_post_setup_rejects_a_form_over_the_cap(tmp_path: Path) -> None:
 def test_a_corrupt_hub_config_503s_setup_and_writes_but_the_panel_keeps_working(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "hub.json").write_text("{ not json", encoding="utf-8")
+    # A hub row that is present but cannot be trusted: created_at is not a
+    # timestamp. Written before create_app, into the same database file the
+    # app will open from the registry.
+    seed = Database(tmp_path / "deskmate.sqlite")
+    seed.migrate()
+    with seed.writing() as connection:
+        connection.execute(
+            "INSERT INTO hub (id, name, base_url, token_sha256, device_key_sha256,"
+            " session_secret, created_at) VALUES (1, ?, ?, ?, ?, ?, ?)",
+            ("deskmate", "http://dashboard-hub.lan:8080", "x", "y", "s", "not-a-timestamp"),
+        )
+    seed.close()
     settings = Settings(
         _env_file=None,
         TIMEZONE="Asia/Bangkok",
@@ -594,7 +607,7 @@ def test_device_telemetry_post_accepts_the_device_key_bearer_on_a_claimed_hub(
     tmp_path: Path,
 ) -> None:
     """Its own isolated app and DATA_DIR, not the shared session ``client``:
-    a real insert here would land in the same telemetry.sqlite the session
+    a real insert here would land in the same deskmate.sqlite the session
     ``state``/``renderer`` fixtures read, and perturb device-chart
     assertions in other test files that rebuild state fresh from it.
     """

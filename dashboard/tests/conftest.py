@@ -19,6 +19,7 @@ from PIL import Image
 
 from app.alerts import AlertStore
 from app.config import REPO_ROOT, Settings
+from app.db import close_databases, get_database
 from app.main import create_app
 from app.models import DashboardState
 from app.renderer.render import Renderer
@@ -79,9 +80,20 @@ def renderer(settings: Settings, session_loop: asyncio.AbstractEventLoop) -> Ite
     run(instance.close())
 
 
+@pytest.fixture(scope="session", autouse=True)
+def close_open_databases() -> Iterator[None]:
+    """Every database in the process-wide registry is closed once, at the end
+    of the session: they are keyed by path and shared on purpose, so no single
+    test may close one."""
+    yield
+    close_databases()
+
+
 @pytest.fixture(scope="session")
 def state(settings: Settings, session_loop: asyncio.AbstractEventLoop) -> DashboardState:
-    alerts = AlertStore(settings.alert_file, settings.timezone)
+    database = get_database(settings.hub_db_file)
+    database.migrate()
+    alerts = AlertStore(database, settings.timezone)
     service = StateService(settings, alerts)
     return run(service.build(force=True))
 

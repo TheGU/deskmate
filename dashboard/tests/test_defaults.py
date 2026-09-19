@@ -14,6 +14,7 @@ import pytest
 
 from app.alerts import AlertStore
 from app.config import REPO_ROOT, Settings
+from app.db import get_database
 from app.renderer.render import PAGES
 from app.state import StateService
 from app.view import build_context
@@ -66,7 +67,9 @@ def test_defaults_against_an_empty_data_dir_render_every_page_all_unavailable(
     never an exception), and every one of the six pages must still build a
     context from that state."""
     settings = settings_with_no_sources_configured
-    alerts = AlertStore(settings.alert_file, settings.timezone)
+    database = get_database(settings.hub_db_file)
+    database.migrate()
+    alerts = AlertStore(database, settings.timezone)
     service = StateService(settings, alerts)
     state = asyncio.run(service.build(force=True))
 

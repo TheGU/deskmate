@@ -25,6 +25,7 @@ from app.adapters.device import (
     load_device_fixture,
 )
 from app.config import Settings
+from app.db import Database, get_database
 from app.main import MAX_OPEN_BODY_BYTES, create_app
 from app.models import (
     DEVICE_STALE_AFTER_SECONDS,
@@ -75,16 +76,26 @@ def sample(minutes_ago: float, temperature: float | None, humidity: float | None
 
 
 @pytest.fixture()
-def store(tmp_path: Path) -> Iterator[TelemetryStore]:
-    instance = TelemetryStore(tmp_path / "telemetry.sqlite", retention_days=30)
+def database(tmp_path: Path) -> Iterator[Database]:
+    """A fresh hub database. The store never owns the connection, so the
+    lifetime is the fixture's."""
+    instance = Database(tmp_path / "deskmate.sqlite")
+    instance.migrate()
     yield instance
     instance.close()
 
 
 @pytest.fixture()
-def device_settings(tmp_path: Path) -> Settings:
-    """A hub whose telemetry database starts out empty."""
-    return Settings(
+def store(database: Database) -> TelemetryStore:
+    return TelemetryStore(database, retention_days=30)
+
+
+@pytest.fixture()
+def device_settings(tmp_path: Path) -> Iterator[Settings]:
+    """A hub whose database starts out empty. The database is process-wide
+    and keyed by path, so the fixture closes it again on the way out rather
+    than leaving a handle on a temp directory."""
+    settings = Settings(
         _env_file=None,
         TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
@@ -92,6 +103,8 @@ def device_settings(tmp_path: Path) -> Settings:
         LOG_LEVEL="WARNING",
         DEVICE_SOURCE="store",
     )
+    yield settings
+    get_database(settings.hub_db_file).close()
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +206,9 @@ def test_store_migrates_a_database_from_before_the_power_fields(tmp_path: Path) 
     raw.commit()
     raw.close()
 
-    store = TelemetryStore(path, retention_days=30)
+    database = Database(path)
+    database.migrate()
+    store = TelemetryStore(database, retention_days=30)
     try:
         store.insert(
             DeviceTelemetry.model_validate(DEVICE_PAYLOAD_WITH_POWER),
@@ -210,7 +225,7 @@ def test_store_migrates_a_database_from_before_the_power_fields(tmp_path: Path) 
         assert new_row.usb_present is True
         assert new_row.charge_state == "charging"
     finally:
-        store.close()
+        database.close()
 
 
 def test_insert_accepts_null_numeric_fields(store: TelemetryStore) -> None:
@@ -235,15 +250,15 @@ def test_insert_accepts_null_numeric_fields(store: TelemetryStore) -> None:
 def test_timestamps_are_stored_as_utc_iso_strings(store: TelemetryStore) -> None:
     bangkok = datetime(2026, 9, 5, 18, 30, tzinfo=dt_timezone(timedelta(hours=7)))
     store.insert(DeviceTelemetry(device="reterminal-e1002"), received_at=bangkok)
-    with store._lock:  # noqa: SLF001 - the raw column is the point of the test
-        raw = store._connection.execute("SELECT received_at FROM telemetry").fetchone()[0]
+    with store.database.reading() as connection:  # the raw column is the point
+        raw = connection.execute("SELECT received_at FROM telemetry").fetchone()[0]
     assert raw.endswith("+00:00")
     assert raw.startswith("2026-09-05T11:30:00")
     assert parse_utc(raw) == bangkok
 
 
-def test_insert_prunes_rows_past_the_retention_window(tmp_path: Path) -> None:
-    store = TelemetryStore(tmp_path / "short.sqlite", retention_days=2)
+def test_insert_prunes_rows_past_the_retention_window(database: Database) -> None:
+    store = TelemetryStore(database, retention_days=2)
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     for days in (5, 3, 1, 0):
         store.insert(
@@ -255,7 +270,6 @@ def test_insert_prunes_rows_past_the_retention_window(tmp_path: Path) -> None:
     assert summary.sample_count == 2
     assert summary.oldest == now - timedelta(days=1)
     assert summary.newest == now
-    store.close()
 
 
 def test_history_only_returns_the_requested_window(store: TelemetryStore) -> None:
@@ -430,7 +444,6 @@ def test_store_adapter_reads_what_was_posted(device_settings: Settings) -> None:
     assert state.status is DeviceStatus.OK
     assert state.temperature == pytest.approx(32.80)
     assert state.sample_count == 1
-    store.close()
 
 
 def test_store_adapter_carries_the_telemetry_origin(device_settings: Settings) -> None:
@@ -443,7 +456,6 @@ def test_store_adapter_carries_the_telemetry_origin(device_settings: Settings) -
     state = run(StoreDeviceAdapter(device_settings).fetch())
     assert state.remote_addr == "192.0.2.10"
     assert state.hub_host == "https://192.0.2.1:8080"
-    store.close()
 
 
 def test_fixture_adapter_fills_an_empty_store(device_settings: Settings) -> None:
