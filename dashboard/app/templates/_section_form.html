@@ -1,0 +1,140 @@
+{# One settings section as a form, from the views app/forms.py built.
+
+   Shared by settings.html (every section, one form each) and wizard.html
+   (one section per step), so a field looks and behaves the same wherever it
+   is edited. Nothing here knows what a section means: it loops over
+   form.items, which are FieldView (one input) and ListView (a table of
+   indexed rows).
+
+   Three shapes are load-bearing rather than cosmetic:
+   * a checkbox is preceded by a hidden input of the same name carrying 0,
+     because an unticked checkbox sends nothing at all (forms.py takes the
+     last value of the name);
+   * every id is prefixed with the section, while the name never is: the
+     settings page carries nine sections and most of them have a field
+     called source or ttl_seconds, so unprefixed ids would repeat down the
+     page and a label would focus the wrong input;
+   * the "Find a place" form is a sibling of the section form, never nested
+     inside it: nested forms are not valid HTML and browsers drop them. #}
+
+{% macro control(item, prefix) -%}
+  {%- if item.kind == "checkbox" -%}
+    <input type="hidden" name="{{ item.name }}" value="0">
+    <input type="checkbox" id="{{ prefix }}-{{ item.name }}" name="{{ item.name }}" value="1"
+           {% if item.checked %}checked{% endif %}>
+  {%- elif item.kind == "select" -%}
+    <select id="{{ prefix }}-{{ item.name }}" name="{{ item.name }}">
+      {% for option in item.options %}
+      <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  {%- elif item.kind == "password" -%}
+    <input type="password" id="{{ prefix }}-{{ item.name }}" name="{{ item.name }}" value=""
+           autocomplete="new-password">
+  {%- elif item.kind == "number" -%}
+    <input type="number" id="{{ prefix }}-{{ item.name }}" name="{{ item.name }}"
+           value="{{ item.value }}" step="{{ item.step }}">
+  {%- else -%}
+    <input type="text" id="{{ prefix }}-{{ item.name }}" name="{{ item.name }}"
+           value="{{ item.value }}">
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro scalar_field(item, prefix) %}
+  {% if item.kind == "checkbox" %}
+  <label class="check" for="{{ prefix }}-{{ item.name }}">{{ control(item, prefix) }} {{ item.label }}</label>
+  {% else %}
+  <label for="{{ prefix }}-{{ item.name }}">{{ item.label }}</label>
+  {{ control(item, prefix) }}
+  {% endif %}
+  {% if item.kind == "password" %}
+  <label class="check" for="{{ prefix }}-{{ item.clear_name }}">
+    <input type="checkbox" id="{{ prefix }}-{{ item.clear_name }}" name="{{ item.clear_name }}" value="1">
+    Clear this value. Leave the box above blank to keep what is stored.
+  </label>
+  {% endif %}
+  {% if item.help %}<p class="hint">{{ item.help }}</p>{% endif %}
+  {% if item.error %}<p class="field-error">{{ item.error }}</p>{% endif %}
+{% endmacro %}
+
+{% macro list_field(item, prefix) %}
+  <h3>{{ item.label }}</h3>
+  {% if item.help %}<p class="hint">{{ item.help }}</p>{% endif %}
+  {% if item.error %}<p class="field-error">{{ item.error }}</p>{% endif %}
+  <table class="rows">
+    <tr>
+      {% for column in item.columns %}<th>{{ column }}</th>{% endfor %}
+      <th>Delete</th>
+    </tr>
+    {% for row in item.rows %}
+    <tr>
+      {% for cell in row.cells %}
+      <td>
+        {{ control(cell, prefix) }}
+        {% if cell.error %}<p class="field-error">{{ cell.error }}</p>{% endif %}
+      </td>
+      {% endfor %}
+      <td>
+        {% if row.delete_name %}
+        <input type="checkbox" name="{{ row.delete_name }}" value="1">
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="hint">Fill a blank row to add one. Tick Delete to remove one.</p>
+{% endmacro %}
+
+{% macro section_form(form, action, submit_label, skip_url="") %}
+<section id="{{ form.section }}">
+  <h2>{{ form.title }}</h2>
+  {% if form.saved %}<div class="notice">Saved.</div>{% endif %}
+  {% if form.error %}<div class="error">{{ form.error }}</div>{% endif %}
+  {% if form.test_status %}
+  <div class="{% if form.test_error %}error{% else %}notice{% endif %}">
+    Test: {{ form.test_status }}{% if form.test_error %} - {{ form.test_error }}{% endif %}
+  </div>
+  {% endif %}
+
+  {% if form.search %}
+  <form class="find" method="get" action="{{ form.search.url }}">
+    <div style="flex:1">
+      <label for="{{ form.section }}-q">Find a place</label>
+      <input type="text" id="{{ form.section }}-q" name="q" maxlength="80"
+             value="{{ form.search.query }}">
+    </div>
+    <button type="submit">Find</button>
+  </form>
+  {% if form.search.error %}<p class="field-error">{{ form.search.error }}</p>{% endif %}
+  {% endif %}
+
+  <form method="post" action="{{ action }}">
+    {% if form.search and form.search.places %}
+    <fieldset>
+      <legend>Search results</legend>
+      {% for place in form.search.places %}
+      <label class="check">
+        <input type="radio" name="place" value="{{ place.value }}">
+        {{ place.label }}
+      </label>
+      {% endfor %}
+      <p class="hint">Pick one and save: it fills latitude, longitude and the name.</p>
+    </fieldset>
+    {% endif %}
+
+    {% for item in form.items %}
+      {% if item.kind == "list" %}
+        {{ list_field(item, form.section) }}
+      {% else %}
+        {{ scalar_field(item, form.section) }}
+      {% endif %}
+    {% endfor %}
+
+    <button type="submit" name="action" value="save">{{ submit_label }}</button>
+    {% if form.has_source %}
+    <button type="submit" name="action" value="test">Save and test</button>
+    {% endif %}
+  </form>
+  {% if skip_url %}<p><a href="{{ skip_url }}">Skip</a></p>{% endif %}
+</section>
+{% endmacro %}

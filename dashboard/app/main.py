@@ -8,7 +8,10 @@ Endpoints follow docs/ARCHITECTURE.md::
     GET    /login
     POST   /login
     GET    /settings
-    POST   /settings/general
+    GET    /settings/geocode
+    POST   /settings/{section}
+    GET    /setup/{step}
+    POST   /setup/{step}
     POST   /settings/backup
     POST   /settings/restore
     POST   /settings/rotate
@@ -50,7 +53,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
 from starlette.formparsers import MultiPartException
 
 from app import __version__
@@ -68,6 +71,20 @@ from app.backup import (
 )
 from app.config import Env
 from app.db import get_database
+from app.forms import (
+    FormErrors,
+    SectionForm,
+    errors_from_parse,
+    form_errors,
+    parse_section,
+    render_section,
+)
+from app.geocode import (
+    GeocodeFailed,
+    PlaceSearch,
+    clean_query,
+    search as geocode_search,
+)
 from app.hub_config import (
     ADMIN_SESSION_MAX_AGE_SECONDS,
     AlreadyConfigured,
@@ -130,6 +147,26 @@ MAX_OPEN_BODY_BYTES = 64 * 1024
 #: enough that the byte counter refuses an oversized upload long before it is
 #: all on disk.
 UPLOAD_CHUNK_BYTES = 256 * 1024
+
+#: The settings sections whose "Save and test" means something: each has a
+#: ``source`` field and an adapter of the same name on ``StateService``
+#: (state.py:StateService.adapters), which is what the test fetches. general
+#: and alert have no source and so no test.
+TESTABLE_SECTIONS: tuple[str, ...] = (
+    "tasks",
+    "calendar",
+    "weather",
+    "ai_usage",
+    "brief",
+    "home",
+    "device",
+)
+
+#: The setup wizard's steps, in the plan's order. Every step is optional and
+#: the last one's "next" is the settings page. The other five sections are
+#: edited there: the wizard asks only for what a fresh hub needs to show
+#: something real.
+WIZARD_STEPS: tuple[str, ...] = ("general", "weather", "calendar", "home")
 
 #: Cap on the two telemetry-origin strings (main.py:post_device_telemetry,
 #: telemetry.py's remote_addr/hub_host columns): plenty for an IPv6 address
@@ -201,7 +238,12 @@ class Hub:
         # lifetime, which is what makes a restore able to swap the file.
         self.db = get_database(env.hub_db_file)
         self.db.migrate()
-        import_legacy(self.db, LegacyEnv(), env.data_dir)
+        # A caller that hands in a seed (tests, scripts/render-all.py) owns
+        # the settings: the legacy import then reads only real environment
+        # variables, never a developer's .env file lying next to the repo,
+        # or that file's sources would win over the seed on a fresh DATA_DIR.
+        legacy_env = LegacyEnv(_env_file=None) if hub_settings is not None else LegacyEnv()
+        import_legacy(self.db, legacy_env, env.data_dir)
         self.settings_store = SettingsStore(self.db)
         if hub_settings is not None:
             _seed_missing_sections(self.settings_store, hub_settings)
@@ -416,8 +458,56 @@ def _delete_quietly(path: Path) -> None:
         log(logger, logging.WARNING, "temp file not removed", path=str(path), error=str(exc))
 
 
-def _settings_html(hub: "Hub", *, error: str | None = None, status_code: int = 200) -> HTMLResponse:
-    """The settings page, optionally carrying one error line.
+def _section_form(
+    hub: "Hub",
+    section: str,
+    *,
+    values: dict[str, Any] | None = None,
+    errors: FormErrors | None = None,
+    search: PlaceSearch | None = None,
+    search_url: str = "/settings/geocode",
+) -> SectionForm:
+    """One section's form, generated from its model (``app/forms.py``).
+
+    ``values`` is what fills the inputs: the stored section by default, or a
+    rejected submission's own values when the page is being re-rendered with
+    its errors, so nobody retypes a whole form because one field was wrong.
+    """
+    model = SECTIONS[section]
+    current = getattr(hub.hub_settings, section)
+    form = render_section(
+        section,
+        model,
+        current.model_dump() if values is None else values,
+        errors=errors,
+    )
+    if section == "weather":
+        # The place search exists only for weather: it is what turns a place
+        # name into the latitude and longitude that section stores.
+        form.search = search if search is not None else PlaceSearch(url=search_url)
+    return form
+
+
+def _settings_forms(hub: "Hub", *, replace: SectionForm | None = None) -> list[SectionForm]:
+    """Every section's form in SECTIONS order, with ``replace`` swapped in for
+    its own section (the one just saved, tested or refused)."""
+    return [
+        replace
+        if replace is not None and replace.section == section
+        else _section_form(hub, section)
+        for section in SECTIONS
+    ]
+
+
+def _settings_html(
+    hub: "Hub",
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+    forms: list[SectionForm] | None = None,
+) -> HTMLResponse:
+    """The settings page: one form per section, then backup, restore and the
+    danger zone, optionally carrying one error line.
 
     Shared by GET /settings and by the POSTs that refuse a submission (a
     browser form gets the page back with the reason, not a JSON detail).
@@ -425,7 +515,131 @@ def _settings_html(hub: "Hub", *, error: str | None = None, status_code: int = 2
     config = hub.identity.config
     assert config is not None
     template = hub.renderer.environment.get_template("settings.html")
-    html = template.render(name=config.name, error=error)
+    html = template.render(
+        name=config.name,
+        error=error,
+        forms=_settings_forms(hub) if forms is None else forms,
+    )
+    return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
+def _apply_place(values: dict[str, Any], form: FormData) -> None:
+    """Fold a chosen search result into the weather section's values.
+
+    The radio carries ``"<latitude>,<longitude>,<name>"``
+    (``app/geocode.py:Place.value``), split at most twice so a place name with
+    a comma in it survives. A malformed value is ignored rather than raised
+    on: it can only come from a hand-made request, and the three fields it
+    would have filled are right there to type into.
+    """
+    raw = form.get("place")
+    if not isinstance(raw, str) or not raw.strip():
+        return
+    parts = raw.strip().split(",", 2)
+    if len(parts) != 3:
+        return
+    latitude, longitude, name = parts
+    values["latitude"] = latitude.strip()
+    values["longitude"] = longitude.strip()
+    values["location_name"] = name.strip()
+
+
+async def _save_section(
+    hub: "Hub", section: str, form: FormData, *, search_url: str
+) -> SectionForm | None:
+    """Validate and store one settings section, then reload the hub.
+
+    Returns ``None`` when it saved. Otherwise it returns that section's form
+    carrying what was submitted plus the messages against the inputs that
+    caused them: the caller re-renders it with a 422, so a browser sees
+    exactly which field it has to fix.
+    """
+    model = SECTIONS[section]
+    current = getattr(hub.hub_settings, section)
+    parsed = parse_section(model, form, current)
+    if section == "weather":
+        _apply_place(parsed.data, form)
+    if parsed.errors:
+        return _section_form(
+            hub,
+            section,
+            values=parsed.data,
+            errors=errors_from_parse(parsed),
+            search_url=search_url,
+        )
+    try:
+        value = model.model_validate(parsed.data)
+    except ValidationError as exc:
+        return _section_form(
+            hub,
+            section,
+            values=parsed.data,
+            errors=form_errors(model, exc),
+            search_url=search_url,
+        )
+    await run_in_threadpool(hub.settings_store.save, section, value)
+    # The snapshot every adapter, page and route reads is rebuilt here: that
+    # is what makes the next render use what was just saved.
+    await hub.reload()
+    log(logger, logging.INFO, "settings section saved", section=section)
+    return None
+
+
+async def _tested_section_form(hub: "Hub", section: str, *, search_url: str) -> SectionForm:
+    """The section's form with one forced adapter fetch reported on it.
+
+    That is what "Save and test" is for: the Outcome's status and error
+    string (``adapters/base.py:Outcome``) are what tell the owner an ICS URL
+    or a Home Assistant token is wrong, on the page, before they move on.
+    """
+    form = _section_form(hub, section, search_url=search_url)
+    adapter = getattr(hub.state_service, section)
+    outcome = await adapter.get(force=True)
+    form.test_status = outcome.status.value
+    form.test_error = outcome.error or ""
+    log(logger, logging.INFO, "settings section tested", section=section, status=form.test_status)
+    return form
+
+
+async def _place_search(hub: "Hub", raw_query: str, url: str) -> PlaceSearch:
+    """Run the weather section's place search, never raising.
+
+    An upstream failure is one line under the Find box, never a 500: the
+    search is a convenience and the coordinates can always be typed in. The
+    query itself is never logged, here or in ``app/geocode.py``.
+    """
+    query = clean_query(raw_query)
+    if not query:
+        return PlaceSearch(url=url)
+    try:
+        places = await geocode_search(query, hub.env.http_timeout_seconds)
+    except GeocodeFailed as exc:
+        return PlaceSearch(url=url, query=query, error=str(exc))
+    if not places:
+        return PlaceSearch(url=url, query=query, error="No place matched that name.")
+    return PlaceSearch(url=url, query=query, places=places)
+
+
+def _wizard_next(step: str) -> str:
+    """Where "Skip" and a saved step go: the next step, then /settings."""
+    index = WIZARD_STEPS.index(step)
+    if index + 1 < len(WIZARD_STEPS):
+        return f"/setup/{WIZARD_STEPS[index + 1]}"
+    return "/settings"
+
+
+def _wizard_html(
+    hub: "Hub", form: SectionForm, step: str, *, status_code: int = 200
+) -> HTMLResponse:
+    """One wizard step: the same section form the settings page renders,
+    alone, with "Save and continue" and a "Skip" link to the next step."""
+    template = hub.renderer.environment.get_template("wizard.html")
+    html = template.render(
+        form=form,
+        step_number=WIZARD_STEPS.index(step) + 1,
+        step_total=len(WIZARD_STEPS),
+        skip_url=_wizard_next(step),
+    )
     return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
@@ -997,17 +1211,40 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         "/settings", response_class=HTMLResponse, dependencies=[Depends(require_admin_html)]
     )
     async def settings_page(request: Request) -> HTMLResponse:
-        hub: Hub = app.state.hub
-        return _settings_html(hub)
+        """Every section as its own form, then backup, restore and rotate.
 
-    @app.post("/settings/general", dependencies=[Depends(require_admin)])
-    async def post_settings_general(request: Request) -> Response:
-        # Stub: package 1.4 replaces this body with the real general-section
-        # save (validate, write the settings row, Hub.reload()). Only the
-        # guard and the shared 64 KiB form cap need to be real yet.
-        await _cap_form_body(request)
-        await request.form()
-        return Response(status_code=204)
+        ``?saved=<section>`` is what a save redirects back to (together with
+        the ``#<section>`` fragment, which is what puts the browser back
+        where it was): the notice cannot ride on the redirect any other way
+        without a session store, and this one says nothing a query string
+        should not carry.
+        """
+        hub: Hub = app.state.hub
+        forms = _settings_forms(hub)
+        saved = request.query_params.get("saved", "")
+        for form in forms:
+            if form.section == saved:
+                form.saved = True
+        return _settings_html(hub, forms=forms)
+
+    @app.get(
+        "/settings/geocode",
+        response_class=HTMLResponse,
+        dependencies=[Depends(require_admin_html)],
+    )
+    async def settings_geocode(request: Request) -> HTMLResponse:
+        """The settings page with the weather section's search results on it.
+
+        A plain GET form with one ``q`` field, so the whole flow is a link
+        and a page: no JavaScript, and nothing is saved until the admin picks
+        a result and presses Save.
+        """
+        hub: Hub = app.state.hub
+        search = await _place_search(
+            hub, request.query_params.get("q", ""), "/settings/geocode"
+        )
+        weather = _section_form(hub, "weather", search=search)
+        return _settings_html(hub, forms=_settings_forms(hub, replace=weather))
 
     @app.post("/settings/backup", dependencies=[Depends(require_admin)])
     async def post_settings_backup() -> Response:
@@ -1157,6 +1394,80 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
             secure=replacement.base_url.startswith("https"),
         )
         return response
+
+    @app.post("/settings/{section}", dependencies=[Depends(require_admin)])
+    async def post_settings_section(section: str, request: Request) -> Response:
+        """Save one settings section, then reload the hub.
+
+        Declared after /settings/backup, /settings/restore and
+        /settings/rotate: routes match in declaration order, so the three
+        literal paths have to be registered before this one can swallow them.
+
+        A good submission redirects (303) back to the section it came from,
+        which is what stops a reload of the page from re-posting it. A bad
+        one comes back as the same page, 422, with each message against the
+        input that caused it. "Save and test" saves the same way and then
+        runs one forced fetch of the section's adapter, so the answer to "is
+        this ICS URL right" is on the page rather than on the next render.
+        """
+        hub: Hub = app.state.hub
+        if section not in SECTIONS:
+            raise HTTPException(status_code=404, detail=f"unknown settings section {section}")
+        await _cap_form_body(request)
+        form = await request.form()
+        refused = await _save_section(hub, section, form, search_url="/settings/geocode")
+        if refused is not None:
+            return _settings_html(
+                hub, forms=_settings_forms(hub, replace=refused), status_code=422
+            )
+        if str(form.get("action", "")) == "test" and section in TESTABLE_SECTIONS:
+            tested = await _tested_section_form(hub, section, search_url="/settings/geocode")
+            return _settings_html(hub, forms=_settings_forms(hub, replace=tested))
+        return RedirectResponse(f"/settings?saved={section}#{section}", status_code=303)
+
+    # -- setup wizard ------------------------------------------------------
+    @app.get(
+        "/setup/{step}",
+        response_class=HTMLResponse,
+        dependencies=[Depends(require_admin_html)],
+    )
+    async def get_setup_step(step: str, request: Request) -> HTMLResponse:
+        """One wizard step: that section's form and nothing else.
+
+        ``require_admin_html`` is what makes an unconfigured hub send a
+        browser back to /setup (SetupRedirect) and an unauthenticated or
+        reader browser to /login: the wizard edits the same settings the
+        settings page does and is guarded exactly like it.
+        """
+        hub: Hub = app.state.hub
+        if step not in WIZARD_STEPS:
+            raise HTTPException(status_code=404, detail=f"unknown setup step {step}")
+        search = None
+        if step == "weather":
+            search = await _place_search(hub, request.query_params.get("q", ""), "/setup/weather")
+        form = _section_form(hub, step, search=search, search_url="/setup/weather")
+        return _wizard_html(hub, form, step)
+
+    @app.post("/setup/{step}", dependencies=[Depends(require_admin)])
+    async def post_setup_step(step: str, request: Request) -> Response:
+        """Save a wizard step and move to the next one.
+
+        The save is the settings page's save: same parser, same validation,
+        same row, same reload. Only where it goes afterwards differs, and
+        "Save and test" stays on the step so the result can be read.
+        """
+        hub: Hub = app.state.hub
+        if step not in WIZARD_STEPS:
+            raise HTTPException(status_code=404, detail=f"unknown setup step {step}")
+        await _cap_form_body(request)
+        form = await request.form()
+        refused = await _save_section(hub, step, form, search_url="/setup/weather")
+        if refused is not None:
+            return _wizard_html(hub, refused, step, status_code=422)
+        if str(form.get("action", "")) == "test" and step in TESTABLE_SECTIONS:
+            tested = await _tested_section_form(hub, step, search_url="/setup/weather")
+            return _wizard_html(hub, tested, step)
+        return RedirectResponse(_wizard_next(step), status_code=303)
 
     # -- preview ---------------------------------------------------------
     @app.get("/")

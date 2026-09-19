@@ -1,0 +1,79 @@
+{# The one style block the admin pages share (settings.html, wizard.html).
+   Same visual language as login.html / setup.html / setup-done.html: a
+   developer/owner tool viewed in a browser, not a panel page. Plain CSS, no
+   framework; no JavaScript anywhere on the admin pages, so every control
+   below is a plain form control inside a plain form POST. #}
+<style>
+  @font-face {
+    font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
+    font-display: block;
+    src: url('/static/fonts/GoogleSans-LatinThai-var.ttf') format('truetype');
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #FFFFFF; color: #000000;
+    font-family: 'Google Sans', sans-serif; font-weight: 600;
+    max-width: 640px;
+  }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
+  h2 {
+    font-size: 15px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    margin: 24px 0 8px 0;
+  }
+  h3 {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    margin: 18px 0 4px 0;
+  }
+  p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
+  p { font-size: 14px; font-weight: 600; margin: 8px 0; }
+  section { border-top: 3px solid #000000; padding-top: 4px; margin-top: 22px; }
+  section.danger { border-top-color: #FF0000; }
+  section.danger h2 { color: #FF0000; }
+  label {
+    display: block; font-size: 13px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; margin: 16px 0 4px;
+  }
+  label.check { text-transform: none; letter-spacing: 0; font-size: 14px; margin: 10px 0; }
+  input[type="text"], input[type="number"], input[type="password"], select {
+    width: 100%; border: 3px solid #000000; padding: 8px 10px; font: inherit;
+    font-weight: 600; background: #FFFFFF; color: #000000;
+  }
+  input[type="file"] { font: inherit; font-weight: 600; margin: 8px 0; max-width: 100%; }
+  button {
+    margin-top: 10px; margin-right: 8px; border: 3px solid #000000; background: #000000;
+    color: #FFFFFF; padding: 10px 16px; font: inherit; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+  }
+  button.danger { border-color: #FF0000; background: #FF0000; }
+  table.rows { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  table.rows th {
+    text-align: left; font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; border-bottom: 3px solid #000000; padding: 4px;
+  }
+  table.rows td { padding: 4px; vertical-align: top; }
+  table.rows input[type="text"], table.rows input[type="number"], table.rows select {
+    border-width: 2px; padding: 6px 8px;
+  }
+  form.find { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+  form.find input { flex: 1; }
+  form.find button { margin-top: 0; }
+  fieldset { border: 3px solid #000000; margin: 16px 0 0 0; padding: 8px 12px; }
+  legend {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .hint { font-size: 13px; font-weight: 600; margin: 4px 0 0 0; }
+  .field-error { color: #FF0000; font-size: 13px; font-weight: 700; margin: 4px 0 0 0; }
+  .warning {
+    border: 3px solid #FF0000; padding: 10px 12px; margin: 12px 0; font-weight: 700;
+    font-size: 14px;
+  }
+  .error {
+    border: 3px solid #FF0000; padding: 10px 12px; margin: 16px 0; font-weight: 700;
+  }
+  .notice {
+    border: 3px solid #000000; padding: 10px 12px; margin: 12px 0; font-weight: 700;
+    font-size: 14px;
+  }
+  code { font-family: inherit; font-weight: 700; word-break: break-all; }
+  a { color: #000000; }
+</style>

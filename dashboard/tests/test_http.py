@@ -603,7 +603,13 @@ def test_login_with_the_device_key_sets_a_cookie_good_for_preview_and_state(
     assert cookie_only.post("/api/device/telemetry", json={"device": "x"}).status_code == 401
 
 
-# -- roles: /settings and /settings/general (package 1.4 replaces the stub) -
+# -- roles: /settings and /settings/general ---------------------------------
+# These are about who reaches the two routes, not about what they store, so
+# they post an empty form: 422 (the general section's timezone is missing)
+# is the answer for a caller the guard let through, and 401 or a redirect to
+# /login for one it did not. Saving is tested in test_settings_page.py, which
+# builds its own hub: a real save here would reload the shared session hub
+# out from under every other test in the suite.
 def test_device_key_bearer_is_refused_at_the_settings_routes(
     client: TestClient, device_key: str
 ) -> None:
@@ -623,7 +629,7 @@ def test_token_bearer_is_accepted_at_the_settings_routes(
     client: TestClient, hub_token: str
 ) -> None:
     assert (
-        client.post("/settings/general", data={}, headers=auth(hub_token)).status_code == 204
+        client.post("/settings/general", data={}, headers=auth(hub_token)).status_code == 422
     )
     page = client.get("/settings", headers=auth(hub_token))
     assert page.status_code == 200
@@ -645,7 +651,7 @@ def test_login_with_the_token_yields_an_admin_cookie_that_reaches_settings(
 
     cookie_only = TestClient(client.app, cookies={COOKIE_NAME: cookie})
     assert cookie_only.get("/settings").status_code == 200
-    assert cookie_only.post("/settings/general", data={}).status_code == 204
+    assert cookie_only.post("/settings/general", data={}).status_code == 422
 
 
 def test_login_with_the_device_key_yields_a_reader_cookie_turned_away_from_settings(
