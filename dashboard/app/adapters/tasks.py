@@ -18,7 +18,6 @@ adapter never writes to it.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from datetime import date, datetime
@@ -27,14 +26,16 @@ from typing import Any, Final
 
 from starlette.concurrency import run_in_threadpool
 
-from app.adapters.base import AdapterUnavailable, received_at_or_mtime
+from app.adapters.base import AdapterUnavailable
 from app.adapters.fixtures import day_delta, load_fixture, shift_iso
 from app.config import Env
+from app.datasets import read_dataset
+from app.db import get_database
 from app.logging_setup import log
 from app.models import Priority, Task
 from app.modules.general.settings import GeneralSettings
 from app.modules.tasks.settings import TasksSettings
-from app.timeutil import today_local
+from app.timeutil import to_local, today_local
 
 logger = logging.getLogger("app.adapters.tasks")
 
@@ -211,98 +212,47 @@ class FixtureTasksAdapter:
         return tasks
 
 
-class FileTasksAdapter:
-    """Tasks from ``DATA_DIR/tasks.json``, the shape ``POST /api/tasks``
-    writes. No date shifting: a pushed due date is used exactly as sent."""
+class PushTasksAdapter:
+    """Tasks from the ``tasks`` row of the ``datasets`` table, the shape
+    ``POST /api/tasks`` stores. No date shifting: a pushed due date is used
+    exactly as sent."""
 
     name = "tasks"
-    source = "file"
+    source = "push"
 
     def __init__(self, tasks: TasksSettings, general: GeneralSettings, env: Env) -> None:
         self._tasks = tasks
         self._general = general
         self._env = env
-        #: Set on every successful fetch: the file's own ``received_at``, or
-        #: its mtime. Read by ``CachedAdapter`` for ``TasksBlock.received_at``.
+        #: Set on every successful fetch: the dataset row's own
+        #: ``received_at``. Read by ``CachedAdapter`` for
+        #: ``TasksBlock.received_at``.
         self.last_received_at: datetime | None = None
 
     def resolve(self) -> str:
         return self.source
 
-    @property
-    def _path(self) -> Path:
-        return self._env.data_dir / "tasks.json"
-
     async def fetch(self) -> list[Task]:
-        path = self._path
-        if not path.is_file():
-            raise AdapterUnavailable(f"tasks file not found: {path}")
-        with path.open("r", encoding="utf-8") as handle:
-            payload: Any = json.load(handle)
-        received_raw: Any = None
+        database = get_database(self._env.hub_db_file)
+        database.migrate()
+        found = read_dataset(database, "tasks")
+        if found is None:
+            raise AdapterUnavailable("nothing pushed yet for tasks")
+        payload, received_at = found
+        raw_tasks: Any
         if isinstance(payload, dict):
-            raw_tasks: Any = payload.get("tasks", [])
-            received_raw = payload.get("received_at")
+            raw_tasks = payload.get("tasks", [])
         elif isinstance(payload, list):
             raw_tasks = payload
         else:
-            raise ValueError(f"{path} must contain an object or a list")
+            raise ValueError("the tasks dataset must hold an object or a list")
         tasks: list[Task] = []
         for raw in raw_tasks:
             item = dict(raw)
-            item.setdefault("source", "file")
+            item.setdefault("source", "push")
             tasks.append(Task.model_validate(item))
-        self.last_received_at = received_at_or_mtime(received_raw, path, self._general.timezone)
+        self.last_received_at = to_local(received_at, self._general.timezone)
         return tasks
-
-
-class AutoTasksAdapter:
-    """"auto": the file adapter when ``DATA_DIR/tasks.json`` exists, else
-    fixture. Re-checked on every ``fetch()`` (see ``AutoAIUsageAdapter``);
-    also falls back to fixture instead of an ``error`` block when the file
-    delegate raises ``AdapterUnavailable`` or the file vanishes between the
-    check here and the delegate's own read (TOCTOU).
-
-    Kept for this package (1.2b never wires it to any selector: ``push``
-    resolves to :class:`FileTasksAdapter` directly, the plan's Non-goals
-    dropping the fixture-until-first-push fallback this class gave "auto");
-    it is exercised only by its own direct tests until it is removed.
-    """
-
-    name = "tasks"
-
-    def __init__(self, tasks: TasksSettings, general: GeneralSettings, env: Env) -> None:
-        self._env = env
-        self._file = FileTasksAdapter(tasks, general, env)
-        self._fixture = FixtureTasksAdapter(tasks, general, env)
-        self.last_received_at: datetime | None = None
-        #: The delegate actually used on the last fetch; see
-        #: ``AutoAIUsageAdapter._last_source``.
-        self._last_source = "fixture"
-
-    @property
-    def source(self) -> str:
-        return self._last_source
-
-    def resolve(self) -> str:
-        """A pure, live check of what the *next* ``fetch()`` would use; see
-        ``AutoAIUsageAdapter.resolve``."""
-        return "file" if self._file._path.is_file() else "fixture"
-
-    async def fetch(self) -> list[Task]:
-        if self._file._path.is_file():
-            try:
-                value = await self._file.fetch()
-            except (AdapterUnavailable, OSError):
-                pass
-            else:
-                self._last_source = "file"
-                self.last_received_at = getattr(self._file, "last_received_at", None)
-                return value
-        value = await self._fixture.fetch()
-        self._last_source = "fixture"
-        self.last_received_at = getattr(self._fixture, "last_received_at", None)
-        return value
 
 
 class ObsidianTasksAdapter:
@@ -361,13 +311,9 @@ def read_vault(vault: Path, pattern: str) -> list[Task]:
 
 def build_tasks_adapter(
     tasks: TasksSettings, general: GeneralSettings, env: Env
-) -> FixtureTasksAdapter | ObsidianTasksAdapter | FileTasksAdapter:
-    """``push`` is today's ``FileTasksAdapter``, reading the same
-    ``DATA_DIR/tasks.json`` a push always wrote to (see
-    ``adapters/base.py``'s docstring); 1.2d replaces this with the
-    ``datasets`` row."""
+) -> FixtureTasksAdapter | ObsidianTasksAdapter | PushTasksAdapter:
     if tasks.source == "obsidian":
         return ObsidianTasksAdapter(tasks, env)
     if tasks.source == "push":
-        return FileTasksAdapter(tasks, general, env)
+        return PushTasksAdapter(tasks, general, env)
     return FixtureTasksAdapter(tasks, general, env)
