@@ -28,7 +28,7 @@ reTerminal E1002 running ESPHome
 | `dashboard/` | dashboard-hub server (own `pyproject.toml`, Dockerfile, tests) |
 | `firmware/` | ESPHome YAML for the E1002 and secrets example |
 | `fixtures/` | Demo data used when no integration is enabled |
-| `data/` | Runtime data written by other agents (brief, ai-usage). Gitignored |
+| `data/` | The hub's own database, `deskmate.sqlite` (identity, settings, pushed datasets, telemetry). Gitignored |
 | `docs/` | Architecture, flashing, restore, data sources |
 | `scripts/` | Backup, verify, render helpers |
 | `private-backups/` | Factory flash dumps. Gitignored, sensitive |
@@ -44,7 +44,14 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | --- | --- | --- | --- |
 | GET | `/healthz` | open | Liveness only: each adapter's last known status, never fetches (`unknown` before the first render); always `200`; the full body only for an authenticated reader on a configured hub, a minimal `{status, version, renderer.connected}` body otherwise (unconfigured, or configured but unauthenticated) |
 | GET, POST | `/setup` | open, address-guarded | Set up an unconfigured hub; see Auth below |
+| GET, POST | `/setup/{step}` | admin | The setup wizard's optional steps (general, weather, calendar, home); see docs/SETTINGS.md |
 | GET | `/login` | open | Browser sign-in form; see Auth below |
+| GET | `/settings` | admin | Every settings section's form, then backup, restore and rotate; see docs/SETTINGS.md |
+| GET | `/settings/geocode` | admin | The settings page with the weather section's location search results |
+| POST | `/settings/{section}` | admin | Save one settings section, or "Save and test" it |
+| POST | `/settings/backup` | admin | Download the whole database as one SQLite file |
+| POST | `/settings/restore` | admin | Replace the database with an uploaded backup |
+| POST | `/settings/rotate` | admin | Mint a fresh token, device key and session secret |
 | GET | `/api/hub` | reader | Hub name, base URL, configured, sources |
 | GET | `/api/state` | reader | Normalized state JSON that pages render from |
 | GET | `/display/{page}.png` | reader | `page` is one of the current pages (see README.md's Pages line) |
@@ -59,16 +66,19 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | GET | `/api/device/telemetry` | reader | Latest sample plus sample count, oldest, newest |
 | GET | `/api/device/history` | reader | `?hours=` window of stored samples, downsampled |
 
-Before the hub is set up, every `reader`, `token` and `device` route
-answers `503`: an unconfigured hub serves nothing but `GET`/`POST /setup`,
-`GET /healthz` (minimal body), `/static`, `/docs` and `/openapi.json`.
-`GET /` and the two `reader`-`html` routes (`/preview`,
-`/preview/{page}.html`) redirect to `/setup` (`303`) instead of `503`. Set
-the hub up right after the first start; see docs/DEPLOY.md. Once set up,
-`reader` routes accept the bearer token, the device key, or a `/login`
-session cookie; the `device` route accepts only the bearer token or device
-key (never the cookie); `token` routes accept only the bearer token. See
-Auth below for the full rule and the two secrets.
+Before the hub is set up, every `reader`, `admin`, `token` and `device`
+route answers `503`: an unconfigured hub serves nothing but
+`GET`/`POST /setup`, `GET /healthz` (minimal body), `/static`, `/docs` and
+`/openapi.json`. `GET /` and the `reader`-`html` and `admin`-`html` routes
+(`/preview`, `/preview/{page}.html`, `/settings*`, `/setup/{step}`)
+redirect to `/setup` (`303`) instead of `503`. Set the hub up right after
+the first start; see docs/DEPLOY.md. Once set up, `reader` routes accept
+the bearer token, the device key, or a `/login` session cookie of either
+role; `admin` routes accept only the bearer token or an admin session
+cookie (never the device key, even as a cookie); the `device` route accepts
+only the bearer token or device key (never the cookie); `token` routes
+accept only the bearer token. See Auth below for the full rule and the two
+secrets.
 
 `/display/{page}.png`:
 
@@ -108,20 +118,36 @@ again:
   the same power as a browser login, which is why it is never accepted for
   a write.
 
-`hub.json` is schema 2: `{schema, name, base_url, token_sha256,
-device_key_sha256, session_secret, created_at}`, never a plaintext secret.
-A schema-1 `hub.json` from before the read key existed makes the hub answer
-`503` on every route until it is deleted and the hub is set up again. `GET
-/setup` shows the setup form when unconfigured, a bare "already set up"
-page with a link to `/login` once configured - it never reveals the name,
-base URL or creation time to an anonymous caller; `POST /setup` on an
-already-configured hub is `409`. There is no edit or regenerate mode:
-recovery is stopping the container, deleting `data/hub.json`, and starting
-again.
+The hub's identity is the single row of the `hub` table in
+`data/deskmate.sqlite` (`app/db.py`, `app/hub_config.py`):
+`{name, base_url, token_sha256, device_key_sha256, session_secret,
+created_at}`, never a plaintext secret. A row that exists but cannot be
+trusted (a missing value, an unparseable `created_at`) makes the hub answer
+`503` on every route until the database is fixed or reset. `GET /setup`
+shows the setup form when unconfigured, a bare "already set up" page with a
+link to `/login` once configured - it never reveals the name, base URL or
+creation time to an anonymous caller; `POST /setup` on an already-configured
+hub is `409`. There is no edit or regenerate mode: recovery is stopping the
+container, deleting `data/deskmate.sqlite`, and starting again (see "Reset"
+in docs/SETTINGS.md).
 
-**Before the hub is set up**, every `reader`, `token` and `device` route
-answers `503` (see the endpoint table above for the handful of routes that
-stay open, and the redirects on `GET /` and the two HTML preview routes).
+**Roles.** A `/login` session cookie carries one of two roles. Signing in
+with the bearer token grants **admin**; signing in with the device key
+grants **reader**. An admin cookie lasts 7 days, a reader cookie 30 days -
+the credential that reaches the settings pages is shorter-lived on purpose.
+The device key is never an admin credential, even though it is a valid
+reader credential: it sits in the E1002's unencrypted flash, so every
+`admin` route checks the bearer against the token only, never the device
+key, whether presented as a header or through a cookie. Losing a flashed
+device therefore never hands out admin access. A cookie in the pre-role
+format (from before this version) is rejected the same as no cookie at all,
+which is why upgrading logs every browser out once (see "Upgrading an
+existing install" in docs/DEPLOY.md).
+
+**Before the hub is set up**, every `reader`, `admin`, `token` and `device`
+route answers `503` (see the endpoint table above for the handful of routes
+that stay open, and the redirects on `GET /` and the HTML preview and
+settings routes).
 
 **Once the hub is set up:**
 
@@ -129,19 +155,23 @@ stay open, and the redirects on `GET /` and the two HTML preview routes).
   `/preview/{page}.html`, `/api/state`,
   `/api/hub`, `GET /api/device/telemetry`, `/api/device/history`) require
   `Authorization: Bearer <token or device key>`, or a browser session
-  cookie obtained at `/login`.
+  cookie of either role obtained at `/login`.
+- **`admin` routes** (`/settings*`, `/setup/{step}`) require
+  `Authorization: Bearer <token>`, or an admin session cookie. The device
+  key is never accepted here, as a header or as a cookie - see Roles above.
 - **The `device` route** (`POST /api/device/telemetry`) requires
   `Authorization: Bearer <token or device key>`. The cookie is never
   accepted there.
 - **`token` routes** (`POST /api/ai-usage`, `/api/brief`, `/api/tasks`,
   `POST`/`DELETE /api/alert`) require `Authorization: Bearer <token>`. The
   device key and the cookie are never accepted for a write.
-- **`GET /login`** shows a form; entering the device key (the token also
-  works) sets a `deskmate_session` cookie (`HttpOnly`, `SameSite=Lax`,
-  30 days, signed with an expiry, `Secure` when the hub's base URL is
-  `https`) and redirects to the page that was asked for. An
-  unauthenticated browser opening `/preview` or `/preview/{page}.html` is
-  redirected to `/login` (`303`) instead of getting a `401`.
+- **`GET /login`** shows a form; entering the token sets an admin cookie,
+  the device key a reader cookie (`deskmate_session`, `HttpOnly`,
+  `SameSite=Lax`, signed with a role and an expiry, `Secure` when the hub's
+  base URL is `https`), and redirects to the page that was asked for. An
+  unauthenticated browser opening `/preview`, `/preview/{page}.html`,
+  `/settings*` or `/setup/{step}` is redirected to `/login` (`303`) instead
+  of getting a `401`.
 - Still open by design, configured or not: `GET`/`POST /setup` (guarded by
   the caller's address instead of a credential while unconfigured), `GET
   /healthz` (minimal body until authenticated), `/docs` and `/openapi.json`
@@ -149,11 +179,13 @@ stay open, and the redirects on `GET /` and the two HTML preview routes).
   credential to load, only to call a route through it), and `/static`
   (fonts). `GET /login` also stays open once configured; while unconfigured
   it simply redirects to `/setup`.
-- **Reset** (delete `data/hub.json`) rotates the session secret, so every
-  cookie stops working, and rotates the device key, so the device's Hub
-  key field must be updated (its own web page, or the Home Assistant text
-  entity) before it can fetch again; a reflash is only needed for
-  firmware built before these runtime fields existed.
+- **Rotate** (`POST /settings/rotate`) mints a fresh token, device key and
+  session secret, which rotates the session secret (every cookie stops
+  working) and the device key (the device's Hub key field must be updated,
+  its own web page or the Home Assistant text entity, before it can fetch
+  again; a reflash is only needed for firmware built before these runtime
+  fields existed). **Reset** (delete `data/deskmate.sqlite`) does the same,
+  plus throws away every setting and pushed dataset. See docs/SETTINGS.md.
 
 `Bearer` is case-insensitive, checked by hashing and
 `hmac.compare_digest` against the stored hash. One error shape for the
@@ -162,12 +194,12 @@ problems for a `422`).
 
 | Status | Meaning |
 | --- | --- |
-| 401 | A `reader`, `device` or `token` route was called with no credential or the wrong one, once the hub is set up |
-| 303 | An unauthenticated browser opened `/preview` or `/preview/{page}.html` (redirected to `/login`), or any browser opened `/` or a `reader-html` route on an unconfigured hub (redirected to `/setup`) |
+| 401 | A `reader`, `admin`, `device` or `token` route was called with no credential or the wrong one, once the hub is set up (a reader cookie or the device key on an `admin` route counts as no credential) |
+| 303 | An unauthenticated browser opened `/preview`, `/preview/{page}.html`, `/settings*` or `/setup/{step}` (redirected to `/login`), or any browser opened `/` or an HTML `reader`/`admin` route on an unconfigured hub (redirected to `/setup`) |
 | 403 | `POST /setup` was called from an address that is not loopback, private, or link-local |
 | 409 | `POST /setup` on an already-configured hub |
-| 422 | Body rejected: unknown field, bad `schema_version`, a length or count cap, a duplicate task id, a naive datetime, or an invalid base URL |
-| 503 | The hub is not set up yet (every `reader`, `token` and `device` route), or `data/hub.json` exists but is unreadable or is schema 1 (the detail names the path or the schema problem) |
+| 422 | Body rejected: unknown field, bad `schema_version`, a length or count cap, a duplicate task id, a naive datetime, an invalid base URL, or a settings form field that failed validation |
+| 503 | The hub is not set up yet (every `reader`, `admin`, `token` and `device` route), or the database's `hub` row exists but is unreadable (the detail names the problem) |
 
 ### Rendering pipeline
 
@@ -262,63 +294,53 @@ epaper_spi driver maps RGB to the nearest of the six panel colors):
 
 ### Adapters and configuration
 
-Configuration is environment variables (`config.py`, pydantic-settings).
-Each adapter has a `*_SOURCE` selector; `fixture` is always available, for
-development, but no adapter defaults to it: an unconfigured hub reports
+Configuration is sections on `/settings` (`app/modules/<id>/settings.py`,
+one pydantic model per section, stored as a row of `data/deskmate.sqlite`),
+not environment variables; see docs/SETTINGS.md for every field. Each
+section with a source has a Source selector; `fixture` is always available,
+for development, but no section defaults to it: an unconfigured hub reports
 every block `unavailable` and renders an honest empty state rather than
 demo data.
 
-| Adapter | Sources | Default | Config |
-| --- | --- | --- | --- |
-| tasks | fixture, file, obsidian, auto | file | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
-| calendar | fixture, ics | ics | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
-| weather | fixture, open_meteo | open_meteo | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
-| ai_usage | fixture, file, auto | file | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
-| ai_brief | fixture, file, auto | file | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`) |
-| home_assistant | fixture, rest | rest | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` (JSON) |
-| device | store, fixture | store | `DEVICE_SOURCE`, `TELEMETRY_DB_PATH`, `TELEMETRY_RETENTION_DAYS` |
+| Section | Sources | Default |
+| --- | --- | --- |
+| tasks | `push`, `obsidian`, `fixture` | `push` |
+| calendar | `ics`, `fixture` | `ics` |
+| weather | `open_meteo`, `fixture` | `open_meteo` |
+| ai_usage | `push`, `fixture` | `push` |
+| brief | `push`, `fixture` | `push` |
+| home | `rest`, `fixture` | `rest` |
+| device | `store`, `fixture` | `store` |
 
-`auto` (tasks, ai_usage, ai_brief): the file adapter when its file exists and
-is readable for the current state (for ai_brief, "readable" means either
-`current.json` or the current brief mode's own Markdown file), otherwise
-`fixture`. `fixture` and `file` keep their strict, non-auto meanings; `tasks`
-alone also accepts `obsidian`, which `auto` never selects on its own. `auto`
-is no longer any adapter's default, but stays available for a dataset that
-should show fixture data until its first real push.
+`push` (tasks, ai_usage, brief) always reads the matching `datasets` row -
+whatever the last `POST /api/tasks`, `/api/ai-usage` or `/api/brief` wrote -
+so there is no separate "file" or "auto" selector left to distinguish from
+it (see the plan's Non-goals: both used to mean "the pushed file", which is
+now just `push`). `GET /api/hub`'s `sources` block is therefore a plain
+`{dataset: {source}}` per pushed dataset, straight from the section models:
+there is no live/last-fetch split left to report.
 
-`GET /api/hub`'s `sources.<dataset>.effective` and the footer's DEMO mark
-report two different moments, not the same fact twice:
-
-- `effective` is a live, pure check of what the *next* render will use,
-  evaluated fresh on every `GET /api/hub` call. It shows a push immediately,
-  before anything has re-rendered.
-- DEMO tracks what the *last* render actually drew (the adapter's last real
-  fetch), so it only catches up once the panel's own page cache expires (its
-  TTL) or a push invalidates it. This is deliberate: DEMO must match the
-  pixels currently on screen, not what will be there next time.
-
-DEMO covers exactly the three datasets a remote agent pushes (ai_usage,
+The footer's DEMO mark covers exactly the three pushed datasets (ai_usage,
 brief, tasks), and only on the Today and Brief pages, the only pages that
-draw them: when one of a page's own pushed datasets is fixture-sourced, that
-page's footer prints `DEMO` so a fresh install never passes demo numbers off
-as real. Weather, calendar, home and device keep their own established
-fixture-fallback story from earlier phases and never print DEMO: the hub
-fetches them itself, or (device) the E1002 firmware pushes them, so there is
-nothing there for a remote agent's push to represent. See "Staleness" below.
-
-Global: `TIMEZONE` (default `Asia/Bangkok`), `UNITS` (`metric`).
+draw them: when one of a page's own pushed datasets is `fixture`-sourced,
+that page's footer prints `DEMO` so a fresh install never passes demo
+numbers off as real. Weather, calendar, home and device never print DEMO:
+the hub fetches them itself, or (device) the E1002 firmware pushes them, so
+there is nothing there for a remote agent's push to represent. See
+"Staleness" below.
 
 Obsidian access is read only. The vault is mounted read-only in Docker.
 
 ### Staleness
 
-`AI_USAGE_STALE_SECONDS` (default 21600), `BRIEF_STALE_SECONDS` and
-`TASKS_STALE_SECONDS` (default 36000 each) bound how old a pushed dataset's
-own age can get before the panel marks it: `view.py`'s `stale_info` compares
-its reference time, which is the state's own `updated_at` converted to
-`TIMEZONE` (not the wall-clock instant the comparison runs; `updated_at` is
-the newest adapter timestamp in that state snapshot, so a cached, not yet
-re-fetched page compares against the moment it was built, not against now)
+Each pushed dataset's own `stale_seconds` field (ai_usage 21600, brief and
+tasks 36000, all defaults; see docs/SETTINGS.md) bounds how old it can get
+before the panel marks it: `view.py`'s `stale_info` compares its reference
+time, which is the state's own `updated_at` converted to the general
+section's timezone (not the wall-clock instant the comparison runs;
+`updated_at` is the newest adapter timestamp in that state snapshot, so a
+cached, not yet re-fetched page compares against the moment it was built,
+not against now)
 against `AIUsage.collected_at` (the oldest provider), `Brief.generated_at`
 or `TasksBlock.received_at`, and returns an hour-bucketed age label ("6 H
 AGO") once the threshold is passed and the age is at least an hour; under an
@@ -336,7 +358,8 @@ footer entry through the existing footer-flag logic.
 
 - `POST /api/alert` and `DELETE /api/alert` require the bearer token (see
   Auth above). `POST /api/alert` stores the current alert (in memory plus
-  `data/alert.json`). `/display/alert.png` renders it. Priority order:
+  the `alert` row of `data/deskmate.sqlite`). `/display/alert.png` renders
+  it. Priority order:
   `critical > doorbell > important > normal`; a lower priority does not
   replace a higher one that is still active.
 - The device is told to show it through its ESPHome API action
