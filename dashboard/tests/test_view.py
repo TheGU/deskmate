@@ -102,7 +102,11 @@ from app.view import (
     weather_summary,
     wifi_accent,
     wifi_level,
-    window_flags,
+    today_flag,
+    agenda_flag,
+    brief_flag,
+    system_flag,
+    weather_flag,
     worst_accent,
 )
 from tests.conftest import make_state
@@ -1707,7 +1711,7 @@ def test_tasks_stale_is_none_for_a_fixture(hub_settings: HubSettings) -> None:
     assert tasks_stale(state, hub_settings, NOW) is None
 
 
-def test_window_flags_adds_today_when_ai_usage_is_stale(hub_settings: HubSettings) -> None:
+def test_today_flag_is_set_when_ai_usage_is_stale(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=7)
     state = _empty_state_with(
         ai_usage=AIUsageBlock(
@@ -1716,16 +1720,16 @@ def test_window_flags_adds_today_when_ai_usage_is_stale(hub_settings: HubSetting
             providers=[AIUsage(provider="claude", collected_at=old)],
         )
     )
-    assert "today" in window_flags(state, hub_settings, NOW, overdue_count=0)
+    assert today_flag(state, hub_settings) is True
 
 
-def test_window_flags_adds_brief_when_tasks_is_stale(hub_settings: HubSettings) -> None:
+def test_brief_flag_is_set_when_tasks_is_stale(hub_settings: HubSettings) -> None:
     old = NOW - timedelta(hours=11)
     state = _empty_state_with(tasks=TasksBlock(status=AdapterStatus.OK, source="file", received_at=old))
-    assert "brief" in window_flags(state, hub_settings, NOW, overdue_count=0)
+    assert brief_flag(state, hub_settings) is True
 
 
-def test_window_flags_adds_today_when_brief_is_stale(hub_settings: HubSettings) -> None:
+def test_today_flag_is_set_when_the_brief_is_stale(hub_settings: HubSettings) -> None:
     """Today draws the brief note too (view.py:brief_note), so a stale brief
     must flag Today's own footer entry, not only Brief's."""
     old = NOW - timedelta(hours=11)
@@ -1736,13 +1740,16 @@ def test_window_flags_adds_today_when_brief_is_stale(hub_settings: HubSettings) 
             brief=Brief(headline="x", generated_at=old, source="file"),
         )
     )
-    assert "today" in window_flags(state, hub_settings, NOW, overdue_count=0)
+    assert today_flag(state, hub_settings) is True
 
 
-def test_window_flags_does_not_flag_today_or_brief_when_nothing_is_stale(hub_settings: HubSettings) -> None:
-    flagged = window_flags(_empty_state_with(), hub_settings, NOW, overdue_count=0)
-    assert "today" not in flagged
-    assert "brief" not in flagged
+def test_no_page_is_flagged_when_nothing_is_stale_or_broken(hub_settings: HubSettings) -> None:
+    state = _empty_state_with()
+    assert today_flag(state, hub_settings) is False
+    assert brief_flag(state, hub_settings) is False
+    assert agenda_flag(state, hub_settings) is False
+    assert weather_flag(state, hub_settings) is False
+    assert system_flag(state, hub_settings) is False
 
 
 def test_page_shows_demo_data_checks_only_that_pages_own_datasets(hub_settings: HubSettings) -> None:
@@ -1753,9 +1760,10 @@ def test_page_shows_demo_data_checks_only_that_pages_own_datasets(hub_settings: 
         ),
         tasks=TasksBlock(status=AdapterStatus.OK, source="file"),
     )
-    assert page_shows_demo_data(state, "today") is True  # ai_usage is fixture
-    assert page_shows_demo_data(state, "brief") is False  # brief and tasks are both file
-    assert page_shows_demo_data(state, "agenda") is False  # agenda has no tracked dataset
+    # Each page's own demo_datasets, as its PageSpec carries them.
+    assert page_shows_demo_data(state, ("ai_usage", "brief", "tasks")) is True
+    assert page_shows_demo_data(state, ("brief", "tasks")) is False
+    assert page_shows_demo_data(state, ()) is False
 
 
 def test_footer_context_demo_flag(hub_settings: HubSettings) -> None:

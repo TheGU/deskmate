@@ -2,6 +2,12 @@
 
 One failing adapter never breaks a page: each block carries its own status and
 the templates print "unknown" / "unavailable" instead of a made up value.
+
+Since 2.1a the set of adapters is not written down here. It is whatever the
+enabled modules declare (``app/modules/registry.py:Registry.datasets``), so
+disabling a module stops its fetches and leaves the pages that draw it
+showing an unavailable block, and installing one starts its fetches with no
+change to this file.
 """
 
 from __future__ import annotations
@@ -11,28 +17,14 @@ import hashlib
 import logging
 from typing import Any, TypeVar
 
-from app.adapters.ai_brief import build_brief_adapter
-from app.adapters.ai_usage import build_ai_usage_adapter
-from app.adapters.base import CachedAdapter, Outcome
-from app.adapters.calendar import build_calendar_adapter
-from app.adapters.device import build_device_adapter
-from app.adapters.home_assistant import build_home_adapter
-from app.adapters.tasks import build_tasks_adapter
-from app.adapters.weather import build_weather_adapter
+from app.adapters.base import Adapter, CachedAdapter, Outcome
 from app.alerts import AlertStore
 from app.config import Env
+from app.db import Database, get_database
 from app.logging_setup import log
-from app.models import (
-    AIUsageBlock,
-    Block,
-    BriefBlock,
-    CalendarBlock,
-    DashboardState,
-    DeviceBlock,
-    HomeBlock,
-    TasksBlock,
-    WeatherBlock,
-)
+from app.models import Block, DashboardState
+from app.modules import DatasetSpec, ModuleContext
+from app.modules.registry import Registry, builtin_registry
 from app.settings import HubSettings
 from app.timeutil import now_local
 
@@ -44,85 +36,86 @@ BlockT = TypeVar("BlockT", bound=Block)
 class StateService:
     """Owns the cached adapters and produces state snapshots."""
 
-    def __init__(self, hub_settings: HubSettings, env: Env, alerts: AlertStore) -> None:
+    def __init__(
+        self,
+        hub_settings: HubSettings,
+        env: Env,
+        alerts: AlertStore,
+        registry: Registry | None = None,
+        db: Database | None = None,
+    ) -> None:
         self._hub_settings = hub_settings
         self._env = env
         self._alerts = alerts
-        general = hub_settings.general
-        self.tasks = CachedAdapter(
-            build_tasks_adapter(hub_settings.tasks, general, env), hub_settings.tasks.ttl_seconds
+        # A caller with no registry gets the built-ins with this snapshot's
+        # own module toggles applied, which is what every test that builds a
+        # StateService directly wants. ``Hub`` always passes its own.
+        self._registry = builtin_registry(hub_settings.modules) if registry is None else registry
+        self._db = get_database(env.hub_db_file) if db is None else db
+        self._specs: dict[str, DatasetSpec] = self._registry.datasets()
+        self._adapters: dict[str, CachedAdapter[Any]] = {
+            name: CachedAdapter(self._build(name, spec), spec.ttl_seconds(self._section(spec)))
+            for name, spec in self._specs.items()
+        }
+
+    def _section(self, spec: DatasetSpec) -> Any:
+        """The settings the dataset's adapter reads.
+
+        A built-in or core section is an attribute of the snapshot. A section
+        a module brought with it is not (``HubSettings`` is a fixed model),
+        so it falls back to that module's own defaults until 2.1b gives a
+        module's section a row of its own.
+        """
+        stored = getattr(self._hub_settings, spec.section, None)
+        if stored is not None:
+            return stored
+        model = self._registry.sections().get(spec.section)
+        if model is None:
+            raise KeyError(
+                f"dataset {spec.name!r} reads the settings section {spec.section!r}, "
+                "which no module and no core section defines"
+            )
+        return model()
+
+    def _build(self, name: str, spec: DatasetSpec) -> Adapter[Any]:
+        owner = self._registry.dataset_owner(name)
+        context = ModuleContext(
+            env=self._env,
+            db=self._db,
+            data_dir=self._env.data_dir,
+            http_timeout_seconds=self._env.http_timeout_seconds,
+            logger=logging.getLogger(f"app.modules.{owner.id if owner else name}"),
         )
-        self.calendar = CachedAdapter(
-            build_calendar_adapter(hub_settings.calendar, general, env),
-            hub_settings.calendar.ttl_seconds,
-        )
-        self.weather = CachedAdapter(
-            build_weather_adapter(hub_settings.weather, general, env),
-            hub_settings.weather.ttl_seconds,
-        )
-        self.ai_usage = CachedAdapter(
-            build_ai_usage_adapter(hub_settings.ai_usage, general, env),
-            hub_settings.ai_usage.ttl_seconds,
-        )
-        self.brief = CachedAdapter(
-            build_brief_adapter(hub_settings.brief, general, env), hub_settings.brief.ttl_seconds
-        )
-        self.home = CachedAdapter(
-            build_home_adapter(hub_settings.home, env), hub_settings.home.ttl_seconds
-        )
-        self.device = CachedAdapter(
-            build_device_adapter(hub_settings.device, env), hub_settings.device.ttl_seconds
-        )
+        return spec.build_adapter(self._section(spec), self._hub_settings.general, context)
 
     @property
     def adapters(self) -> dict[str, CachedAdapter[Any]]:
         """Every cached adapter, keyed and ordered like DashboardState.blocks.
+
         Each adapter's own ``name`` (adapters/*.py) already matches its key
         here, so this is just the explicit registry /healthz walks without
-        forcing a fetch.
+        forcing a fetch. It is also how a push route invalidates the adapter
+        whose row it just wrote.
         """
-        return {
-            "tasks": self.tasks,
-            "calendar": self.calendar,
-            "weather": self.weather,
-            "ai_usage": self.ai_usage,
-            "brief": self.brief,
-            "home": self.home,
-            "device": self.device,
-        }
+        return dict(self._adapters)
 
     async def build(self, *, force: bool = False) -> DashboardState:
         """Fetch every adapter (concurrently) and fold the results into state."""
-        (
-            tasks_out,
-            calendar_out,
-            weather_out,
-            usage_out,
-            brief_out,
-            home_out,
-            device_out,
-        ) = await asyncio.gather(
-            self.tasks.get(force=force),
-            self.calendar.get(force=force),
-            self.weather.get(force=force),
-            self.ai_usage.get(force=force),
-            self.brief.get(force=force),
-            self.home.get(force=force),
-            self.device.get(force=force),
+        names = list(self._adapters)
+        outcomes = await asyncio.gather(
+            *(self._adapters[name].get(force=force) for name in names)
         )
+        blocks: dict[str, Block] = {
+            name: build_block(
+                self._specs[name].block_model, outcome, self._specs[name].value_field
+            )
+            for name, outcome in zip(names, outcomes)
+        }
 
         state = DashboardState(
             generated_at=now_local(self._hub_settings.general.timezone),
             timezone=self._hub_settings.general.timezone,
-            blocks={
-                "tasks": build_block(TasksBlock, tasks_out, "items"),
-                "calendar": build_block(CalendarBlock, calendar_out, "items"),
-                "weather": build_block(WeatherBlock, weather_out, "weather"),
-                "ai_usage": build_block(AIUsageBlock, usage_out, "providers"),
-                "brief": build_block(BriefBlock, brief_out, "brief"),
-                "home": build_block(HomeBlock, home_out, "home"),
-                "device": build_block(DeviceBlock, device_out, "device"),
-            },
+            blocks=blocks,
             alert=self._alerts.current,
         )
         log(

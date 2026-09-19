@@ -7,6 +7,7 @@ Templates stay dumb: no adapter knowledge, no arithmetic, no fallbacks. Every
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from typing import Any, TYPE_CHECKING
 
@@ -42,6 +43,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     # builders. Importing HubSettings only for annotations is what keeps
     # that chain acyclic; ``from __future__ import annotations`` at the top
     # makes every use below a string.
+    from app.modules import Module, PageContextFn
     from app.settings import HubSettings
 
 UNKNOWN = "unknown"
@@ -68,9 +70,11 @@ PAGE_NAMES: dict[str, str] = {
     "alert": "ALERT",
 }
 
-#: The five pages the left and right buttons walk through. Alert is not in the
-#: list: it interrupts and then hands the previous page back.
-WINDOW_PAGES: tuple[str, ...] = ("today", "agenda", "weather", "brief", "system")
+# The window list itself is no longer a constant here. It is the registry's
+# enabled pages, in settings order (``app/modules/registry.py:Registry.
+# pages``), which is what lets a module add a window and the settings page
+# take one away. Alert is still never in it: it interrupts and then hands
+# the previous page back.
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +524,9 @@ def tasks_stale(state: DashboardState, settings: HubSettings, now: datetime) -> 
 #: draws (see "Adding a new pushed dataset" in docs/DATA-SOURCES.md). Today
 #: also draws the brief note (view.py:brief_note, the Today page's NOTE
 #: field), so "brief" belongs here too, not just on the brief page.
+#: 2.1a made these the built-in pages' ``PageSpec.demo_datasets``; the map
+#: stays here as the one place those tuples are written down until 2.2 moves
+#: each page into its own module package.
 PAGE_PUSH_DATASETS: dict[str, tuple[str, ...]] = {
     "today": ("ai_usage", "brief", "tasks"),
     "agenda": (),
@@ -529,59 +536,97 @@ PAGE_PUSH_DATASETS: dict[str, tuple[str, ...]] = {
     "alert": (),
 }
 
+#: The block type each pushed dataset arrives in. Only these three can ever
+#: be named in a page's ``demo_datasets`` (``app/modules/__init__.py``:
+#: ``PUSHED_DATASETS``), so this map is complete by construction.
+PUSHED_BLOCK_MODELS: dict[str, type[Block]] = {
+    "ai_usage": AIUsageBlock,
+    "brief": BriefBlock,
+    "tasks": TasksBlock,
+}
 
-def page_shows_demo_data(state: DashboardState, page: str) -> bool:
-    """True when a pushed dataset actually shown on this page is a fixture,
+
+def page_shows_demo_data(state: DashboardState, datasets: Sequence[str]) -> bool:
+    """True when one of the pushed datasets a page shows is a fixture,
     so a fresh install (nothing pushed yet) never passes demo numbers off
-    as real."""
-    blocks = {"ai_usage": state.block("ai_usage", AIUsageBlock), "brief": state.block("brief", BriefBlock), "tasks": state.block("tasks", TasksBlock)}
-    return any(blocks[name].source == "fixture" for name in PAGE_PUSH_DATASETS.get(page, ()))
+    as real.
 
-
-def window_flags(
-    state: DashboardState, settings: HubSettings, reference: datetime, overdue_count: int
-) -> set[str]:
-    """Pages the window list marks with a "!".
-
-    tmux flags a window that wants attention, and a flag on everything is a
-    flag on nothing, so the bar is deliberately hard to set: something has to
-    be late, broken or unhealthy, not merely worth reading. Rain is not a flag
-    because the status bar already carries it on every page.
+    ``datasets`` is the page's own ``demo_datasets``; the caller is the
+    footer, which gets it from the page spec.
     """
-    flagged: set[str] = set()
-    if overdue_count > 0:
-        flagged.add("agenda")
+    return any(
+        state.block(name, PUSHED_BLOCK_MODELS[name]).source == "fixture" for name in datasets
+    )
 
-    home = state.block("home", HomeBlock).home
-    if state.block("home", HomeBlock).usable and home is not None:
-        # A degraded service is on the System page already; only a service
-        # that is actually down is worth sending the owner there.
-        if any(service.health.value == "down" for service in home.services):
-            flagged.add("system")
 
-    device = state.block("device", DeviceBlock).device
-    if state.block("device", DeviceBlock).usable and device is not None and device.status is DeviceStatus.STALE:
-        flagged.add("system")
+# ---------------------------------------------------------------------------
+# window flags: one function per page, each the page's own reason
+# ---------------------------------------------------------------------------
+# tmux flags a window that wants attention, and a flag on everything is a
+# flag on nothing, so the bar is deliberately hard to set: something has to
+# be late, broken or unhealthy, not merely worth reading. Rain is not a flag
+# because the status bar already carries it on every page.
+#
+# Until 2.1a these five were one ``window_flags`` function that knew about
+# every page at once. They are now what each page's ``PageSpec.flag``
+# points at, so a module owns its own reason to be flagged and core owns
+# none of them. Each takes its reference time from ``state.updated_at``,
+# which is exactly what the footer passed in before.
+def page_reference(state: DashboardState) -> datetime:
+    """The moment a page reasons from: the newest adapter timestamp."""
+    return to_local(state.updated_at, state.timezone)
 
-    weather = state.block("weather", WeatherBlock).weather
-    if state.block("weather", WeatherBlock).usable and weather is not None:
-        air = (
-            uv_accent(weather.uv_index),
-            pm25_accent(weather.pm2_5),
-            aqi_accent(weather.aqi),
-        )
-        if "red" in air:
-            flagged.add("weather")
 
-    if (
+def today_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """Today draws AI capacity, the brief note and the priorities, so any of
+    the three going stale is Today's problem."""
+    reference = page_reference(state)
+    return bool(
         ai_usage_stale(state, settings, reference)
         or brief_stale(state, settings, reference)
         or tasks_stale(state, settings, reference)
-    ):
-        flagged.add("today")
-    if brief_stale(state, settings, reference) or tasks_stale(state, settings, reference):
-        flagged.add("brief")
-    return flagged
+    )
+
+
+def agenda_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """An overdue task is what sends the owner to the task list."""
+    return len(overdue_tasks(state, page_reference(state).date())) > 0
+
+
+def weather_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """Only air that is actually bad, never merely interesting weather."""
+    block = state.block("weather", WeatherBlock)
+    weather = block.weather
+    if not block.usable or weather is None:
+        return False
+    air = (
+        uv_accent(weather.uv_index),
+        pm25_accent(weather.pm2_5),
+        aqi_accent(weather.aqi),
+    )
+    return "red" in air
+
+
+def brief_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """The brief page draws the brief and the task list, and nothing else."""
+    reference = page_reference(state)
+    return bool(
+        brief_stale(state, settings, reference) or tasks_stale(state, settings, reference)
+    )
+
+
+def system_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """A service that is down, or a device that stopped reporting."""
+    home_block = state.block("home", HomeBlock)
+    home = home_block.home
+    if home_block.usable and home is not None:
+        # A degraded service is on the System page already; only a service
+        # that is actually down is worth sending the owner there.
+        if any(service.health.value == "down" for service in home.services):
+            return True
+    device_block = state.block("device", DeviceBlock)
+    device = device_block.device
+    return device_block.usable and device is not None and device.status is DeviceStatus.STALE
 
 
 #: Header battery reading: yellow at or below 20 percent, red at or below 10.
@@ -663,28 +708,68 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
     }
 
 
+def enabled_pages() -> tuple[Module, ...]:
+    """The built-in pages, for a caller that has no registry to hand.
+
+    Core always passes the hub's own registry (``app/main.py`` builds it,
+    the renderer carries it). This fallback is for the direct callers -
+    tests, and a module context builder calling ``base_context`` on its own,
+    whose header and footer core overwrites anyway - and it is imported
+    lazily because the registry imports the built-in module packages, which
+    import this file.
+    """
+    from app.modules.registry import builtin_registry
+
+    return builtin_registry().pages()
+
+
 def footer_context(
-    state: DashboardState, settings: HubSettings, today: date, reference: datetime, page: str
+    state: DashboardState,
+    settings: HubSettings,
+    today: date,
+    reference: datetime,
+    page: str,
+    pages: Sequence[Module] | None = None,
+    demo_datasets: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """The window list: the five pages the buttons walk through, plus the
-    DEMO mark at the footer's right end for this page."""
-    overdue_count = len(overdue_tasks(state, today))
-    flagged = window_flags(state, settings, reference, overdue_count)
+    """The window list: the enabled pages the buttons walk through, plus the
+    DEMO mark at the footer's right end for this page.
+
+    ``pages`` is the registry's enabled pages in order, and each one's own
+    ``PageSpec.flag`` decides its "!". ``alert`` is never in the list: it
+    interrupts and then hands the previous page back.
+    """
+    window_pages = enabled_pages() if pages is None else tuple(pages)
+    if demo_datasets is None:
+        demo_datasets = PAGE_PUSH_DATASETS.get(page, ())
     return {
         "windows": [
             {
                 "index": index,
-                "name": PAGE_NAMES[name],
-                "flag": name in flagged,
-                "active": name == page,
+                "name": module.title,
+                "flag": _flagged(module, state, settings),
+                "active": module.id == page,
             }
-            for index, name in enumerate(WINDOW_PAGES, start=1)
+            for index, module in enumerate(window_pages, start=1)
         ],
-        "demo": page_shows_demo_data(state, page),
+        "demo": page_shows_demo_data(state, demo_datasets),
     }
 
 
-def base_context(state: DashboardState, settings: HubSettings, page: str) -> dict[str, Any]:
+def _flagged(module: Module, state: DashboardState, settings: HubSettings) -> bool:
+    spec = module.page
+    if spec is None or spec.flag is None:
+        return False
+    return bool(spec.flag(state, settings))
+
+
+def base_context(
+    state: DashboardState,
+    settings: HubSettings,
+    page: str,
+    pages: Sequence[Module] | None = None,
+    demo_datasets: Sequence[str] | None = None,
+) -> dict[str, Any]:
     reference = to_local(state.updated_at, state.timezone)
     today = reference.date()
     return {
@@ -697,7 +782,9 @@ def base_context(state: DashboardState, settings: HubSettings, page: str) -> dic
         # Named constants for the fixed glyphs; the chosen ones are per row.
         "icons": icons,
         "header": header_context(state, today, reference, page),
-        "footer": footer_context(state, settings, today, reference, page),
+        "footer": footer_context(
+            state, settings, today, reference, page, pages, demo_datasets
+        ),
         # Each page builder fills this with one accent per pane title bar.
         # Kept for agenda, weather, brief and system until their own parts
         # rebuild them off the older pane-title chrome.
@@ -1754,18 +1841,68 @@ def alert_context(state: DashboardState, settings: HubSettings) -> dict[str, Any
     return context
 
 
-CONTEXT_BUILDERS = {
-    "today": today_context,
-    "agenda": agenda_context,
-    "weather": weather_context,
-    "brief": brief_context,
-    "system": system_context,
-    "alert": alert_context,
-}
+#: The one page core draws itself. Every other page comes from a module's
+#: ``PageSpec`` (``app/modules/registry.py``); ``alert`` never does, because
+#: it interrupts whatever is on screen and then hands it back, which is not
+#: something a module may claim (``app/modules/__init__.py:RESERVED_IDS``).
+ALERT_PAGE: str = "alert"
+
+CORE_CONTEXT_BUILDERS: dict[str, PageContextFn] = {ALERT_PAGE: alert_context}
 
 
-def build_context(page: str, state: DashboardState, settings: HubSettings) -> dict[str, Any]:
-    builder = CONTEXT_BUILDERS.get(page)
-    if builder is None:
+def build_context(
+    page: str,
+    state: DashboardState,
+    settings: HubSettings,
+    pages: Sequence[Module] | None = None,
+) -> dict[str, Any]:
+    """The page's own context, with core's frame merged over it.
+
+    The module builds its dict first and core computes ``header`` and
+    ``footer`` after, so a module cannot overwrite the frame by accident or
+    on purpose. ``page_title`` comes from the page spec for the same reason:
+    the footer and the title bar are what the device navigates by.
+
+    ``pages`` is the registry's enabled pages, which the footer's window
+    list and the flags are built from. Leaving it out uses the built-ins,
+    which is what a test asking for one page's context wants.
+    """
+    window_pages = enabled_pages() if pages is None else tuple(pages)
+    core = CORE_CONTEXT_BUILDERS.get(page)
+    if core is not None:
+        return _with_frame(
+            core(state, settings), state, settings, page, window_pages, (), PAGE_TITLES[page]
+        )
+
+    module = next((candidate for candidate in window_pages if candidate.id == page), None)
+    if module is None or module.page is None:
         raise KeyError(f"unknown page {page!r}")
-    return builder(state, settings)
+    spec = module.page
+    return _with_frame(
+        spec.context(state, settings),
+        state,
+        settings,
+        page,
+        window_pages,
+        spec.demo_datasets,
+        spec.title,
+    )
+
+
+def _with_frame(
+    context: dict[str, Any],
+    state: DashboardState,
+    settings: HubSettings,
+    page: str,
+    window_pages: Sequence[Module],
+    demo_datasets: Sequence[str],
+    title: str,
+) -> dict[str, Any]:
+    """The page's dict with core's frame merged over it, never under it."""
+    frame = base_context(state, settings, page, window_pages, demo_datasets)
+    merged = dict(context)
+    merged["page"] = page
+    merged["page_title"] = title
+    merged["header"] = frame["header"]
+    merged["footer"] = frame["footer"]
+    return merged

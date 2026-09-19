@@ -24,13 +24,40 @@ from playwright.async_api import Browser, Playwright, async_playwright
 from app.config import Env
 from app.logging_setup import log
 from app.models import DashboardState
+from app.modules import ScreenshotFn
+from app.modules.registry import Registry, builtin_registry
 from app.renderer.palette import DISPLAY_SIZE, quantize, to_png_bytes
 from app.settings import HubSettings
-from app.view import build_context
+from app.view import ALERT_PAGE, build_context
 
 logger = logging.getLogger("app.render")
 
-PAGES: Final[tuple[str, ...]] = ("today", "agenda", "weather", "brief", "system", "alert")
+
+def pages_of(registry: Registry) -> tuple[str, ...]:
+    """Every page id this hub serves: the enabled module pages, then alert.
+
+    Alert is last and is never a module (``app/modules/__init__.py``:
+    ``RESERVED_IDS``); it is not in the window list either, so its position
+    here is only about iteration order in tests and in /healthz.
+    """
+    return (*registry.page_ids(), ALERT_PAGE)
+
+
+def page_ttls_of(registry: Registry) -> dict[str, float]:
+    """Each page's render-cache lifetime. Alert's is 0: it is an interrupt,
+    so it is re-rendered whenever it is asked for."""
+    return {
+        **{module.id: registry.page_ttl_seconds(module.id) for module in registry.pages()},
+        ALERT_PAGE: 0.0,
+    }
+
+
+#: The built-in pages, in the order they ship in. Derived from the registry
+#: rather than written out, so a new built-in module is one line in
+#: ``app/modules/registry.py`` and nothing here. A hub with a module
+#: installed into ``DATA_DIR/modules/`` serves more than this: that is
+#: ``Renderer.pages``, off the hub's own registry.
+PAGES: Final[tuple[str, ...]] = pages_of(builtin_registry())
 
 #: Chromium renders at this multiple of the panel resolution before the
 #: Lanczos downsample and the six-ink snap. Curves land closer to their true
@@ -39,15 +66,11 @@ PAGES: Final[tuple[str, ...]] = ("today", "agenda", "weather", "brief", "system"
 #: (see renderer/palette.py).
 SUPERSAMPLE: Final[int] = 4
 
-#: Per-page render cache lifetime, matching the refresh cadence in the proposal.
-PAGE_TTL_SECONDS: Final[dict[str, float]] = {
-    "today": 1800.0,
-    "agenda": 1800.0,
-    "weather": 3600.0,
-    "brief": 300.0,
-    "system": 900.0,
-    "alert": 0.0,
-}
+#: Per-page render cache lifetime, matching the refresh cadence in the
+#: proposal. Each page's own number now lives on its ``PageSpec``; this is
+#: the built-in map, the same shape as :data:`PAGES` and derived the same
+#: way.
+PAGE_TTL_SECONDS: Final[dict[str, float]] = page_ttls_of(builtin_registry())
 
 #: (family, ``font-weight`` descriptor, filename). Google Sans is a variable
 #: font, so the descriptor is a range and one file covers every weight the
@@ -106,18 +129,59 @@ class Renderer:
     current at call time.
     """
 
-    def __init__(self, env: Env, hub_settings: HubSettings) -> None:
+    def __init__(
+        self, env: Env, hub_settings: HubSettings, registry: Registry | None = None
+    ) -> None:
         self._env = env
         self.hub_settings = hub_settings
-        self._jinja_env = Environment(
-            loader=FileSystemLoader(str(env.templates_dir)),
+        self._registry = builtin_registry(hub_settings.modules) if registry is None else registry
+        self._jinja_env = self._build_environment()
+        self._lock = asyncio.Lock()
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
+
+    def _build_environment(self) -> Environment:
+        """Core's templates first, then every enabled page's own directory.
+
+        Core first means a module cannot shadow ``base.html`` or the shared
+        macros by shipping a file of the same name. The built-in modules all
+        point at ``app/templates`` for now (2.2 moves each page's template
+        into its package), so for a hub with no third-party module this is
+        the same single directory it always was.
+        """
+        directories = [str(self._env.templates_dir)]
+        directories.extend(
+            str(directory)
+            for directory in self._registry.templates_dirs()
+            if str(directory) != str(self._env.templates_dir)
+        )
+        return Environment(
+            loader=FileSystemLoader(directories),
             autoescape=select_autoescape(["html"]),
             trim_blocks=True,
             lstrip_blocks=True,
         )
-        self._lock = asyncio.Lock()
-        self._playwright: Playwright | None = None
-        self._browser: Browser | None = None
+
+    @property
+    def registry(self) -> Registry:
+        return self._registry
+
+    @registry.setter
+    def registry(self, registry: Registry) -> None:
+        """``Hub.reload()`` assigns a rebuilt registry here.
+
+        The Jinja environment goes with it: a module that was just enabled
+        brings a template directory the old loader never searched. Chromium
+        is untouched, which is the whole reason the renderer is mutated in
+        place rather than replaced.
+        """
+        self._registry = registry
+        self._jinja_env = self._build_environment()
+
+    @property
+    def pages(self) -> tuple[str, ...]:
+        """This hub's page ids, which is not always the built-in :data:`PAGES`."""
+        return pages_of(self._registry)
 
     @property
     def environment(self) -> Environment:
@@ -157,14 +221,40 @@ class Renderer:
         return self._browser
 
     # -- html ------------------------------------------------------------
+    def template_name(self, page: str) -> str:
+        """The template file a page is drawn from.
+
+        Core's own alert page is ``alert.html``; a module's page names its
+        own file, which is how a third-party module can call its template
+        anything as long as it sits in its ``templates_dir``.
+        """
+        module = self._registry.page(page)
+        if module is not None and module.page is not None and module.page.template is not None:
+            return module.page.template
+        return f"{page}.html"
+
     def render_html(self, page: str, state: DashboardState, *, embed_fonts: bool) -> str:
-        if page not in PAGES:
+        if page not in self.pages:
             raise KeyError(f"unknown page {page!r}")
-        context: dict[str, Any] = build_context(page, state, self.hub_settings)
+        context: dict[str, Any] = build_context(
+            page, state, self.hub_settings, self._registry.pages()
+        )
         context["font_css"] = font_css(str(self._env.static_dir / "fonts"), embed_fonts)
         context["embed_fonts"] = embed_fonts
-        template = self._jinja_env.get_template(f"{page}.html")
+        template = self._jinja_env.get_template(self.template_name(page))
         return template.render(**context)
+
+    def screenshot_fn(self, page: str) -> ScreenshotFn | None:
+        """The page's own RGB renderer, when it has one instead of a template.
+
+        No built-in page does. Phase 3's Home Assistant dashboard module is
+        what this dispatch exists for; it is implemented now so a module
+        author can rely on the contract before then.
+        """
+        module = self._registry.page(page)
+        if module is None or module.page is None:
+            return None
+        return module.page.screenshot
 
     async def probe(self, page: str, state: DashboardState, expression: str) -> Any:
         """Evaluate a JavaScript expression against a rendered page.
@@ -202,7 +292,19 @@ class Renderer:
         downsampled with Lanczos. Curves and diagonals land closer to their
         true shape once the six-ink snap runs on a downsampled image than on
         a 1x screenshot.
+
+        A page whose spec carries a ``screenshot`` draws itself instead: it
+        is handed the shared browser under the same lock, so its whole path
+        is serialized against every other render, and it must hand back an
+        800x480 RGB image ready for the six-ink snap.
         """
+        screenshot = self.screenshot_fn(page)
+        if screenshot is not None:
+            async with self._lock:
+                browser = await self._ensure_browser()
+                image = await screenshot(browser, state, self.hub_settings)
+            return image.convert("RGB")
+
         html = self.render_html(page, state, embed_fonts=True)
         async with self._lock:
             browser = await self._ensure_browser()

@@ -43,25 +43,66 @@ from app.modules.calendar.settings import SECTION as _CALENDAR_SECTION, Calendar
 from app.modules.device.settings import SECTION as _DEVICE_SECTION, DeviceSettings
 from app.modules.general.settings import SECTION as _GENERAL_SECTION, GeneralSettings
 from app.modules.home.settings import SECTION as _HOME_SECTION, HomeSettings
+from app.modules.registry import (
+    SECTION as _MODULES_SECTION,
+    ModulesSettings,
+    builtin_registry,
+)
 from app.modules.tasks.settings import SECTION as _TASKS_SECTION, TasksSettings
 from app.modules.weather.settings import SECTION as _WEATHER_SECTION, WeatherSettings
 
 logger = logging.getLogger("app.settings")
 
-#: Every settings section, in wizard order. Insertion order is load-bearing:
-#: ``HubSettings`` fields, the settings page and the setup wizard all walk
-#: sections in this order.
-SECTIONS: dict[str, type[BaseModel]] = {
+#: The sections core owns. They are not modules and never will be:
+#: ``general`` is the hub's own timezone and units, ``device`` belongs to the
+#: telemetry routes and the retention sweep (the System page only draws it),
+#: ``alert`` is the interrupt page core reserves, and ``modules`` is the
+#: registry's own enable/order list.
+CORE_SECTIONS: dict[str, type[BaseModel]] = {
     _GENERAL_SECTION: GeneralSettings,
-    _TASKS_SECTION: TasksSettings,
-    _CALENDAR_SECTION: CalendarSettings,
-    _WEATHER_SECTION: WeatherSettings,
-    _AI_USAGE_SECTION: AIUsageSettings,
-    _BRIEF_SECTION: BriefSettings,
-    _HOME_SECTION: HomeSettings,
     _DEVICE_SECTION: DeviceSettings,
     _ALERT_SECTION: AlertSettings,
+    _MODULES_SECTION: ModulesSettings,
 }
+
+#: Wizard order. Insertion order of :data:`SECTIONS` is load-bearing - the
+#: settings page and the setup wizard both walk it - but the registry orders
+#: modules by the window list, which is not the order an owner fills the
+#: wizard in. So membership comes from the registry and the order comes from
+#: here; a section this list does not name (a third-party module's) sorts
+#: after the ones it does, by name.
+SECTION_ORDER: tuple[str, ...] = (
+    _GENERAL_SECTION,
+    _TASKS_SECTION,
+    _CALENDAR_SECTION,
+    _WEATHER_SECTION,
+    _AI_USAGE_SECTION,
+    _BRIEF_SECTION,
+    _HOME_SECTION,
+    _DEVICE_SECTION,
+    _ALERT_SECTION,
+    _MODULES_SECTION,
+)
+
+
+def order_sections(sections: dict[str, type[BaseModel]]) -> dict[str, type[BaseModel]]:
+    """``sections`` in :data:`SECTION_ORDER`, unknown names last, by name."""
+    rank = {name: index for index, name in enumerate(SECTION_ORDER)}
+    return {
+        name: sections[name]
+        for name in sorted(sections, key=lambda name: (rank.get(name, len(rank)), name))
+    }
+
+
+#: Every settings section this hub knows at import time: each built-in
+#: module's own section (``app/modules/registry.py:Registry.sections``) plus
+#: the core ones above. A module installed into ``DATA_DIR/modules/`` brings
+#: its section with it at runtime, through the hub's own registry; this
+#: module-level map exists before any hub does, so it can only speak for the
+#: modules that ship with the hub.
+SECTIONS: dict[str, type[BaseModel]] = order_sections(
+    {**builtin_registry().sections(), **CORE_SECTIONS}
+)
 
 
 class HubSettings(BaseModel):
@@ -81,6 +122,7 @@ class HubSettings(BaseModel):
     home: HomeSettings = Field(default_factory=HomeSettings)
     device: DeviceSettings = Field(default_factory=DeviceSettings)
     alert: AlertSettings = Field(default_factory=AlertSettings)
+    modules: ModulesSettings = Field(default_factory=ModulesSettings)
 
 
 class SettingsStore:
@@ -169,4 +211,4 @@ class SettingsStore:
         return datetime.fromisoformat(str(row["updated_at"]))
 
 
-__all__ = ["SECTIONS", "HubSettings", "SettingsStore"]
+__all__ = ["CORE_SECTIONS", "SECTIONS", "SECTION_ORDER", "HubSettings", "SettingsStore", "order_sections"]
