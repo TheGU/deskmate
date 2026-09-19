@@ -25,11 +25,15 @@ uv pip install --python .venv\Scripts\python.exe esphome
 Copy-Item firmware\secrets.yaml.example firmware\secrets.yaml
 ```
 
-Edit `firmware/secrets.yaml`: Wi-Fi, `hub_base_url` (LAN address of
-dashboard-hub, for example `http://192.168.1.50`), `hub_key` (the
-device key from the hub's setup-done page), and fresh random values for
-`api_encryption_key` (32 bytes base64), `ota_password`, `ap_password`.
-`secrets.yaml` is gitignored.
+Edit `firmware/secrets.yaml`: `hub_base_url` (LAN address of dashboard-hub,
+for example `http://192.168.1.50`) and `hub_key` (the device key from the
+hub's setup-done page) only seed the device's Hub base URL and Hub key
+fields on its very first boot; both can be changed later without a
+reflash (see "Provisioning at runtime" below). The example file's other
+entries set up the device's own sign-in and its random per-device values;
+fill each in with your own choice. There is no Wi-Fi entry: Wi-Fi is
+provisioned at runtime only, never from `secrets.yaml`. `secrets.yaml` is
+gitignored.
 
 A `.local` mDNS hostname does not resolve on the device: ESP-IDF's resolver
 sends a `.local` name to mDNS, and this firmware never joins that multicast
@@ -78,6 +82,37 @@ firmware\.venv\Scripts\esphome.exe run firmware\e1002.yaml --device COM3 --uploa
 - Logs over the network once Wi-Fi is up: `esphome logs firmware\e1002.yaml`
 - OTA for every later change: `esphome run firmware\e1002.yaml` and pick
   the OTA target. USB is no longer required.
+
+## Provisioning at runtime
+
+Wi-Fi, the hub URL and the device key are never permanently baked into the
+firmware image; moving the hub or updating the device's copy of its key
+later is a browser edit, not a reflash.
+
+**Wi-Fi.** The very first boot (and any boot where no network has been
+saved yet) brings up an access point named `reTerminal-E1002 Setup` (see
+`secrets.yaml.example` for its entry). Connect a phone or laptop to it and
+ESPHome's captive portal opens automatically (or browse to the AP's
+address) and lets you pick a network. Alternatively, use Improv over the
+USB serial connection while the device is plugged in. Either path stores
+the chosen network in NVS and it survives OTA updates; the setup AP does
+not come back once a saved network works again.
+
+**Hub base URL and Hub key.** These seed from `secrets.yaml` on the first
+boot only. To change them afterwards:
+
+- Open `http://<device-ip>/` in a browser (the device's own page, signed
+  in with the entry `secrets.yaml.example` sets up for it) and edit the
+  "Hub base URL" and "Hub key" text fields, or
+- If the device is added to Home Assistant, edit its "Hub base URL" and
+  "Hub key" text entities there.
+
+Both changes take effect immediately, no reflash and no reboot required.
+This is what makes `docs/DEPLOY.md`'s hub rotate and restore flows a
+browser edit instead of a reflash event. Firmware built before this
+change has no text fields or device page; a reflash is the fallback for
+those older devices (see `docs/DEPLOY.md`, "Giving the device its hub
+URL and key").
 
 ## Build gotcha on this PC
 
