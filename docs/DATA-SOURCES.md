@@ -1,8 +1,11 @@
 # Data sources
 
 Every adapter in dashboard-hub has a `*_SOURCE` selector. `fixture` is always
-available, so the hub runs with an empty configuration and never needs the
-network. Enable real sources one at a time.
+available for development, but it is no longer the default: with an empty
+configuration every adapter below reports `unavailable` and the pages render
+an honest empty state instead of demo data. Enable real sources one at a
+time, or set the matching `*_SOURCE=fixture` (see `scripts/render-all.py`
+and `.env.example`) to see the demo pages during development.
 
 Rules that hold for all of them:
 
@@ -15,9 +18,9 @@ Rules that hold for all of them:
 Check what the hub currently thinks with:
 
 ```sh
-curl -s http://127.0.0.1:8080/healthz
-curl -s http://127.0.0.1:8080/api/state
-curl -s http://127.0.0.1:8080/api/hub
+curl -s http://127.0.0.1/healthz
+curl -s http://127.0.0.1/api/state
+curl -s http://127.0.0.1/api/hub
 ```
 
 `/healthz` always answers `200` with no credential, but only a minimal body
@@ -41,17 +44,21 @@ the schema of record.
 
 | Adapter | Sources | Default | Configuration |
 | --- | --- | --- | --- |
-| tasks | `fixture`, `file`, `obsidian`, `auto` | `auto` | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
-| calendar | `fixture`, `ics` | `fixture` | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
-| weather | `fixture`, `open_meteo` | `fixture` | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
-| ai_usage | `fixture`, `file`, `auto` | `auto` | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
-| ai_brief | `fixture`, `file`, `auto` | `auto` | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`), `BRIEF_EVENING_HOUR` |
-| home_assistant | `fixture`, `rest` | `fixture` | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` |
-| device | `store`, `fixture` | `fixture` | `DEVICE_SOURCE`, `TELEMETRY_DB_PATH`, `TELEMETRY_RETENTION_DAYS` |
+| tasks | `fixture`, `file`, `obsidian`, `auto` | `file` | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
+| calendar | `fixture`, `ics` | `ics` | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
+| weather | `fixture`, `open_meteo` | `open_meteo` | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
+| ai_usage | `fixture`, `file`, `auto` | `file` | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
+| ai_brief | `fixture`, `file`, `auto` | `file` | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`), `BRIEF_EVENING_HOUR` |
+| home_assistant | `fixture`, `rest` | `rest` | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` |
+| device | `store`, `fixture` | `store` | `DEVICE_SOURCE`, `TELEMETRY_DB_PATH`, `TELEMETRY_RETENTION_DAYS` |
 
-`auto` picks the file adapter once its file exists and is readable, otherwise
-`fixture`; a push always lands where the file adapter reads, so `auto` is
-what makes a push show up on the panel with no other configuration.
+Every default above is the honest, unconfigured choice: `file`, `ics`,
+`open_meteo`, `rest` and `store` all report `unavailable` until you point
+them at something real, rather than quietly drawing fixture data. `auto`
+(still available for tasks, ai_usage and ai_brief) picks the file adapter
+once its file exists and is readable, otherwise `fixture`; a push always
+lands where the file adapter reads, so pinning a dataset to `auto` is a way
+to keep seeing fixture data until the first real push arrives.
 `GET /api/hub` reports both the configured selector and the effective one
 per dataset (`{dataset: {configured, effective}}`).
 
@@ -74,14 +81,15 @@ Set `FIXTURE_RELATIVE_DATES=false` to read the literal dates in the files.
 ## Tasks
 
 Three ways to get tasks onto the panel: push, a hand-written or agent-written
-file, or a read-only Obsidian vault. `TASKS_SOURCE=auto` (the default) picks
-the file adapter once `data/tasks.json` exists, otherwise fixture; it never
-selects Obsidian on its own.
+file, or a read-only Obsidian vault. `TASKS_SOURCE=file` (the default) reads
+`data/tasks.json` and reports `unavailable` until it exists. Set
+`TASKS_SOURCE=auto` instead to fall back to fixture data while that file
+does not exist yet; it never selects Obsidian on its own.
 
 ### Push (primary)
 
 ```sh
-curl -s -X POST http://deskmate.local:8080/api/tasks \
+curl -s -X POST http://<hub-address>/api/tasks \
   -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"tasks": [{"id": "agent-1", "title": "Ship the release notes", "priority": "high"}]}'
 ```
@@ -232,7 +240,7 @@ either an agent that pushes them or a separate collector that writes a file.
 ### Push (primary)
 
 ```sh
-curl -s -X POST http://deskmate.local:8080/api/ai-usage \
+curl -s -X POST http://<hub-address>/api/ai-usage \
   -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"providers": [{"provider": "claude", "short_window_percent_remaining": 62,
        "weekly_percent_remaining": 40}]}'
@@ -309,7 +317,7 @@ Mode is chosen by the local clock: morning before `BRIEF_EVENING_HOUR`
 ### Push (primary)
 
 ```sh
-curl -s -X POST http://deskmate.local:8080/api/brief \
+curl -s -X POST http://<hub-address>/api/brief \
   -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"headline": "Two hard deadlines today", "note": "Vendor quote is one day overdue.",
        "sections": [{"title": "Key tasks", "items": ["Ship it"]}]}'
@@ -492,8 +500,8 @@ not JSON or fails validation.
 ### Reading it back
 
 ```sh
-curl -s http://127.0.0.1:8080/api/device/telemetry
-curl -s "http://127.0.0.1:8080/api/device/history?hours=6"
+curl -s http://127.0.0.1/api/device/telemetry
+curl -s "http://127.0.0.1/api/device/history?hours=6"
 ```
 
 Both answer `503` before the hub is set up, and need the bearer token, the
@@ -599,7 +607,7 @@ deskmate_auth: "Bearer <token>"
 ```yaml
 rest_command:
   deskmate_alert:
-    url: "http://deskmate.local:8080/api/alert"
+    url: "http://<hub-address>/api/alert"
     method: POST
     headers:
       Authorization: !secret deskmate_auth
@@ -681,7 +689,7 @@ returns to the page it was on. Clear the alert from the hub afterwards if you
 want the page to go back to "no active alert":
 
 ```sh
-curl -X DELETE http://deskmate.local:8080/api/alert \
+curl -X DELETE http://<hub-address>/api/alert \
   -H "Authorization: Bearer <token>"
 ```
 

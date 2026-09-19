@@ -137,6 +137,7 @@
 
 <div class="wx-right">
   <div class="label">7 DAYS</div>
+  {% if daily %}
   <div class="wx-days">
     {% for day in daily %}
     <div class="wx-day-row">
@@ -167,5 +168,8 @@
     </div>
     {% endfor %}
   </div>
+  {% else %}
+  <div class="no-data">No forecast</div>
+  {% endif %}
 </div>
 {% endblock %}

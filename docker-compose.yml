@@ -9,9 +9,9 @@ services:
     # uvicorn is not a process reaper; init gives Chromium's children a pid 1
     # that is, so a crashed browser leaves no zombies behind.
     init: true
-    # Measured 227 MiB after rendering every page (Chromium at 4x). A
-    # runaway renderer is OOM-killed at this ceiling and restart brings the
-    # hub back, instead of taking the host down with it.
+    # Measured ~236 MiB after rendering every page (Chromium at 4x), slim
+    # image. A runaway renderer is OOM-killed at this ceiling and restart
+    # brings the hub back, instead of taking the host down with it.
     mem_limit: 1g
     # The container runs as this uid:gid and writes ./data as it. The
     # default matches the image's own hub user. Set PUID/PGID in .env to the

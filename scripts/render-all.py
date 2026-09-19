@@ -20,9 +20,17 @@ DASHBOARD = REPO_ROOT / "dashboard"
 if str(DASHBOARD) not in sys.path:
     sys.path.insert(0, str(DASHBOARD))
 
-# DEVICE_SOURCE now defaults to "store"; this script renders without a real
-# device on the LAN, so it needs the fixture explicitly, same as the tests.
-# setdefault so a developer's own env/`.env` can still override it.
+# Every *_SOURCE now defaults to a live selector, so a plain run of this
+# script would render six honest "unavailable" blocks instead of the demo
+# pages a developer expects. Pin all seven to fixture, same as the tests.
+# setdefault so a developer's own env/`.env` (or an explicit empty-state run)
+# can still override any of them.
+os.environ.setdefault("TASKS_SOURCE", "fixture")
+os.environ.setdefault("CALENDAR_SOURCE", "fixture")
+os.environ.setdefault("WEATHER_SOURCE", "fixture")
+os.environ.setdefault("AI_USAGE_SOURCE", "fixture")
+os.environ.setdefault("BRIEF_SOURCE", "fixture")
+os.environ.setdefault("HA_SOURCE", "fixture")
 os.environ.setdefault("DEVICE_SOURCE", "fixture")
 
 from PIL import Image  # noqa: E402
