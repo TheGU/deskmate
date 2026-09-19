@@ -66,18 +66,21 @@ this host is not 1001, set `PUID` and `PGID` in `.env` to match it.
 
 Volumes (already wired in `docker-compose.yml`):
 
-- `./data:/data` - read-write. Everything an agent pushes lands here
-  (`hub.json`, `ai-usage.json`, `brief/`, `tasks.json`, `alert.json`,
-  `telemetry.sqlite`). Back this directory up; it is the only state the hub
-  cannot regenerate.
-- `./fixtures:/app/fixtures:ro` - demo data, read only.
+- `./data:/data` - read-write. The hub's one database,
+  `deskmate.sqlite` (identity, settings, pushed datasets, telemetry). Back
+  this directory up; it is the only state the hub cannot regenerate. The
+  demo fixtures need no volume: the Dockerfile bakes them into the image at
+  `/app/fixtures`.
 - an optional Obsidian vault, read only, if `OBSIDIAN_VAULT_PATH` is set in
-  `.env` and `TASKS_SOURCE=obsidian`.
+  `.env` and the tasks section's source is set to `obsidian` on
+  `/settings`.
 
-`.env` holds every setting in `.env.example`, all optional; an empty `.env`
-runs on the live defaults (file, ics, open_meteo, file, file, rest, store),
-not fixtures - every block renders an honest `unavailable` until its own
-source is actually configured.
+`.env` holds only what is left outside the database: `HUB_PORT`, `PUID`,
+`PGID`, `OBSIDIAN_VAULT_PATH`, `LOG_LEVEL` and a few process knobs - see
+`.env.example`. Every dataset's source, credentials and cache TTLs are set
+on `/settings` (see docs/SETTINGS.md) after the hub is claimed; a freshly
+claimed hub with nothing configured there shows an honest `unavailable` on
+every block, not fixture data.
 
 **Single worker only.** The compose service and the Dockerfile's `CMD` both
 run exactly one uvicorn worker. The setup lock lives in that one process's
@@ -87,13 +90,45 @@ at the filesystem. Scale by running one container, never by adding
 
 ## Upgrading an existing install
 
-The host port default moved from 8080 to 80 in this version; the container
-still listens on 8080 internally, only the host-side mapping changed. An
-install whose device was already flashed with `hub_base_url` pointing at
-`:8080` still needs the hub reachable there: either add `HUB_PORT=8080` to
-`.env` before running `docker compose up -d` again, so the old address keeps
-working, or reflash the device (`docs/FLASHING.md`) with `hub_base_url` set
-to the new, port-less address.
+This version moves the hub's identity, its settings and its pushed data
+into one SQLite database, `data/deskmate.sqlite`. Upgrading an install that
+still has `data/hub.json` is:
+
+```sh
+git pull
+docker compose up -d --build
+```
+
+On that first start, before it serves anything else, the hub imports
+everything the old install had, once: `data/hub.json` (identity),
+`data/telemetry.sqlite` (device history), the pushed files
+(`ai-usage.json`, `tasks.json`, `brief/current.json`, `alert.json`), and
+every environment variable your `.env` had explicitly set (sources,
+calendars, Home Assistant, TTLs, and the rest) - each becomes the matching
+settings section, so nothing you had configured is lost. The container log
+names each piece as it is imported. **Nothing on disk is renamed or
+deleted** by this import: see "The one-time legacy import" in
+docs/SETTINGS.md for what to do with the old files once you have confirmed
+the upgrade, and why leaving them a while longer costs nothing.
+
+**Every browser is logged out once.** The session cookie's format changed
+(it now carries a role, admin or reader), so an old cookie is rejected the
+same as no cookie at all; sign in again at `/login` with the token (admin)
+or the device key (reader). The device itself is unaffected - it never used
+a cookie.
+
+After the restart, open `/settings` and check that the sections you had
+configured came through as expected, and that the device is still
+fetching. Once you are satisfied, delete the old files (see docs/SETTINGS.md
+for the exact list); they are never read again after the import has run.
+
+The host port default also moved from 8080 to 80 in an earlier version; the
+container still listens on 8080 internally, only the host-side mapping
+changed. An install whose device was already flashed with `hub_base_url`
+pointing at `:8080` still needs the hub reachable there: either add
+`HUB_PORT=8080` to `.env` before running `docker compose up -d` again, so
+the old address keeps working, or reflash the device (`docs/FLASHING.md`)
+with `hub_base_url` set to the new, port-less address.
 
 If you are also upgrading the device's own firmware and its old
 `secrets.yaml` had a Wi-Fi network in it, see `docs/FLASHING.md`,
@@ -101,8 +136,8 @@ If you are also upgrading the device's own firmware and its old
 
 ## First run and setting up the hub
 
-On first start, with no `data/hub.json` yet, the container log prints a line
-like:
+On first start, with no `hub` row in `data/deskmate.sqlite` yet, the
+container log prints a line like:
 
 ```
 Hub not set up: open /setup on this hub's address now; until then it serves nothing else
@@ -137,8 +172,15 @@ runtime". The result page also shows the exact lines for that first
 flash (`hub_base_url: "http://<server>:<port>"` and
 `hub_key: "<device key>"`).
 
-Only each secret's hash is written to `data/hub.json`; the plaintext
-secrets exist only in that one response and wherever you paste them.
+Only each secret's hash is written to the hub's database
+(`data/deskmate.sqlite`); the plaintext secrets exist only in that one
+response and wherever you paste them. Claiming the hub also signs you in as
+admin (you were just shown the token on this same page, so asking you to
+paste it back in adds nothing) and offers "Continue to setup": a short
+wizard for the timezone, weather location, calendar feeds and Home
+Assistant, each step optional. Everything the wizard does not ask for -
+tasks, AI usage, brief, device, backup, rotate - is on `/settings`
+afterwards. See docs/SETTINGS.md for every section and field.
 
 Until the hub is set up, it serves nothing but `GET`/`POST /setup` and
 `GET /healthz` (minimal body); every other route answers `503`, or
@@ -199,6 +241,10 @@ public-facing reverse proxy; set it up first, from the LAN or loopback,
 before putting it behind one. A caller on a carrier-grade NAT range such as
 `100.64.0.0/10` (this is where Tailscale addresses live) is refused by the
 guard itself, proxy or not: set the hub up from the LAN or loopback instead.
+Winning the setup race now also yields an admin session on the spot (see
+"First run and setting up the hub" above), straight into the settings
+wizard - one more reason not to leave an unconfigured hub reachable by
+anyone you would not want holding that session.
 
 ## What is unauthenticated, on purpose
 
@@ -225,35 +271,48 @@ open internet.
 
 ## Reset
 
-A reset rotates the device key and the session secret along with the
-token, so every browser's login cookie stops working immediately and the
-device can no longer fetch pages or post telemetry until you update
-`firmware/secrets.yaml`'s `hub_key` with the new device key and reflash it
-(OTA is fine). Do the reflash before you rely on the panel again.
+`POST /settings/rotate` (in the settings page's Danger zone, admin only)
+mints a fresh token, device key and session secret without touching
+anything else: every browser's login cookie stops working immediately, and
+the device can no longer fetch pages or post telemetry until its Hub key
+field is updated (its own web page, or the Home Assistant text entity - see
+"Giving the device its hub URL and key" above; no reflash needed on
+firmware with the runtime `hub_key` field). See "Rotate secrets" in
+docs/SETTINGS.md.
 
 Losing the token, or wanting to set the hub up again under a new name, has
-one path: stop the container, delete `data/hub.json`, and start it again -
-exactly as on first run, including the first-come-first-served window on
-`/setup`. There is no edit or regenerate mode; this is deliberate, so the
-secrets in `data/hub.json` are always the ones currently in use.
+one path: stop the container, delete `data/deskmate.sqlite` (and its
+`-wal`/`-shm` sidecars if present), and start it again - exactly as on
+first run, including the first-come-first-served window on `/setup`. There
+is no edit or regenerate mode; this is deliberate, so the secrets in
+`data/deskmate.sqlite` are always the ones currently in use. This also
+throws away every setting, pushed dataset and telemetry row, not just the
+identity, so back the database up first (see "Backup" below) if any of
+that is worth keeping.
 
 ```sh
 docker compose down
-rm data/hub.json
+rm data/deskmate.sqlite data/deskmate.sqlite-wal data/deskmate.sqlite-shm
 docker compose up -d
 ```
 
-Files under `./data` are owned by `PUID` and created with mode 0600 (the
-atomic writer creates them that way), so they are readable and removable by
-that user only. If you ran an earlier image that ran as root, run `sudo
-chown -R $(id -u):$(id -g) data` once before starting the new one.
+Files under `./data`, including `deskmate.sqlite`, are owned by `PUID` and
+created readable and removable by that user only. If you ran an earlier
+image that ran as root, run `sudo chown -R $(id -u):$(id -g) data` once
+before starting the new one.
 
 A wrong owner on `./data` makes the container exit at startup with a line
 starting `DATA_DIR /data is not writable`.
 
 ## Backup
 
-Back up `./data` (or the equivalent host path if you changed the volume).
-It holds `hub.json` (the identity set up above), everything pushed by
-agents, the current alert, and the telemetry history. Fixtures and the
-container image are reproducible from the repository; `data/` is not.
+See "Backup" and "Restore" in docs/SETTINGS.md: `POST /settings/backup` on
+the settings page downloads the hub's whole database,
+`data/deskmate.sqlite`, as one file - identity, every setting, everything
+pushed by agents, the current alert, and the telemetry history - and
+`POST /settings/restore` puts one back. Back up that file (or the whole
+`./data` directory, if you changed the volume) on whatever schedule matters
+to you; the container image and the demo fixtures are reproducible from the
+repository, `data/` is not. The backup file carries the session secret and
+every secret hash, so treat it like the bearer token, not like an ordinary
+file.
