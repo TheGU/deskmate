@@ -186,6 +186,8 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
   firmware dump.
 - [docs/FLASHING.md](docs/FLASHING.md) - flashing procedure.
 - [.env.example](.env.example) - every configuration variable, commented.
+- [CONTRIBUTING.md](CONTRIBUTING.md) - dev setup, tests and checks, writing
+  and design rules, how to propose a change.
 
 ## Design rules
 
