@@ -92,10 +92,32 @@ class RenderCacheEntry:
     created_monotonic: float
 
 
+def _require_writable_data_dir(path: Path) -> None:
+    """Fail at startup with one clear line instead of at the first claim or
+    push: a DATA_DIR the container cannot write to (wrong owner on a bind
+    mount, most often) would otherwise only surface as a 500 on whichever
+    request happens to write first.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = tempfile.NamedTemporaryFile(dir=path, prefix=".probe-", delete=False)
+        probe.close()
+        Path(probe.name).unlink()
+    except OSError as exc:
+        uid = getattr(os, "getuid", lambda: None)()
+        uid_desc = f"uid {uid}" if uid is not None else "this user"
+        raise RuntimeError(
+            f"DATA_DIR {path} is not writable by {uid_desc}: {exc}. Make "
+            "the directory owned by that uid, or set PUID/PGID in .env to "
+            "the owner of the directory."
+        ) from exc
+
+
 class Hub:
     """Everything the request handlers need, built once at startup."""
 
     def __init__(self, settings: Settings) -> None:
+        _require_writable_data_dir(settings.data_dir)
         self.settings = settings
         self.alerts = AlertStore(settings.alert_file, settings.timezone)
         self.telemetry = get_telemetry_store(settings)
@@ -282,27 +304,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(settings.static_dir)), name="static")
 
     # -- health ----------------------------------------------------------
+    #: A healthz-only word for an adapter that has never fetched yet.
+    #: Deliberately not an AdapterStatus member: calling that "error" or
+    #: "unavailable" before anything has even tried would be a lie.
+    HEALTH_STATUS_UNKNOWN = "unknown"
+
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
+        """Liveness check: answers from each adapter's last known outcome
+        and never fetches, so an outage cannot make this route slow (see the
+        CachedAdapter failure backoff in adapters/base.py). GET /api/state
+        is what forces every adapter to fetch and reports live status.
+        """
         hub: Hub = app.state.hub
-        state = await hub.state()
+        adapters: dict[str, dict[str, Any]] = {}
+        for name, cached in hub.state_service.adapters.items():
+            outcome = cached.last_outcome
+            if outcome is None:
+                adapters[name] = {
+                    "status": HEALTH_STATUS_UNKNOWN,
+                    "source": cached.source,
+                    "updated_at": None,
+                    "error": None,
+                }
+            else:
+                adapters[name] = {
+                    "status": outcome.status.value,
+                    "source": outcome.source,
+                    "updated_at": outcome.updated_at.isoformat() if outcome.updated_at else None,
+                    "error": outcome.error,
+                }
         return JSONResponse(
             {
                 "status": "ok",
                 "version": __version__,
                 "timezone": settings.timezone,
                 "pages": list(PAGES),
-                "adapters": {
-                    name: {
-                        "status": block.status.value,
-                        "source": block.source,
-                        "updated_at": block.updated_at.isoformat()
-                        if block.updated_at
-                        else None,
-                        "error": block.error,
-                    }
-                    for name, block in state.blocks.items()
-                },
+                "renderer": {"connected": hub.renderer.connected},
+                "adapters": adapters,
                 "alert": hub.alerts.current.priority.value if hub.alerts.current else None,
             }
         )

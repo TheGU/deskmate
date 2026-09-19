@@ -6,6 +6,10 @@ services:
     image: deskmate/dashboard-hub:latest
     container_name: deskmate-dashboard-hub
     restart: unless-stopped
+    # The container runs as this uid:gid and writes ./data as it. The
+    # default matches the image's own pwuser. Set PUID/PGID in .env to the
+    # owner of ./data (`id -u`, `id -g`) when that differs.
+    user: "${PUID:-1001}:${PGID:-1001}"
     ports:
       # Host port is HUB_PORT from .env (default 8080). The container always
       # listens on 8080.

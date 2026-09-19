@@ -559,24 +559,56 @@ def test_cached_adapter_force_bypasses_the_cache() -> None:
     assert run(cached.get(force=True)).value == "second"
 
 
+def test_failed_fetch_is_replayed_within_the_backoff() -> None:
+    cached = CachedAdapter(_Boom([RuntimeError("down"), "good"]), ttl_seconds=600)
+    first = run(cached.get())
+    assert first.status is AdapterStatus.ERROR
+    # The stub would return "good" on a second fetch; a replayed failure
+    # instead of a refetch means this is still the error, value None.
+    second = run(cached.get())
+    assert second.status is AdapterStatus.ERROR
+    assert second.value is None
+
+
+def test_invalidate_clears_the_failure_backoff() -> None:
+    cached = CachedAdapter(_Boom([RuntimeError("down"), "good"]), ttl_seconds=600)
+    run(cached.get())
+    cached.invalidate()
+    outcome = run(cached.get())
+    assert outcome.status is AdapterStatus.OK
+    assert outcome.value == "good"
+
+
+def test_force_bypasses_the_failure_backoff() -> None:
+    cached = CachedAdapter(_Boom([RuntimeError("down"), "good"]), ttl_seconds=600)
+    run(cached.get())
+    outcome = run(cached.get(force=True))
+    assert outcome.status is AdapterStatus.OK
+    assert outcome.value == "good"
+
+
 class _Slow:
     """A fetch that blocks until the test lets it finish, so a test can
-    invalidate() while it is in flight."""
+    invalidate() while it is in flight. A value that is an Exception
+    instance is raised instead of returned, mirroring _Boom."""
 
     name = "slow"
     source = "test"
 
-    def __init__(self, values: list[str]) -> None:
+    def __init__(self, values: list[object]) -> None:
         self._values = values
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.calls = 0
 
-    async def fetch(self) -> str:
+    async def fetch(self) -> object:
         self.calls += 1
         self.started.set()
         await self.release.wait()
-        return self._values.pop(0)
+        value = self._values.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
 
 
 def test_invalidate_during_a_fetch_forces_the_next_get_to_refetch() -> None:
@@ -595,6 +627,27 @@ def test_invalidate_during_a_fetch_forces_the_next_get_to_refetch() -> None:
 
         # The in-flight fetch must not have resurrected the cache: this
         # get() has to fetch again, not serve "stale" from the TTL cache.
+        second = await cached.get()
+        assert second.value == "fresh"
+        assert adapter.calls == 2
+
+    run(scenario())
+
+
+def test_invalidate_during_a_failing_fetch_is_not_masked_by_the_backoff() -> None:
+    async def scenario() -> None:
+        adapter = _Slow([RuntimeError("down"), "fresh"])
+        cached = CachedAdapter(adapter, ttl_seconds=600)
+        task = asyncio.create_task(cached.get())
+        await adapter.started.wait()
+        # A push landing while this failing fetch is in flight must not get
+        # hidden behind a 60s backoff it never asked for.
+        cached.invalidate()
+        adapter.release.set()
+        first = await task
+        assert first.status is AdapterStatus.ERROR
+        assert adapter.calls == 1
+
         second = await cached.get()
         assert second.value == "fresh"
         assert adapter.calls == 2

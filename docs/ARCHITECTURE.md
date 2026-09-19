@@ -42,7 +42,7 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| GET | `/healthz` | open | `{"status":"ok"}` plus adapter status |
+| GET | `/healthz` | open | Liveness only: each adapter's last known status, never fetches (`unknown` before the first render) |
 | GET, POST | `/setup` | open | Claim an unconfigured hub; see Auth below |
 | GET | `/api/hub` | open | Hub name, base URL, configured, sources |
 | GET | `/api/state` | open | Normalized state JSON that pages render from |

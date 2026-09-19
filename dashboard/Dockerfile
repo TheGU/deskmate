@@ -1,37 +1,43 @@
-# Playwright's own image: the tag must match the playwright version in
-# pyproject.toml (currently 1.62.0), otherwise the bundled browser and the
-# Python client disagree.
+# Playwright's own image: the tag must match the pinned playwright version in
+# dashboard/pyproject.toml (currently 1.62.0), otherwise the bundled browser
+# and the Python client disagree.
 FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+
+# uv resolves dashboard/uv.lock exactly (--frozen), so a rebuild months from
+# now installs the same versions the tests ran against. 0.7.19 wrote the lock.
+COPY --from=ghcr.io/astral-sh/uv:0.7.19 /uv /uvx /bin/
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
+    UV_PROJECT_ENVIRONMENT=/app/dashboard/.venv \
+    UV_PYTHON=/usr/bin/python3 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
     FIXTURES_DIR=/app/fixtures \
     DATA_DIR=/data
 
-WORKDIR /app
-
-# Dependencies first so a code change does not re-resolve the environment.
-COPY dashboard/pyproject.toml /app/dashboard/pyproject.toml
-RUN pip install --no-cache-dir \
-        "fastapi>=0.115" \
-        "uvicorn[standard]>=0.34" \
-        "jinja2>=3.1" \
-        "playwright==1.62.0" \
-        "pillow>=11.0" \
-        "pydantic>=2.9" \
-        "pydantic-settings>=2.6" \
-        "httpx>=0.28" \
-        "icalendar>=6.1" \
-        "python-dateutil>=2.9" \
-        "python-multipart>=0.0.32"
-
-COPY dashboard/app /app/dashboard/app
-COPY fixtures /app/fixtures
-
-RUN mkdir -p /data /app/output
-
 WORKDIR /app/dashboard
+
+# Lock and metadata first so a code change does not re-resolve the environment.
+COPY dashboard/pyproject.toml dashboard/uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY dashboard/app ./app
+COPY fixtures /app/fixtures
+ENV PATH=/app/dashboard/.venv/bin:$PATH
+
+# Only matters for a plain `docker run` with no bind mount; under compose the
+# host directory's ownership wins over this.
+RUN mkdir -p /data && chown pwuser:pwuser /data
+
+# Chromium and fontconfig write under HOME; /tmp is writable by any uid
+# compose maps this container's user to.
+ENV HOME=/tmp XDG_CACHE_HOME=/tmp
+
+# uid 1001 in this base image.
+USER pwuser
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \

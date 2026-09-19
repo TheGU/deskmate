@@ -821,6 +821,8 @@ def test_history_endpoint_rejects_a_bad_window(device_client: TestClient) -> Non
 
 
 def test_state_and_healthz_carry_the_device_block(device_client: TestClient) -> None:
+    # /healthz only replays the last outcome, so force one before reading it.
+    device_client.get("/api/state")
     health = device_client.get("/healthz").json()
     assert health["adapters"]["device"]["status"] == "unavailable"
     assert health["adapters"]["device"]["source"] == "store"

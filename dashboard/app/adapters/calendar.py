@@ -7,6 +7,7 @@ into a million events.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import date, datetime, time, timedelta
@@ -76,10 +77,23 @@ class IcsCalendarAdapter:
         sources = self._settings.ics_sources
         if not sources:
             raise AdapterUnavailable("CALENDAR_ICS_URLS is not set")
-        texts: list[tuple[str, str]] = []
+        # Fetched concurrently: sequentially, N feeds cost up to
+        # N x HTTP_TIMEOUT_SECONDS, which is what made the container flap
+        # during an outage against the compose healthcheck's 10s timeout.
+        # return_exceptions=True plus the in-order scan below keeps the same
+        # behaviour the old sequential loop had: the first feed *by
+        # position* to fail aborts the whole fetch, exactly as it did when a
+        # later feed was never even reached.
         async with httpx.AsyncClient(timeout=self._settings.http_timeout_seconds) as client:
-            for reference in sources:
-                texts.append((reference, await _read_ics(client, reference)))
+            results = await asyncio.gather(
+                *(_read_ics(client, reference) for reference in sources),
+                return_exceptions=True,
+            )
+        texts: list[tuple[str, str]] = []
+        for reference, result in zip(sources, results):
+            if isinstance(result, BaseException):
+                raise result
+            texts.append((reference, result))
         timezone_name = self._settings.timezone
         today = today_local(timezone_name)
         window_start = datetime.combine(

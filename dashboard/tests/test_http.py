@@ -189,12 +189,30 @@ def test_alert_requires_the_token(client: TestClient, hub_token: str) -> None:
     assert client.delete("/api/alert", headers=auth(hub_token)).status_code == 200
 
 
+def test_data_dir_that_is_a_file_fails_fast_at_startup(tmp_path: Path) -> None:
+    """A wrong owner on the bind mount, or DATA_DIR pointed at a plain file,
+    must fail at startup with one clear line instead of at the first push."""
+    blocked = tmp_path / "data"
+    blocked.write_text("not a directory", encoding="utf-8")
+    settings = Settings(
+        _env_file=None,
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=blocked,
+        LOG_LEVEL="WARNING",
+    )
+    with pytest.raises(RuntimeError, match="not writable"):
+        create_app(settings)
+
+
 def test_healthz_reports_every_adapter(client: TestClient) -> None:
+    # /healthz only replays each adapter's last outcome; force one first.
+    client.get("/api/state")
     response = client.get("/healthz")
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["timezone"] == "Asia/Bangkok"
+    assert payload["renderer"]["connected"] is True
     assert set(payload["adapters"]) == {
         "tasks",
         "calendar",
@@ -206,6 +224,27 @@ def test_healthz_reports_every_adapter(client: TestClient) -> None:
     }
     for name, block in payload["adapters"].items():
         assert block["status"] == "ok", f"{name} is {block['status']}: {block['error']}"
+
+
+def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Path) -> None:
+    """No ``with`` lifespan: Chromium never launches and no adapter has ever
+    fetched, so /healthz must still answer 200 without triggering either."""
+    settings = Settings(
+        _env_file=None,
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    app = create_app(settings)
+    fresh_client = TestClient(app)
+    response = fresh_client.get("/healthz")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["renderer"]["connected"] is False
+    for name, block in payload["adapters"].items():
+        assert block["status"] == "unknown", f"{name} is {block['status']}"
+        assert block["updated_at"] is None
+        assert block["error"] is None
 
 
 def test_api_state_returns_normalized_state(client: TestClient) -> None:

@@ -112,6 +112,13 @@ class Renderer:
         """The Jinja2 environment, also used for the developer preview page."""
         return self._env
 
+    @property
+    def connected(self) -> bool:
+        """Whether Chromium is currently up. No lock: is_connected() reads a
+        local flag on the Playwright object, and /healthz must answer a
+        liveness check without waiting on the render lock."""
+        return self._browser is not None and self._browser.is_connected()
+
     # -- lifecycle -------------------------------------------------------
     async def start(self) -> None:
         async with self._lock:

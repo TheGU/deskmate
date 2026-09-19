@@ -29,6 +29,11 @@ T = TypeVar("T")
 
 logger = logging.getLogger("app.adapters")
 
+#: How long a failed fetch is replayed instead of retried. Bounded below by
+#: the adapter's own ttl (see CachedAdapter._backoff_seconds): a failure is
+#: never remembered longer than a success would have been cached for.
+FAILURE_BACKOFF_SECONDS = 60.0
+
 
 class AdapterError(RuntimeError):
     """The adapter tried and failed."""
@@ -98,6 +103,15 @@ class CachedAdapter(Generic[T]):
         self._value_at: datetime | None = None
         self._monotonic_at: float | None = None
         self._last_error: str | None = None
+        #: (monotonic time of the failure, the Outcome it produced). Set by
+        #: either except branch below and replayed by get() instead of
+        #: re-fetching until _backoff_seconds() has passed. Cleared by a
+        #: success or by invalidate().
+        self._failure: tuple[float, Outcome[T]] | None = None
+        #: The Outcome the most recent get() returned, however it got there
+        #: (TTL hit, replayed failure, or a fresh fetch). /healthz reads this
+        #: so it can answer without ever fetching.
+        self.last_outcome: Outcome[T] | None = None
         #: Bumped by invalidate(). invalidate() is called synchronously (a
         #: push handler is not inside this adapter's async lock), so a slow
         #: fetch already in flight when it fires must not resurrect the
@@ -132,6 +146,7 @@ class CachedAdapter(Generic[T]):
         before this call, cannot mark the cache fresh when it completes.
         """
         self._monotonic_at = None
+        self._failure = None
         self._generation += 1
 
     def _fresh(self) -> bool:
@@ -139,6 +154,12 @@ class CachedAdapter(Generic[T]):
             self._monotonic_at is not None
             and (time.monotonic() - self._monotonic_at) < self._ttl
         )
+
+    def _backoff_seconds(self) -> float:
+        """A failure is never held longer than a success would be cached
+        for; with ttl 0 (as in most tests) that makes the backoff 0, i.e.
+        every get() retries."""
+        return min(FAILURE_BACKOFF_SECONDS, self._ttl)
 
     def _received_at(self) -> datetime | None:
         """The adapter's own ``last_received_at``, when it tracks one.
@@ -154,13 +175,26 @@ class CachedAdapter(Generic[T]):
         """Read the adapter, using the TTL cache unless ``force`` is set."""
         async with self._lock:
             if not force and self._fresh() and self._value is not None:
-                return Outcome(
+                outcome = Outcome(
                     value=self._value,
                     status=AdapterStatus.OK,
                     source=self.source,
                     updated_at=self._value_at,
                     received_at=self._received_at(),
                 )
+                self.last_outcome = outcome
+                return outcome
+
+            if not force and self._failure is not None:
+                failed_at, outcome = self._failure
+                if (time.monotonic() - failed_at) < self._backoff_seconds():
+                    # Replaying the outcome as-is freezes its `source`. That
+                    # is inert today - the Auto adapters (ai_usage, brief,
+                    # tasks) never raise, they fall back to fixture
+                    # themselves - but would matter if that changed.
+                    self.last_outcome = outcome
+                    return outcome
+
             generation = self._generation
             started = time.monotonic()
             try:
@@ -175,7 +209,7 @@ class CachedAdapter(Generic[T]):
                     source=self.source,
                     reason=str(exc),
                 )
-                return Outcome(
+                outcome = Outcome(
                     value=self._value,
                     status=AdapterStatus.STALE if self._value is not None else AdapterStatus.UNAVAILABLE,
                     source=self.source,
@@ -183,6 +217,14 @@ class CachedAdapter(Generic[T]):
                     error=str(exc),
                     received_at=self._received_at(),
                 )
+                # An invalidate() that landed while this fetch was in flight
+                # (e.g. a push writing new data) must not be masked behind a
+                # 60s backoff: only remember the failure if nothing invali-
+                # dated the cache since this fetch started.
+                if generation == self._generation:
+                    self._failure = (time.monotonic(), outcome)
+                self.last_outcome = outcome
+                return outcome
             except Exception as exc:  # noqa: BLE001 - one adapter must not kill the page
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 log(
@@ -193,7 +235,7 @@ class CachedAdapter(Generic[T]):
                     source=self.source,
                     error=self._last_error,
                 )
-                return Outcome(
+                outcome = Outcome(
                     value=self._value,
                     status=AdapterStatus.STALE if self._value is not None else AdapterStatus.ERROR,
                     source=self.source,
@@ -201,6 +243,10 @@ class CachedAdapter(Generic[T]):
                     error=self._last_error,
                     received_at=self._received_at(),
                 )
+                if generation == self._generation:
+                    self._failure = (time.monotonic(), outcome)
+                self.last_outcome = outcome
+                return outcome
 
             self._value = value
             self._value_at = _now()
@@ -209,6 +255,7 @@ class CachedAdapter(Generic[T]):
             # still the one this fetch started with.
             self._monotonic_at = time.monotonic() if generation == self._generation else None
             self._last_error = None
+            self._failure = None
             log(
                 logger,
                 logging.DEBUG,
@@ -217,10 +264,12 @@ class CachedAdapter(Generic[T]):
                 source=self.source,
                 ms=round((time.monotonic() - started) * 1000),
             )
-            return Outcome(
+            outcome = Outcome(
                 value=value,
                 status=AdapterStatus.OK,
                 source=self.source,
                 updated_at=self._value_at,
                 received_at=self._received_at(),
             )
+            self.last_outcome = outcome
+            return outcome

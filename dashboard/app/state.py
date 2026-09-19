@@ -58,6 +58,23 @@ class StateService:
         self.home = CachedAdapter(build_home_adapter(settings), settings.home_ttl_seconds)
         self.device = CachedAdapter(build_device_adapter(settings), settings.device_ttl_seconds)
 
+    @property
+    def adapters(self) -> dict[str, CachedAdapter[Any]]:
+        """Every cached adapter, keyed and ordered like DashboardState.blocks.
+        Each adapter's own ``name`` (adapters/*.py) already matches its key
+        here, so this is just the explicit registry /healthz walks without
+        forcing a fetch.
+        """
+        return {
+            "tasks": self.tasks,
+            "calendar": self.calendar,
+            "weather": self.weather,
+            "ai_usage": self.ai_usage,
+            "brief": self.brief,
+            "home": self.home,
+            "device": self.device,
+        }
+
     async def build(self, *, force: bool = False) -> DashboardState:
         """Fetch every adapter (concurrently) and fold the results into state."""
         (

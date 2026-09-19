@@ -20,6 +20,9 @@ curl -s http://127.0.0.1:8080/api/state
 curl -s http://127.0.0.1:8080/api/hub
 ```
 
+`/healthz` only replays each adapter's last outcome and never fetches;
+`/api/state` is the one that forces every adapter to fetch.
+
 For AI usage, the brief and tasks, `POST`ing to the hub over HTTP is the
 primary way to get real data onto the panel; a hand-written file under
 `data/` is the fallback for offline testing or a tool that only writes files.
@@ -493,7 +496,8 @@ summary (`sample_count`, `oldest`, `newest`, `retention_days`).
 into at most 300 evenly sized means (`downsampled` says whether that happened).
 `hours` must be greater than 0 and at most 8760.
 
-The device also shows up in `/healthz` and `/api/state` as the `device` block.
+The device also shows up in `/api/state` as the `device` block, and in
+`/healthz` as that block's last known status (`/healthz` never fetches).
 
 ### Storage and retention
 

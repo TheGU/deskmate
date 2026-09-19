@@ -85,7 +85,7 @@ push data with [docs/LOCAL-AGENT.md](docs/LOCAL-AGENT.md).
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/healthz` | Status plus one entry per adapter |
+| GET | `/healthz` | Liveness. Last known status per adapter, never fetches; `unknown` before the first render. `GET /api/state` forces the adapters |
 | GET, POST | `/setup` | Claim the hub (see Setup above); public |
 | GET | `/api/hub` | Hub name, base URL, configured sources; public |
 | GET | `/api/state` | The normalized state the pages render from |

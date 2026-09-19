@@ -30,8 +30,13 @@ git clone <this repository> deskmate
 cd deskmate
 cp .env.example .env
 # edit .env: at minimum set HUB_PORT if 8080 is already used on this host
+mkdir -p data
 docker compose up -d --build
 ```
+
+Create `data` yourself first so it is owned by your user: the container runs
+as `PUID:PGID` (default 1001) and must be able to write there. If `id -u` on
+this host is not 1001, set `PUID` and `PGID` in `.env` to match it.
 
 Volumes (already wired in `docker-compose.yml`):
 
@@ -120,13 +125,17 @@ in `data/hub.json` is always the one currently in use.
 
 ```sh
 docker compose down
-sudo rm data/hub.json
+rm data/hub.json
 docker compose up -d
 ```
 
-The container runs as root, so everything it writes under `./data` is owned
-by root with mode 0600; that is why the `rm` above, and any backup of
-`./data`, needs `sudo` (or a root-run backup job) on the host.
+Files under `./data` are owned by `PUID` and created with mode 0600 (the
+atomic writer creates them that way), so they are readable and removable by
+that user only. If you ran an earlier image that ran as root, run `sudo
+chown -R $(id -u):$(id -g) data` once before starting the new one.
+
+A wrong owner on `./data` makes the container exit at startup with a line
+starting `DATA_DIR /data is not writable`.
 
 ## Backup
 
