@@ -292,6 +292,11 @@ class Hub:
         await run_in_threadpool(self.alerts.load)
         self.hub_settings = await run_in_threadpool(self.settings_store.snapshot)
         self.alerts.set_timezone(self.hub_settings.general.timezone)
+        # TelemetryStore owns no connection of its own (see __init__), but it
+        # does carry retention_days as a plain attribute read by the
+        # /api/device/telemetry summary: without rebuilding it here, a saved
+        # device.retention_days would never reach that response.
+        self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
         self.state_service = StateService(self.hub_settings, self.env, self.alerts)
         self.renderer.hub_settings = self.hub_settings
         async with self._cache_lock:
