@@ -478,12 +478,12 @@ groups.
 | 1.2a | done | section models, HubSettings, SettingsStore, Env |
 | 1.2b | done | call sites read HubSettings + Env, gate green |
 | 1.2c | done | SettingsStore is the source; config.Settings deleted |
-| 1.2d | in progress | |
+| 1.2d | done | Push adapters, datasets rows, File/Auto gone, data-examples removed |
 | 1.3 | done | roles, require_admin, settings stub |
-| 1.4 | in progress | |
+| 1.4 | done | forms.py, geocode.py, /settings, wizard, save and test |
 | 1.5 | done | backup POST, restore close-replace-reopen, rotate with session secret |
-| 1.6 | planned | |
-| 2.1a | planned | |
+| 1.6 | in progress | |
+| 2.1a | in progress | |
 | 2.1b | planned | |
 | 2.2 | planned | |
 | 2.3 | planned | |
