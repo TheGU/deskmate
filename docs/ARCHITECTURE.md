@@ -50,7 +50,6 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | GET | `/display/{page}.png` | reader | `page` is one of the current pages (see README.md's Pages line) |
 | GET | `/preview` | reader | Browser page: switch between pages, shows PNG and HTML; an unauthenticated browser is redirected to `/login` |
 | GET | `/preview/{page}.html` | reader | Raw HTML at 800x480, for CSS work in a browser; same redirect |
-| GET | `/preview/{page}-rgb.png` | reader | RGB stage before quantization, no cache, dev only |
 | POST | `/api/ai-usage` | token | Push AI quota; see docs/DATA-SOURCES.md |
 | POST | `/api/brief` | token | Push the AI-written brief |
 | POST | `/api/tasks` | token | Push the open task list (replaces it) |
@@ -120,7 +119,7 @@ stay open, and the redirects on `GET /` and the two HTML preview routes).
 **Once the hub is set up:**
 
 - **`reader` routes** (`/display/{page}.png`, `/preview`,
-  `/preview/{page}.html`, `/preview/{page}-rgb.png`, `/api/state`,
+  `/preview/{page}.html`, `/api/state`,
   `/api/hub`, `GET /api/device/telemetry`, `/api/device/history`) require
   `Authorization: Bearer <token or device key>`, or a browser session
   cookie obtained at `/login`.
@@ -256,22 +255,28 @@ epaper_spi driver maps RGB to the nearest of the six panel colors):
 ### Adapters and configuration
 
 Configuration is environment variables (`config.py`, pydantic-settings).
-Each adapter has a `*_SOURCE` selector; `fixture` is always available.
+Each adapter has a `*_SOURCE` selector; `fixture` is always available, for
+development, but no adapter defaults to it: an unconfigured hub reports
+every block `unavailable` and renders an honest empty state rather than
+demo data.
 
 | Adapter | Sources | Default | Config |
 | --- | --- | --- | --- |
-| tasks | fixture, file, obsidian, auto | auto | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
-| calendar | fixture, ics | fixture | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
-| weather | fixture, open_meteo | fixture | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
-| ai_usage | fixture, file, auto | auto | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
-| ai_brief | fixture, file, auto | auto | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`) |
-| home_assistant | fixture, rest | fixture | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` (JSON) |
+| tasks | fixture, file, obsidian, auto | file | `TASKS_SOURCE`, `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_TASK_GLOB` |
+| calendar | fixture, ics | ics | `CALENDAR_SOURCE`, `CALENDAR_ICS_URLS` |
+| weather | fixture, open_meteo | open_meteo | `WEATHER_SOURCE`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, `WEATHER_LOCATION_NAME` |
+| ai_usage | fixture, file, auto | file | `AI_USAGE_SOURCE`, `AI_USAGE_PATH` (default `data/ai-usage.json`) |
+| ai_brief | fixture, file, auto | file | `BRIEF_SOURCE`, `BRIEF_DIR` (default `data/brief`) |
+| home_assistant | fixture, rest | rest | `HA_SOURCE`, `HA_URL`, `HA_TOKEN`, `HA_ENTITIES` (JSON) |
+| device | store, fixture | store | `DEVICE_SOURCE`, `TELEMETRY_DB_PATH`, `TELEMETRY_RETENTION_DAYS` |
 
 `auto` (tasks, ai_usage, ai_brief): the file adapter when its file exists and
 is readable for the current state (for ai_brief, "readable" means either
 `current.json` or the current brief mode's own Markdown file), otherwise
 `fixture`. `fixture` and `file` keep their strict, non-auto meanings; `tasks`
-alone also accepts `obsidian`, which `auto` never selects on its own.
+alone also accepts `obsidian`, which `auto` never selects on its own. `auto`
+is no longer any adapter's default, but stays available for a dataset that
+should show fixture data until its first real push.
 
 `GET /api/hub`'s `sources.<dataset>.effective` and the footer's DEMO mark
 report two different moments, not the same fact twice:

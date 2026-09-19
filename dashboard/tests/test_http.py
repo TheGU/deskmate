@@ -292,9 +292,9 @@ def test_api_hub_reports_identity_and_sources(reader: _ReaderClient) -> None:
     assert payload["configured"] is True
     assert payload["name"] == "deskmate"
     assert payload["base_url"] == "http://dashboard-hub.lan:8080"
-    # The test DATA_DIR is empty, so "auto" (the default) resolves to fixture.
+    # The session settings fixture pins every source to fixture (see conftest.py).
     for dataset in ("ai_usage", "brief", "tasks"):
-        assert payload["sources"][dataset]["configured"] == "auto"
+        assert payload["sources"][dataset]["configured"] == "fixture"
         assert payload["sources"][dataset]["effective"] == "fixture"
 
 
@@ -496,16 +496,6 @@ def test_preview_html_rejects_an_unknown_page(reader: _ReaderClient) -> None:
     assert reader.get("/preview/nope.html").status_code == 404
 
 
-def test_preview_rgb_returns_a_png_of_the_right_size(reader: _ReaderClient) -> None:
-    response = reader.get("/preview/today-rgb.png")
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "image/png"
-    assert response.headers["cache-control"] == "no-store"
-    assert open_png(response.content).size == DISPLAY_SIZE
-
-
-def test_preview_rgb_rejects_an_unknown_page(reader: _ReaderClient) -> None:
-    assert reader.get("/preview/nope-rgb.png").status_code == 404
 
 
 def test_root_redirects_to_preview(reader: _ReaderClient) -> None:

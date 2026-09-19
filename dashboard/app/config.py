@@ -73,12 +73,12 @@ class Settings(BaseSettings):
     fixture_relative_dates: bool = Field(default=True, alias="FIXTURE_RELATIVE_DATES")
 
     # -- tasks ----------------------------------------------------------
-    tasks_source: TasksSource = Field(default="auto", alias="TASKS_SOURCE")
+    tasks_source: TasksSource = Field(default="file", alias="TASKS_SOURCE")
     obsidian_vault_path: Path | None = Field(default=None, alias="OBSIDIAN_VAULT_PATH")
     obsidian_task_glob: str = Field(default="**/*.md", alias="OBSIDIAN_TASK_GLOB")
 
     # -- calendar -------------------------------------------------------
-    calendar_source: CalendarSource = Field(default="fixture", alias="CALENDAR_SOURCE")
+    calendar_source: CalendarSource = Field(default="ics", alias="CALENDAR_SOURCE")
     #: Comma separated list of ICS URLs or local file paths.
     calendar_ics_urls: str = Field(default="", alias="CALENDAR_ICS_URLS")
     #: Names for those feeds, in the same order. Blank falls back to the URL
@@ -89,23 +89,23 @@ class Settings(BaseSettings):
     calendar_colors: str = Field(default="", alias="CALENDAR_COLORS")
 
     # -- weather --------------------------------------------------------
-    weather_source: WeatherSource = Field(default="fixture", alias="WEATHER_SOURCE")
+    weather_source: WeatherSource = Field(default="open_meteo", alias="WEATHER_SOURCE")
     weather_latitude: float | None = Field(default=None, alias="WEATHER_LATITUDE")
     weather_longitude: float | None = Field(default=None, alias="WEATHER_LONGITUDE")
     weather_location_name: str = Field(default="", alias="WEATHER_LOCATION_NAME")
 
     # -- ai usage -------------------------------------------------------
-    ai_usage_source: AIUsageSource = Field(default="auto", alias="AI_USAGE_SOURCE")
+    ai_usage_source: AIUsageSource = Field(default="file", alias="AI_USAGE_SOURCE")
     ai_usage_path: Path | None = Field(default=None, alias="AI_USAGE_PATH")
 
     # -- ai brief -------------------------------------------------------
-    brief_source: BriefSource = Field(default="auto", alias="BRIEF_SOURCE")
+    brief_source: BriefSource = Field(default="file", alias="BRIEF_SOURCE")
     brief_dir: Path | None = Field(default=None, alias="BRIEF_DIR")
     #: Local hour at which the brief switches from morning to evening mode.
     brief_evening_hour: int = Field(default=14, ge=0, le=23, alias="BRIEF_EVENING_HOUR")
 
     # -- home assistant -------------------------------------------------
-    ha_source: HomeAssistantSource = Field(default="fixture", alias="HA_SOURCE")
+    ha_source: HomeAssistantSource = Field(default="rest", alias="HA_SOURCE")
     ha_url: str = Field(default="", alias="HA_URL")
     ha_token: str = Field(default="", alias="HA_TOKEN")
     ha_entities_raw: str = Field(default="", alias="HA_ENTITIES")

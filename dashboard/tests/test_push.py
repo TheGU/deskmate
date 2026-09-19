@@ -48,6 +48,12 @@ def push_client(data_dir: Path) -> Iterator[TestClient]:
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
+        # This module tests the "auto" selector's own resolution (fixture
+        # before a push, file after), which is no longer the default; pin it
+        # explicitly so that story still holds regardless of the default.
+        AI_USAGE_SOURCE="auto",
+        BRIEF_SOURCE="auto",
+        TASKS_SOURCE="auto",
     )
     app = create_app(settings)
     with TestClient(app) as client:
@@ -356,6 +362,9 @@ def test_hub_info_effective_reflects_a_push_immediately_before_any_fetch(
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
+        # TASKS_SOURCE is no longer "auto" by default; pin it here so this
+        # "auto resolves live" story still holds.
+        TASKS_SOURCE="auto",
     )
     app = create_app(settings)
     with TestClient(app) as client:

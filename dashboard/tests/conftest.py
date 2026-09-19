@@ -57,8 +57,16 @@ def settings(tmp_path_factory: pytest.TempPathFactory) -> Settings:
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
-        # DEVICE_SOURCE now defaults to "store"; the shared renderer/state
-        # fixtures below need fixture device data to draw the system-page chart.
+        # Every *_SOURCE now defaults to a live selector so a real deployment
+        # never shows demo data by accident; the shared renderer/state
+        # fixtures below pin all seven back to fixture so tests keep
+        # exercising fixture data as before.
+        TASKS_SOURCE="fixture",
+        CALENDAR_SOURCE="fixture",
+        WEATHER_SOURCE="fixture",
+        AI_USAGE_SOURCE="fixture",
+        BRIEF_SOURCE="fixture",
+        HA_SOURCE="fixture",
         DEVICE_SOURCE="fixture",
     )
 

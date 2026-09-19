@@ -18,10 +18,10 @@ Data sources -> dashboard-hub (FastAPI + Jinja2 + Chromium at 4x + Lanczos + Pil
 
 Pages: `today`, `agenda`, `weather`, `brief`, `system`, `alert`.
 
-Status (2026-09-04): factory firmware backed up and verified, server runs
-entirely from `fixtures/`, ESPHome firmware validated and compiled. The device
-has not been flashed yet; that only happens on an explicit `FLASH` from the
-owner.
+Status (2026-09-19): the E1002 is flashed and running on the desk, and
+dashboard-hub is deployed with Docker. It serves the Today, Agenda, Weather,
+Brief and System pages plus alerts, each pulling from its configured source
+or, honestly, reporting unavailable.
 
 ## Quick start
 
@@ -32,18 +32,24 @@ cd dashboard
 uv sync --all-groups
 uv run playwright install chromium
 
-# render every page to ../output/ without starting a server
+# render every page to ../output/ without starting a server, using demo data
+# (scripts/render-all.py pins every *_SOURCE to fixture)
 uv run python ../scripts/render-all.py
 
-# or run the server
+# or run the server against the same demo data
+TASKS_SOURCE=fixture CALENDAR_SOURCE=fixture WEATHER_SOURCE=fixture \
+AI_USAGE_SOURCE=fixture BRIEF_SOURCE=fixture HA_SOURCE=fixture \
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Then open <http://127.0.0.1:8080/preview> to flip through the pages: the
-simulated panel, the RGB stage before quantization, and the raw HTML, left to
-right. A fresh, unconfigured hub serves nothing but `/setup`; once you set it
-up (see Setup below), a browser needs to sign in at `/login` with the device
-key first.
+With no source variables set, every block on every page renders as an honest
+empty state instead of demo data; see `.env.example` and
+docs/DATA-SOURCES.md to configure real sources.
+
+Then open <http://127.0.0.1:8080/preview> to flip through the pages: the raw
+HTML by default, with a toggle to switch to the simulated panel PNG. A fresh,
+unconfigured hub serves nothing but `/setup`; once you set it up (see Setup
+below), a browser needs to sign in at `/login` with the device key first.
 
 Tests:
 
@@ -54,7 +60,8 @@ cd dashboard && uv run pytest
 ## Docker quick start
 
 ```sh
-cp .env.example .env      # optional, the defaults are fixture-only
+cp .env.example .env      # optional; with no .env the hub shows an honest
+                           # empty state until you configure real sources
 docker compose up -d --build
 docker compose logs dashboard-hub   # first run: confirms setup is needed
 curl -s http://127.0.0.1/healthz
@@ -107,7 +114,6 @@ reader routes) or redirects to `/setup` (`/preview` and `/`). See "Auth" in
 | GET | `/display/{page}.png` | 800x480 PNG, `ETag` + `304`, `?t=` busts the cache |
 | GET | `/preview` | Developer page for switching between pages |
 | GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work |
-| GET | `/preview/{page}-rgb.png` | RGB stage before quantization, not cached |
 | POST | `/api/ai-usage`, `/api/brief`, `/api/tasks` | Agent pushes, token required |
 | POST | `/api/alert` | Set the current alert, token required |
 | DELETE | `/api/alert` | Clear it, token required |
@@ -201,3 +207,7 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
   codepoints.
 - Data is never invented. An adapter that is unset or broken makes the page say
   `unknown` or `unavailable`.
+
+## License
+
+License: MIT. See [LICENSE](LICENSE).
