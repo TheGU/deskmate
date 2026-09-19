@@ -348,8 +348,12 @@ footer entry through the existing footer-flag logic.
 - Framework esp-idf, PSRAM octal. Flash layout 16MB (chip has 32MB, but ESP-IDF needs an experimental flag for 32MB with OTA).
 - No business logic. Only: page list, current index, download, display,
   buttons, buzzer, sensors, alert timer.
-- Page URL base comes from `secrets.yaml` (`hub_base_url`), so no server
-  address is hard-coded in the YAML.
+- Page URL base and the device key are runtime text components
+  (`hub_base_url`, `hub_key`), not hard-coded in the YAML: `secrets.yaml`
+  only seeds their first-boot value, and both are edited afterwards on the
+  device's own web page or as Home Assistant text entities, with no
+  reflash. Wi-Fi is likewise provisioned at runtime, through the captive
+  portal or Improv, never from `secrets.yaml`.
 - Refresh policy on the device: a periodic timer (default 30 min)
   re-requests the current page URL; ESPHome sends the conditional request
   and only refreshes the panel when the image changed. Server-side TTLs
