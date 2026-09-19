@@ -38,22 +38,29 @@ Pass ``--check`` instead to prove the script still works (the point of
 running it at all outside of an intentional pixel change) without touching
 either committed file: it builds the state and renders every page the same
 way, then compares against what is already on disk instead of writing.
-Every page except ``system`` is compared byte-for-byte; ``system`` is
-compared only for freshness of its adapters, never its hash, for the reason
-in the note below.
+Three pages are not compared byte-for-byte: ``system``, ``today`` and
+``brief``, for the reasons in the note below.
 
-Note: this script is not itself idempotent across runs. The device block's
-fixture (app/adapters/device.py's ``load_device_fixture``) deliberately
-generates its 24 h history relative to wall-clock "now" ("a fixed anchor date
-would make the demo device look permanently stale", per its own docstring),
-so the ``device``/``system`` page content can differ between two invocations
-of this script even though every timestamp on ``DashboardState`` itself is
-pinned above. That is fine for what this script is for: it freezes one
+Note: this script is not itself idempotent across runs. Two fixtures read
+the wall clock, on purpose:
+
+* the device fixture (app/adapters/device.py's ``load_device_fixture``)
+  generates its 24 h history relative to "now" ("a fixed anchor date would
+  make the demo device look permanently stale", per its own docstring), so
+  the ``device`` block and the ``system`` page move between runs;
+* the brief fixture picks the morning or the evening brief from the hour
+  this script runs at (app/adapters/ai_brief.py's ``current_mode``), so the
+  ``brief`` block, the ``brief`` page and the Today page's NOTE field flip
+  across the section's ``evening_hour``.
+
+Either way the content can differ between two invocations of this script
+even though every timestamp on ``DashboardState`` itself is pinned above. That is fine for what this script is for: it freezes one
 snapshot to disk once, and everything downstream (the render gate) only ever
 renders that already-frozen, unchanging state, which is what makes the gate
 itself byte-for-byte reproducible. It is also why ``--check`` cannot compare
-the ``system`` page's hash against the committed one: a fresh run's device
-history is never the same as the one already frozen on disk, by design.
+those three pages' hashes against the committed ones: a fresh run's device
+history, and a fresh run's brief mode, are not the ones already frozen on
+disk, by design.
 """
 
 from __future__ import annotations
@@ -102,9 +109,10 @@ HASHES_PATH = ASSETS_DIR / "frozen-hashes.json"
 #: value carries no meaning beyond being fixed.
 FROZEN_AT = datetime.fromisoformat("2026-09-19T09:00:00+07:00")
 
-#: The page whose rendered hash is never compared in --check: it draws the
-#: device block, whose fixture is wall-clock dependent (see module docstring).
-_WALL_CLOCK_DEPENDENT_PAGE = "system"
+#: The pages whose rendered hashes are never compared in --check: they draw
+#: a block whose fixture is wall-clock dependent (see module docstring).
+#: ``today`` draws the brief's NOTE field, which is why it is here too.
+_WALL_CLOCK_DEPENDENT_PAGES = ("system", "brief", "today")
 
 
 def _env(data_dir: Path) -> Env:
@@ -217,15 +225,16 @@ async def _check() -> int:
     if payload != expected_payload:
         print(
             "frozen-state.json would differ from a fresh build "
-            "(expected for the wall-clock-dependent device block; "
-            "unexpected for anything else - diff the two payloads by hand)",
+            "(expected: the wall-clock-dependent device and brief blocks, and "
+            "the committed file's pre-2.1a shape; unexpected for anything "
+            "else - diff the two payloads by hand)",
             file=sys.stderr,
         )
         ok = False
 
     expected_hashes = json.loads(HASHES_PATH.read_text(encoding="utf-8"))
     for page in PAGES:
-        if page == _WALL_CLOCK_DEPENDENT_PAGE:
+        if page in _WALL_CLOCK_DEPENDENT_PAGES:
             print(f"{page}: skipped (wall-clock dependent, see module docstring)")
             continue
         if hashes[page] != expected_hashes.get(page):

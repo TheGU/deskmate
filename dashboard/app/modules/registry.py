@@ -38,7 +38,7 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
@@ -152,12 +152,6 @@ class Registry:
     def missing_ids(self) -> tuple[str, ...]:
         """Ids the ``modules`` section names that are not installed here."""
         return self._missing
-
-    def module(self, module_id: str) -> Module | None:
-        for module in self._modules:
-            if module.id == module_id:
-                return module
-        return None
 
     def enabled_modules(self) -> tuple[Module, ...]:
         return tuple(module for module in self._modules if self.is_enabled(module))
@@ -378,21 +372,6 @@ def _forget_foreign(name: str, package_dir: Path) -> None:
         del sys.modules[key]
 
 
-def default_toggles(modules: Sequence[Module]) -> ModulesSettings:
-    """A ``modules`` section that spells out what the defaults already do.
-
-    Nothing calls this on the hub's own path (a module with no row keeps its
-    defaults), but the settings page needs somewhere to start from when an
-    admin first opens the section, and a test needs a row to flip.
-    """
-    return ModulesSettings(
-        items=[
-            ModuleToggle(id=module.id, enabled=module.default_enabled, order=module.default_order)
-            for module in modules
-        ]
-    )
-
-
 __all__ = [
     "BUILTIN_MODULE_PACKAGES",
     "ENTRY_POINT_GROUP",
@@ -403,7 +382,6 @@ __all__ = [
     "Registry",
     "builtin_modules",
     "builtin_registry",
-    "default_toggles",
     "directory_modules",
     "entry_point_modules",
     "load_modules",
