@@ -25,13 +25,17 @@ The connection is owned by a process-wide registry keyed by the resolved path
 used before it. ``Hub`` holds a reference; it does not own the lifetime, so
 two ``create_app()`` calls over one ``DATA_DIR`` share one connection instead
 of racing each other through two. :func:`close_databases` is the hook tests
-and a shutdown use; :meth:`Database.close` plus :meth:`Database.reopen` are
-what the restore flow needs to swap the file underneath a running process.
+and a shutdown use; :meth:`Database.close` plus :meth:`Database.reopen` let a
+caller drop the file and pick it up again, and :meth:`Database.backup_to` and
+:meth:`Database.replace_file` are the two halves of the settings page's backup
+and restore (``app/backup.py``), which swap the file underneath a running
+process.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -182,31 +186,7 @@ class Database:
         if self._migrated:
             return DB_SCHEMA_VERSION
         with self.writing() as connection:
-            connection.executescript(_META_SCHEMA)
-            found = _read_version(connection)
-            if found is not None and found > DB_SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"{self.path} was written by a newer dashboard-hub "
-                    f"(database schema {found}, this build understands "
-                    f"{DB_SCHEMA_VERSION}); restore a backup from this build or "
-                    "upgrade the image"
-                )
-            connection.executescript(_SCHEMA)
-            _migrate_telemetry_columns(connection)
-            if found != DB_SCHEMA_VERSION:
-                connection.execute(
-                    "INSERT INTO meta (key, value) VALUES (?, ?)"
-                    " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    (VERSION_KEY, str(DB_SCHEMA_VERSION)),
-                )
-                log(
-                    logger,
-                    logging.INFO,
-                    "database migrated",
-                    path=str(self.path),
-                    was=found,
-                    now=DB_SCHEMA_VERSION,
-                )
+            _apply_schema(connection, self.path)
         self._migrated = True
         return DB_SCHEMA_VERSION
 
@@ -233,6 +213,57 @@ class Database:
                 " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
+
+    # -- backup and restore ----------------------------------------------
+    def backup_to(self, target: Path) -> None:
+        """``VACUUM INTO target``: one consistent copy of this database.
+
+        Preferred over copying the file: it runs through the same connection
+        every writer uses, so it takes the lock rather than racing a write,
+        and it folds the WAL in, so the result is a single self-contained
+        file with no sidecars to hand out next to it. SQLite refuses to write
+        a target that already exists, so ``target`` must be a name nothing
+        has used before (:func:`app.backup.backup_temp_path`), and it refuses
+        to run inside a transaction, hence the commit first: every
+        :meth:`writing` block commits on the way out, but a caller that only
+        ever read still leaves sqlite3's implicit transaction open.
+        """
+        with self._lock:
+            self._connection.commit()
+            self._connection.execute("VACUUM INTO ?", (str(target),))
+
+    def replace_file(self, source: Path) -> None:
+        """Swap this database's file for ``source``, in one locked step.
+
+        The restore sequence, and the reason it lives here rather than in the
+        route: on Windows ``os.replace`` over a file that still has an open
+        sqlite connection fails with a sharing violation, so the connection
+        has to be closed first, and nothing may touch it in between - which
+        is what holding ``_lock`` across the whole close, unlink, replace,
+        reopen, migrate is for. The registry entry is left alone on purpose:
+        the path and the object identity never change, so ``Hub`` and every
+        store built from it keep working, and a concurrent
+        :func:`get_database` hands back this same object (blocked on the lock
+        until the swap is done) rather than opening a second connection to a
+        file that is being replaced.
+
+        ``source`` is consumed: ``os.replace`` moves it into place.
+        """
+        with self._lock:
+            self._connection.close()
+            self._migrated = False
+            for suffix in ("-wal", "-shm"):
+                Path(f"{self.path}{suffix}").unlink(missing_ok=True)
+            os.replace(source, self.path)
+            self._connection = _connect(self.path)
+            try:
+                _apply_schema(self._connection, self.path)
+            except BaseException:
+                self._connection.rollback()
+                raise
+            self._connection.commit()
+            self._migrated = True
+        log(logger, logging.INFO, "database replaced", path=str(self.path), source=str(source))
 
     # -- lifetime --------------------------------------------------------
     def close(self) -> None:
@@ -271,6 +302,41 @@ def _connect(path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA synchronous=NORMAL")
     connection.commit()
     return connection
+
+
+def _apply_schema(connection: sqlite3.Connection, path: Path) -> None:
+    """Create whatever the schema is missing, on an open write transaction.
+
+    Split out of :meth:`Database.migrate` so :meth:`Database.replace_file`
+    can run it on the freshly reopened connection without releasing the lock
+    in between: a restored file must be migrated before any other thread can
+    read it.
+    """
+    connection.executescript(_META_SCHEMA)
+    found = _read_version(connection)
+    if found is not None and found > DB_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"{path} was written by a newer dashboard-hub "
+            f"(database schema {found}, this build understands "
+            f"{DB_SCHEMA_VERSION}); restore a backup from this build or "
+            "upgrade the image"
+        )
+    connection.executescript(_SCHEMA)
+    _migrate_telemetry_columns(connection)
+    if found != DB_SCHEMA_VERSION:
+        connection.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (VERSION_KEY, str(DB_SCHEMA_VERSION)),
+        )
+        log(
+            logger,
+            logging.INFO,
+            "database migrated",
+            path=str(path),
+            was=found,
+            now=DB_SCHEMA_VERSION,
+        )
 
 
 def _read_version(connection: sqlite3.Connection) -> int | None:
