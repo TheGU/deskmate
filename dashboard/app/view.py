@@ -7,7 +7,7 @@ Templates stay dumb: no adapter knowledge, no arithmetic, no fallbacks. Every
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app import icons
@@ -27,7 +27,7 @@ from app.models import (
     Weather,
 )
 from app.renderer.chart import build_chart
-from app.timeutil import to_local, zone
+from app.timeutil import to_local
 
 UNKNOWN = "unknown"
 UNAVAILABLE = "unavailable"
