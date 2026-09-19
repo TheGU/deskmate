@@ -7,9 +7,10 @@ token_sha256, device_key_sha256, session_secret, created_at}``. Only the
 token's and the device key's SHA-256 hex digests are ever stored; the
 plaintext values are shown once, on the setup-done page, and are not
 recoverable. ``session_secret`` is stored in plaintext (it never leaves the
-server; it only signs the browser session cookie). Losing any of this means
-stopping the container, deleting ``data/deskmate.sqlite``, and running
-``/setup`` again: there is no edit or regenerate mode yet.
+server; it only signs the browser session cookie). Losing the token or the
+device key means rotating all three (:func:`rotate_secrets`, ``POST
+/settings/rotate``), which shows the two new secrets once and ends every
+browser session; there is still no way to read an existing secret back.
 
 **Roles.** The session cookie carries a :data:`Role`: ``admin`` or
 ``reader``. Signing in with the bearer token grants ``admin``; signing in
@@ -265,6 +266,32 @@ def claim_hub(
         # never shown or sent to a client itself.
         session_secret=secrets.token_urlsafe(32),
         created_at=datetime.now(tz=dt_timezone.utc),
+    )
+    return config, token, device_key
+
+
+def rotate_secrets(existing: HubConfig) -> tuple[HubConfig, str, str]:
+    """Mint a fresh token, device key and session secret for a claimed hub.
+
+    Returns ``(config, token, device_key)``, the same shape as
+    :func:`claim_hub`, and keeps everything that is not a secret: ``name``,
+    ``base_url`` and ``created_at`` describe the hub, not its credentials, so
+    rotating them does not restart its history. The new ``session_secret`` is
+    what ends every browser session at once: the old cookies' MACs were keyed
+    by the old secret and stop verifying the moment the row is written.
+
+    Pure, like :func:`claim_hub`: the caller persists the result with
+    :func:`write_hub_config` and then reloads the identity.
+    """
+    token = generate_token()
+    device_key = generate_token()
+    config = HubConfig(
+        name=existing.name,
+        base_url=existing.base_url,
+        token_sha256=hash_token(token),
+        device_key_sha256=hash_token(device_key),
+        session_secret=secrets.token_urlsafe(32),
+        created_at=existing.created_at,
     )
     return config, token, device_key
 

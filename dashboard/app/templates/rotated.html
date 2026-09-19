@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deskmate secrets rotated</title>
+<style>
+  /* Deliberately the same page as setup-done.html: this is the only other
+     moment the two plaintext secrets exist, and it should read identically. */
+  @font-face {
+    font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
+    font-display: block;
+    src: url('/static/fonts/GoogleSans-LatinThai-var.ttf') format('truetype');
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #FFFFFF; color: #000000;
+    font-family: 'Google Sans', sans-serif; font-weight: 600;
+    max-width: 560px;
+  }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
+  p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
+  label {
+    display: block; font-size: 13px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; margin: 16px 0 4px;
+  }
+  .warning {
+    border: 3px solid #FF0000; padding: 10px 12px; margin: 16px 0; font-weight: 700;
+  }
+  code {
+    display: block; border: 2px solid #000000; padding: 8px 10px; font-family: inherit;
+    font-weight: 700; word-break: break-all; background: #FFFFFF;
+  }
+  .hint { font-size: 13px; font-weight: 600; margin-top: 8px; }
+  a { color: #000000; }
+</style>
+</head>
+<body>
+  <h1>deskmate secrets rotated</h1>
+  <p class="sub">Hub <strong>{{ name }}</strong> at <strong>{{ base_url }}</strong>.</p>
+  <div class="warning">
+    These two secrets are shown once. Copy them now: the old token and device
+    key stopped working the moment this page was drawn, and neither of the new
+    ones can be recovered, only rotated again.
+  </div>
+  <label for="token-value">Bearer token (agents)</label>
+  <code id="token-value">{{ token }}</code>
+  <label for="device-key-value">Device key</label>
+  <code id="device-key-value">{{ device_key }}</code>
+  <div class="warning">
+    The flashed panel stops fetching until its Hub key is set to this new
+    device key, on the device's own web page or by a reflash on firmware older
+    than that field. Every other browser session ended too.
+  </div>
+  <label>firmware/secrets.yaml</label>
+  <code>hub_base_url: "{{ base_url }}"</code>
+  <code>hub_key: "{{ device_key }}"</code>
+  <p class="hint">
+    Back to <a href="/settings">/settings</a>, or view the pages at
+    <a href="/preview">/preview</a>.
+  </p>
+</body>
+</html>

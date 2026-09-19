@@ -6,9 +6,8 @@
 <title>deskmate settings</title>
 <style>
   /* Same visual language as login.html / setup-done.html: a developer/owner
-     tool, viewed in a browser, not a panel page. Package 1.4 replaces this
-     placeholder with the real settings page (app/forms.py, section forms,
-     save and test, wizard routes). */
+     tool, viewed in a browser, not a panel page. No JavaScript anywhere on
+     the admin pages: every control here is a plain form POST. */
   @font-face {
     font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
     font-display: block;
@@ -21,11 +20,101 @@
     max-width: 560px;
   }
   h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
+  h2 {
+    font-size: 15px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    margin: 24px 0 8px 0;
+  }
   p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
+  p { font-size: 14px; font-weight: 600; margin: 8px 0; }
+  section { border-top: 3px solid #000000; padding-top: 4px; margin-top: 22px; }
+  section.danger { border-top-color: #FF0000; }
+  section.danger h2 { color: #FF0000; }
+  input[type="file"] { font: inherit; font-weight: 600; margin: 8px 0; max-width: 100%; }
+  label.check { display: block; font-size: 14px; font-weight: 700; margin: 10px 0; }
+  button {
+    margin-top: 10px; border: 3px solid #000000; background: #000000; color: #FFFFFF;
+    padding: 10px 16px; font: inherit; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; cursor: pointer;
+  }
+  button.danger { border-color: #FF0000; background: #FF0000; }
+  .warning {
+    border: 3px solid #FF0000; padding: 10px 12px; margin: 12px 0; font-weight: 700;
+    font-size: 14px;
+  }
+  .error {
+    border: 3px solid #FF0000; padding: 10px 12px; margin: 16px 0; font-weight: 700;
+  }
+  code { font-family: inherit; font-weight: 700; word-break: break-all; }
+  a { color: #000000; }
 </style>
 </head>
 <body>
   <h1>Settings</h1>
   <p class="sub">Hub <strong>{{ name }}</strong>.</p>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  {# Package 1.4 inserts the section forms (general, sources, the wizard)
+     here, above backup and the danger zone: everything below is about the
+     hub's one database and its credentials, and belongs at the bottom. #}
+
+  <section>
+    <h2>Backup</h2>
+    <p>One file with everything: identity, settings, pushed data, telemetry.</p>
+    <div class="warning">
+      The backup holds the session secret, every secret hash and any Home
+      Assistant token. Treat the file like the token itself. It does not
+      include <code>DATA_DIR/modules</code> or an Obsidian vault.
+    </div>
+    <form method="post" action="/settings/backup">
+      <button type="submit">Download backup</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Restore</h2>
+    <p>Replace this hub's database with a backup from this build or an older one.</p>
+    <div class="warning">
+      The token and the device key become the backup's. If the backup's device
+      key is not the one the panel was flashed with, the device stops fetching
+      until its Hub key is updated on the device's own web page, or by a
+      reflash on firmware older than that field.
+    </div>
+    <div class="warning">
+      Every browser session ends, this one included: the session secret is the
+      backup's too. You land on the sign-in page and need the backup's token.
+    </div>
+    <form method="post" action="/settings/restore" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".sqlite,application/vnd.sqlite3" required>
+      <label class="check">
+        <input type="checkbox" name="confirm" value="on">
+        I understand this replaces the database and both secrets.
+      </label>
+      <button type="submit" class="danger">Restore backup</button>
+    </form>
+  </section>
+
+  <section class="danger">
+    <h2>Danger zone</h2>
+    <p>Rotate the secrets: a new bearer token, a new device key, a new session secret.</p>
+    <div class="warning">
+      Both new secrets are shown once and cannot be recovered. The flashed
+      device stops fetching until its Hub key is set to the new device key,
+      and every browser session ends.
+    </div>
+    <form method="post" action="/settings/rotate">
+      <label class="check">
+        <input type="checkbox" name="confirm" value="on">
+        I understand both secrets are replaced and everyone is signed out.
+      </label>
+      <button type="submit" class="danger">Rotate secrets</button>
+    </form>
+    <h2>Reset</h2>
+    <p>
+      To wipe this hub and start over: stop the container, delete
+      <code>data/deskmate.sqlite</code>, start it again and open
+      <a href="/setup">/setup</a>. That throws away the identity, the
+      settings, the pushed data and the telemetry history.
+    </p>
+  </section>
 </body>
 </html>
