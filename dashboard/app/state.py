@@ -20,7 +20,7 @@ from app.adapters.home_assistant import build_home_adapter
 from app.adapters.tasks import build_tasks_adapter
 from app.adapters.weather import build_weather_adapter
 from app.alerts import AlertStore
-from app.config import Settings
+from app.config import Env
 from app.logging_setup import log
 from app.models import (
     AIUsageBlock,
@@ -33,6 +33,7 @@ from app.models import (
     TasksBlock,
     WeatherBlock,
 )
+from app.settings import HubSettings
 from app.timeutil import now_local
 
 logger = logging.getLogger("app.state")
@@ -43,20 +44,35 @@ BlockT = TypeVar("BlockT", bound=Block)
 class StateService:
     """Owns the cached adapters and produces state snapshots."""
 
-    def __init__(self, settings: Settings, alerts: AlertStore) -> None:
-        self._settings = settings
+    def __init__(self, hub_settings: HubSettings, env: Env, alerts: AlertStore) -> None:
+        self._hub_settings = hub_settings
+        self._env = env
         self._alerts = alerts
-        self.tasks = CachedAdapter(build_tasks_adapter(settings), settings.tasks_ttl_seconds)
+        general = hub_settings.general
+        self.tasks = CachedAdapter(
+            build_tasks_adapter(hub_settings.tasks, general, env), hub_settings.tasks.ttl_seconds
+        )
         self.calendar = CachedAdapter(
-            build_calendar_adapter(settings), settings.calendar_ttl_seconds
+            build_calendar_adapter(hub_settings.calendar, general, env),
+            hub_settings.calendar.ttl_seconds,
         )
-        self.weather = CachedAdapter(build_weather_adapter(settings), settings.weather_ttl_seconds)
+        self.weather = CachedAdapter(
+            build_weather_adapter(hub_settings.weather, general, env),
+            hub_settings.weather.ttl_seconds,
+        )
         self.ai_usage = CachedAdapter(
-            build_ai_usage_adapter(settings), settings.ai_usage_ttl_seconds
+            build_ai_usage_adapter(hub_settings.ai_usage, general, env),
+            hub_settings.ai_usage.ttl_seconds,
         )
-        self.brief = CachedAdapter(build_brief_adapter(settings), settings.brief_ttl_seconds)
-        self.home = CachedAdapter(build_home_adapter(settings), settings.home_ttl_seconds)
-        self.device = CachedAdapter(build_device_adapter(settings), settings.device_ttl_seconds)
+        self.brief = CachedAdapter(
+            build_brief_adapter(hub_settings.brief, general, env), hub_settings.brief.ttl_seconds
+        )
+        self.home = CachedAdapter(
+            build_home_adapter(hub_settings.home, env), hub_settings.home.ttl_seconds
+        )
+        self.device = CachedAdapter(
+            build_device_adapter(hub_settings.device, env), hub_settings.device.ttl_seconds
+        )
 
     @property
     def adapters(self) -> dict[str, CachedAdapter[Any]]:
@@ -96,8 +112,8 @@ class StateService:
         )
 
         state = DashboardState(
-            generated_at=now_local(self._settings.timezone),
-            timezone=self._settings.timezone,
+            generated_at=now_local(self._hub_settings.general.timezone),
+            timezone=self._hub_settings.general.timezone,
             tasks=_block(TasksBlock, tasks_out, "items", []),
             calendar=_block(CalendarBlock, calendar_out, "items", []),
             weather=_block(WeatherBlock, weather_out, "weather", None),
