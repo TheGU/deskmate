@@ -62,9 +62,7 @@ no logic and no credentials on the device.
   Claude Code session, an open task list a local agent keeps. The hub accepts
   these over three bearer-token HTTP push endpoints
   (`POST /api/ai-usage`, `/api/brief`, `/api/tasks`; see `docs/DATA-SOURCES.md`
-  and `skills/deskmate/SKILL.md`) and also reads the same shapes from files
-  under the data directory for offline testing or a tool that only writes
-  files.
+  and `skills/deskmate/SKILL.md`).
 
 ## Capabilities and Constraints
 
@@ -107,8 +105,7 @@ Confirmed:
   device origin), alert.
 
 Decided: the PC-side feed reaches the hub over three bearer-token HTTP push
-endpoints (`/api/ai-usage`, `/api/brief`, `/api/tasks`), with a file dropped
-into the mounted data directory as the fallback path; see
+endpoints (`/api/ai-usage`, `/api/brief`, `/api/tasks`); see
 `docs/DATA-SOURCES.md`.
 
 Undecided:
@@ -142,10 +139,8 @@ Undecided:
 
 ## Evidence on Hand
 
-- Demo data: fixtures/*.json for every adapter and the device. Example feed
-  files: data-examples/ (ai-usage.json, brief/current.json, morning.md,
-  evening.md).
-- Real device telemetry accumulating in data/telemetry.sqlite from the
+- Demo data: fixtures/*.json for every adapter and the device.
+- Real device telemetry accumulating in data/deskmate.sqlite from the
   physical E1002 (battery, temperature, humidity, Wi-Fi, power state).
 - Rendered example PNGs in output/ (gitignored, regenerate with
   scripts/render-all.py).

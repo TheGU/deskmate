@@ -99,17 +99,23 @@ git pull
 docker compose up -d --build
 ```
 
-On that first start, before it serves anything else, the hub imports
-everything the old install had, once: `data/hub.json` (identity),
-`data/telemetry.sqlite` (device history), the pushed files
-(`ai-usage.json`, `tasks.json`, `brief/current.json`, `alert.json`), and
-every environment variable your `.env` had explicitly set (sources,
-calendars, Home Assistant, TTLs, and the rest) - each becomes the matching
-settings section, so nothing you had configured is lost. The container log
-names each piece as it is imported. **Nothing on disk is renamed or
-deleted** by this import: see "The one-time legacy import" in
-docs/SETTINGS.md for what to do with the old files once you have confirmed
-the upgrade, and why leaving them a while longer costs nothing.
+**Keep your old `.env` exactly as it was for this first start.** The
+one-time import reads the old environment variables only on that first
+start after the upgrade, and only imports a settings section when your
+`.env` had at least one of that section's variables explicitly set -
+trimming `.env` down to the new `.env.example` before this first start
+means those sections import as if you had never set them. On that first
+start, before it serves anything else, the hub imports everything the old
+install had, once: `data/hub.json` (identity), `data/telemetry.sqlite`
+(device history), the pushed files (`ai-usage.json`, `tasks.json`,
+`brief/current.json`, `alert.json`), and every environment variable your
+`.env` had explicitly set (sources, calendars, Home Assistant, TTLs, and
+the rest) - each becomes the matching settings section, so nothing you had
+configured is lost. The container log names each piece as it is imported.
+**Nothing on disk is renamed or deleted** by this import: see "The one-time
+legacy import" in docs/SETTINGS.md for what to do with the old files once
+you have confirmed the upgrade, and why leaving them a while longer costs
+nothing.
 
 **Every browser is logged out once.** The session cookie's format changed
 (it now carries a role, admin or reader), so an old cookie is rejected the
@@ -119,8 +125,11 @@ a cookie.
 
 After the restart, open `/settings` and check that the sections you had
 configured came through as expected, and that the device is still
-fetching. Once you are satisfied, delete the old files (see docs/SETTINGS.md
-for the exact list); they are never read again after the import has run.
+fetching. Only then should you trim `.env` down to the new
+`.env.example` and delete the old files (see docs/SETTINGS.md for the
+exact list); putting a trimmed `.env` back, or restoring the old files,
+does nothing at that point - the import is gated by a flag in the database
+and never runs a second time.
 
 The host port default also moved from 8080 to 80 in an earlier version; the
 container still listens on 8080 internally, only the host-side mapping

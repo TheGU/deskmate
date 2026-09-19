@@ -56,7 +56,7 @@ environment, and so on). Owner setup: docs/LOCAL-AGENT.md in the repository.
 1. `GET /api/hub` to confirm the hub is reachable and see each dataset's `source`.
 2. Gather only the datasets you actually have real values for this run (see Ground rules above).
 3. Push each dataset you have, at most once per run.
-4. Read each response's `effective_source` and `warning`. If `effective_source` is not `push`, the
+4. Read each response's `source` and `warning`. If `source` is not `push`, the
    data was stored but the panel will not show it: the owner needs to change that section's source
    on the hub's settings page. Do not retry the push hoping for a different result.
 5. Report what you pushed, what you skipped and why, and any source mismatch from step 4.
@@ -67,8 +67,8 @@ environment, and so on). Owner setup: docs/LOCAL-AGENT.md in the repository.
 All three: `POST`, require the token, `schema_version` optional (defaults to 1; only 1 is
 understood), unknown fields are rejected (422), every datetime field must carry a UTC offset
 (`+07:00` or `Z`; a naive value is 422, never silently assumed to be the hub's own timezone).
-Response 200: `{stored, received_at, count, effective_source}`, plus `warning` when
-`effective_source` is not what you pushed toward (the section's source is pinned to `fixture`, or
+Response 200: `{stored, received_at, count, source}`, plus `warning` when
+`source` is not what you pushed toward (the section's source is pinned to `fixture`, or
 to `obsidian` for tasks).
 
 ### AI usage / quota
@@ -127,13 +127,13 @@ and silently drops whatever the first one had - agree on a single writer for tas
 scheduling this (see Cadence). Completed tasks are never drawn on the panel but still count toward
 the 60-task cap, so drop them from the list once they no longer matter instead of carrying them
 forever as `completed: true`. Pushing `{"tasks": []}` is valid and is how you say "nothing is
-open"; it also makes the source resolve to `file` and clears the DEMO footer word. Pushing nothing
+open"; it also makes the source resolve to `push` and clears the DEMO footer word. Pushing nothing
 at all leaves whatever was there before on the panel.
 
 `due` is a bare date, compared against the hub's own local today (its zone is the `timezone` field
 from `GET /api/hub`, not necessarily yours); send it as a plain date and let the hub's clock decide
-overdue vs. today vs. future. Today draws at most `MAX_PRIORITY_TASKS` (default 3) of the open
-tasks.
+overdue vs. today vs. future. Today draws at most the tasks section's Max priority tasks setting
+(default 3) of the open tasks.
 
 If you derive `id` from a source document, avoid a recipe that hashes in a line number: an edit
 that shifts lines then looks like a brand new task instead of an update to the old one. Prefer the
@@ -146,10 +146,10 @@ AI usage belongs to the quota hook when the owner has one running: if a hook alr
 which one owns it before your first run. Without a hook, push ai-usage on the owner's own
 status-line cadence (07:30, 11:30, 17:30) plus immediately whenever the number itself changes.
 
-Push the brief once per mode. The hub picks morning/evening by its own clock at
-`BRIEF_EVENING_HOUR` (default 14), so a 07:30 and an 11:30 run both land as "morning" and the later
-push silently overwrites the earlier one - do not count on two pushes in the same window both
-surviving.
+Push the brief once per mode. The hub picks morning/evening by its own clock at the brief
+section's Evening hour setting (default 14), so a 07:30 and an 11:30 run both land as "morning"
+and the later push silently overwrites the earlier one - do not count on two pushes in the same
+window both surviving.
 
 Push tasks whenever your own task list changes; push an empty list (`{"tasks": []}`) when nothing
 is open, not nothing at all (see Tasks above). There is no polling, so a stale list stays stale
@@ -184,9 +184,9 @@ also fails, stop and report. Never loop.
 
 ## Staleness
 
-Each pushed dataset has its own staleness threshold (`AI_USAGE_STALE_SECONDS` default 21600,
-`BRIEF_STALE_SECONDS` and `TASKS_STALE_SECONDS` default 36000, all in seconds; a value under 3600
-never marks anything, since the age is always bucketed to whole hours). Past the threshold the
+Each pushed dataset has its own Stale seconds setting on the hub's settings page (ai_usage default
+21600, brief and tasks default 36000, all in seconds; a value under 3600 never marks anything,
+since the age is always bucketed to whole hours). Past the threshold the
 panel marks the section with a yellow tell-tale and an hour-bucketed age, and flags the page's
 footer entry with `!`. The mark can lag your push by up to one page's cache TTL. A fixture-sourced
 dataset is never marked stale; instead, on the Today and Brief pages (the only pages that draw the
@@ -194,7 +194,7 @@ three pushed datasets), the footer prints DEMO for as long as one of them is sti
 
 ## Verification
 
-The push response is the confirmation: `effective_source == "push"` with no `warning` means the
+The push response is the confirmation: `source == "push"` with no `warning` means the
 panel will show it, and `GET /api/hub`'s `source` field for that dataset updates instantly too. The panel itself
 lags: Today's page cache is 30 minutes and the device's own refresh timer is another 30 minutes,
 so DEMO or old data still showing for a few minutes after a good push is normal, not a failure. Do

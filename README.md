@@ -18,8 +18,11 @@ Data sources -> dashboard-hub (FastAPI + Jinja2 + Chromium at 4x + Lanczos + Pil
 
 Pages: `today`, `agenda`, `weather`, `brief`, `system`, `alert`.
 
-Status (2026-09-19): the E1002 is flashed and running on the desk, and
-dashboard-hub is deployed with Docker. It serves the Today, Agenda, Weather,
+Status (2026-09-19): the E1002 is flashed and running on the desk, its Wi-Fi,
+hub URL and device key provisioned at runtime rather than baked into the
+firmware, and dashboard-hub is deployed with Docker. Setup, every setting
+and backup/restore are a web page (`/setup`, `/settings`; see
+docs/SETTINGS.md), not `.env` edits. It serves the Today, Agenda, Weather,
 Brief and System pages plus alerts, each pulling from its configured source
 or, honestly, reporting unavailable.
 
@@ -32,24 +35,31 @@ cd dashboard
 uv sync --all-groups
 uv run playwright install chromium
 
-# render every page to ../output/ without starting a server, using demo data
-# (scripts/render-all.py pins every *_SOURCE to fixture)
-uv run python ../scripts/render-all.py
-
-# or run the server against the same demo data
-TASKS_SOURCE=fixture CALENDAR_SOURCE=fixture WEATHER_SOURCE=fixture \
-AI_USAGE_SOURCE=fixture BRIEF_SOURCE=fixture HA_SOURCE=fixture \
+# run the server, then open http://127.0.0.1:8080/setup in a browser
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-With no source variables set, every block on every page renders as an honest
-empty state instead of demo data; see `.env.example` and
-docs/DATA-SOURCES.md to configure real sources.
+The wizard claims the hub, shows the bearer token and device key once, and
+walks a few settings sections; skip any of them and configure the rest on
+`/settings` afterwards (see docs/SETTINGS.md). A freshly claimed hub with
+nothing configured renders an honest empty state instead of demo data on
+every page.
+
+To see the demo pages without a server, or without configuring anything:
+
+```sh
+uv run python ../scripts/render-all.py
+```
+
+This renders every page to `../output/` with every source pinned to
+`fixture` (the fixture files under `fixtures/`, unaffected by anything on
+`/settings`).
 
 Then open <http://127.0.0.1:8080/preview> to flip through the pages: the raw
 HTML by default, with a toggle to switch to the simulated panel PNG. A fresh,
 unconfigured hub serves nothing but `/setup`; once you set it up (see Setup
-below), a browser needs to sign in at `/login` with the device key first.
+below), a browser needs to sign in at `/login` with the token or the device
+key first.
 
 Tests:
 
@@ -72,8 +82,9 @@ If host port 80 is already in use, or needs no privileges, set `HUB_PORT` in
 `.env` (for example `HUB_PORT=8080`) and use that port in the URLs above and
 in the device's `hub_base_url`.
 
-The compose service mounts `./data` read-write (files other agents write),
-`./fixtures` read-only, and optionally an Obsidian vault read-only at `/vault`.
+The compose service mounts `./data` read-write (the hub's own database,
+`deskmate.sqlite`), and optionally an Obsidian vault read-only at `/vault`;
+the demo fixtures are baked into the image, no volume needed.
 
 ### Setup
 
@@ -90,7 +101,11 @@ address); see "Reverse proxy" in [docs/DEPLOY.md](docs/DEPLOY.md). Open
 `http://127.0.0.1/setup` and enter a hub name and the public base URL.
 The result page shows **two secrets**, each **once**; save both, there is no
 way to see either again: a bearer token for agents (read and write), and a
-device key for the E1002 firmware (read only). Push endpoints and
+device key for the E1002 firmware (read only). Claiming the hub also signs
+you in as admin and offers a short setup wizard for the timezone, weather
+location, calendar feeds and Home Assistant; everything else (tasks, AI
+usage, brief, device, backup, rotate) is on `/settings` afterwards - see
+[docs/SETTINGS.md](docs/SETTINGS.md). Push endpoints and
 `POST`/`DELETE /api/alert` need `Authorization: Bearer <token>`; every read
 route needs the token, the device key, or a browser session from `/login`.
 See [docs/DEPLOY.md](docs/DEPLOY.md) for the full server setup and
@@ -102,16 +117,19 @@ push data with [docs/LOCAL-AGENT.md](docs/LOCAL-AGENT.md).
 
 Once the hub is set up, every row below except `/setup` and `/login` needs
 a credential: the bearer token or device key as `Authorization: Bearer <...>` for a read, only the
-token for a write, and a `/login` session cookie also works for a read from
-a browser. Before it is set up, every one of these answers `503` (the
-reader routes) or redirects to `/setup` (`/preview` and `/`). See "Auth" in
+token for a write (an admin session or the token for a settings route), and
+a `/login` session cookie also works for a read from a browser. Before it
+is set up, every one of these answers `503` (the reader and admin routes)
+or redirects to `/setup` (`/preview` and `/`). See "Auth" in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full rule.
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/healthz` | Liveness. Last known status per adapter, never fetches; `unknown` before the first render. `GET /api/state` forces the adapters. Always `200`; a minimal body while unconfigured or for an unauthenticated caller once set up |
 | GET, POST | `/setup` | Set up the hub (see Setup above); open, guarded by the caller's address, not a credential |
-| GET | `/login` | Sign in with the device key or the token; sets a session cookie |
+| GET, POST | `/setup/{step}` | The setup wizard's optional steps; admin only |
+| GET | `/login` | Sign in with the token (admin) or the device key (reader); sets a session cookie |
+| GET | `/settings` | Every settings section, backup, restore and rotate; admin only, see [docs/SETTINGS.md](docs/SETTINGS.md) |
 | GET | `/api/hub` | Hub name, base URL, configured sources |
 | GET | `/api/state` | The normalized state the pages render from |
 | GET | `/display/{page}.png` | 800x480 PNG, `ETag` + `304`, `?t=` busts the cache |
@@ -133,10 +151,9 @@ interactive Swagger UI.
 | --- | --- |
 | `dashboard/` | The dashboard-hub server, its Dockerfile and tests |
 | `fixtures/` | Demo data, used when no integration is enabled |
-| `data-examples/` | Templates for the files other agents write into `data/` |
-| `data/` | Runtime data (`hub.json`, brief, ai-usage, tasks, alert). Gitignored |
+| `data/` | The hub's own database, `deskmate.sqlite` (identity, settings, pushed datasets, telemetry). Gitignored |
 | `output/` | Generated example PNGs. Gitignored |
-| `docs/` | Architecture, data sources, deploy, hooks, flashing, factory restore |
+| `docs/` | Architecture, data sources, deploy, settings, hooks, flashing, factory restore |
 | `skills/` | `deskmate/SKILL.md`, how a remote agent pushes data to the hub |
 | `scripts/` | Backup, verify and render helpers |
 | `firmware/` | ESPHome YAML for the E1002, secrets example, its own venv |
@@ -170,10 +187,13 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - the binding spec: endpoints,
-  auth, palette, config names, refresh policy.
-- [docs/DATA-SOURCES.md](docs/DATA-SOURCES.md) - how to configure each adapter,
-  the push endpoints, the `data/` file schemas, the alert API and a Home
-  Assistant example.
+  auth, palette, storage, refresh policy.
+- [docs/SETTINGS.md](docs/SETTINGS.md) - the setup wizard, the settings page
+  and every section's fields, backup and restore, rotate, reset, the
+  one-time legacy import.
+- [docs/DATA-SOURCES.md](docs/DATA-SOURCES.md) - how to configure each
+  section's source, the push endpoints, the alert API and a Home Assistant
+  example.
 - [skills/deskmate/SKILL.md](skills/deskmate/SKILL.md) - how a remote agent
   pushes AI usage, a brief and tasks to the hub.
 - [docs/HOOKS.md](docs/HOOKS.md) - a POSIX sh hook that pushes AI quota
@@ -181,11 +201,13 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 - [docs/LOCAL-AGENT.md](docs/LOCAL-AGENT.md) - setting up an external agent
   that pushes AI usage, a brief and tasks to a set-up hub.
 - [docs/DEPLOY.md](docs/DEPLOY.md) - running dashboard-hub in Docker on a
-  homelab server: setting it up, the firmware secret, reverse proxy, backup.
+  homelab server: setting it up, upgrading, the firmware secret, reverse
+  proxy, backup.
 - [docs/FACTORY-RESTORE.md](docs/FACTORY-RESTORE.md) - restoring the factory
   firmware dump.
 - [docs/FLASHING.md](docs/FLASHING.md) - flashing procedure.
-- [.env.example](.env.example) - every configuration variable, commented.
+- [.env.example](.env.example) - what is left outside the settings page:
+  `HUB_PORT`, `PUID`, `PGID`, the Obsidian bind mount, a few process knobs.
 
 ## Design rules
 
@@ -200,8 +222,8 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
   field turns blue, red, yellow or green only when it carries that state, and
   healthy is the quiet default. Calendars are the one exception: each feed
   gets a color, and the time of every event prints in its calendar's color
-  (`CALENDAR_NAMES` only decides which feed gets which color; no page prints
-  a legend).
+  (a feed's name on `/settings` only decides which feed gets which color;
+  no page prints a legend).
 - Type floors for a 1-bit panel: row text 24 px weight 700, labels and chips
   16 px weight 700 by default, with a 14 px floor for the few contexts
   measured to need it (the System chart key, the agenda month weekday row,

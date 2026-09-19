@@ -105,10 +105,10 @@ inside one push is `422`. The push writes a `tasks` row of the `datasets`
 table (`data/deskmate.sqlite`) and invalidates the cached adapter, so
 `/api/state` reflects it on the very next build. Response `200`:
 `{"stored": "tasks", "received_at": "<local ISO>", "count": <n>,
-"effective_source": "push"|"fixture"|"obsidian"}`, plus `"warning"` when the
+"source": "push"|"fixture"|"obsidian"}`, plus `"warning"` when the
 tasks section's source is pinned to `fixture` or set to `obsidian` (either
 way the push is stored, but the panel will not show it, and
-`effective_source` names which). Full shape: `GET /openapi.json`.
+`source` names which). Full shape: `GET /openapi.json`.
 
 ### Obsidian (read only)
 
@@ -227,7 +227,7 @@ defaults to the moment of the push if omitted. The push writes an
 `ai_usage` row of the `datasets` table (`data/deskmate.sqlite`) and
 invalidates the cached adapter, so `/api/state` reflects it on the very next
 build. Response `200`: `{"stored": "ai_usage", "received_at": "<local ISO>",
-"count": <n>, "effective_source": "push"|"fixture"}`, plus `"warning"` when
+"count": <n>, "source": "push"|"fixture"}`, plus `"warning"` when
 the ai_usage section's source is pinned to `fixture` (the push is stored,
 but the panel will not show it until the section's source changes). Unknown
 fields, a `schema_version` other than 1, or more than 8 providers are `422`.
@@ -269,7 +269,7 @@ chars}`, `generated_at` optional (a UTC-offset datetime; a naive value is
 `422`), defaults to the moment of the push. The push writes a `brief` row of
 the `datasets` table (`data/deskmate.sqlite`) and invalidates the cached
 adapter. Response `200`: `{"stored": "brief", "received_at": "<local ISO>",
-"count": <n sections>, "effective_source": "push"|"fixture"}`, plus
+"count": <n sections>, "source": "push"|"fixture"}`, plus
 `"warning"` when the brief section's source is pinned to `fixture`. Full
 shape: `GET /openapi.json`.
 

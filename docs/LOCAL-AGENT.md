@@ -33,9 +33,9 @@ whatever the last push said.
   scheduled agent pushes this, never both. If you install the hook, it owns
   ai-usage from then on.
 - **Tasks.** Pick exactly one task source: an agent that reads your real
-  task manager and pushes, or a hand-written `data/tasks.json`. Two agents
-  both pushing tasks will fight over the whole list on every push (see
-  section 6).
+  task manager and pushes, or the tasks section's `obsidian` source reading
+  a vault directly. Two agents both pushing tasks will fight over the whole
+  list on every push (see section 6).
 - **Brief.** Pick exactly one writer for the brief, per mode. Two writers
   pushing the same mode in the same window means whichever runs last wins
   and the other's content is gone.
@@ -220,7 +220,7 @@ policy it follows.
 
 ## 8. Verifying on the panel
 
-A push response with `effective_source == "push"` and no `warning` is the
+A push response with `source == "push"` and no `warning` is the
 confirmation that it worked; `GET /api/hub`'s `sources` entry for that
 dataset reports the same source instantly too (send the same
 `Authorization` header there; see section 3). The panel itself lags behind
@@ -238,7 +238,7 @@ change.
 | `422` | Body rejected. Check for a naive datetime first (every timestamp needs a UTC offset) before other field problems. |
 | `503` | The hub itself is not set up yet, or its database is unreadable; an owner step, not an agent one (see `docs/DEPLOY.md`). |
 | Connection refused / DNS failure | Wrong `DESKMATE_URL`, the hub container is down, or a network path is missing between the agent machine and the server. |
-| `effective_source` stays `fixture` or `obsidian` | The section's source on `/settings` (ai_usage, brief, or tasks) is pinned away from `push`; change it there (see docs/SETTINGS.md). |
+| `source` stays `fixture` or `obsidian` | The section's source on `/settings` (ai_usage, brief, or tasks) is pinned away from `push`; change it there (see docs/SETTINGS.md). |
 | A stale flag will not clear | The pushed `generated_at` / `collected_at` is old, or an agent keeps re-pushing an old timestamp instead of the real one; push current content with its true timestamp. |
 | The task or brief list keeps changing unexpectedly | More than one writer is pushing the same dataset; revisit section 2 and settle on one. |
 
