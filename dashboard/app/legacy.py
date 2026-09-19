@@ -18,6 +18,18 @@ Two rules shape the whole file:
   ``hub`` row, a non-empty ``telemetry`` table, a ``datasets`` row). So an
   operator who claimed the new hub before the old files were mounted keeps
   what they claimed.
+* **A failed piece keeps the gate open.** ``hub.json`` is the identity: an
+  unreadable one still stops the start outright (see :func:`_import_hub`).
+  But an unreadable ``telemetry.sqlite`` or pushed dataset file is not fatal
+  and must not be either - the dashboard has to come up either way. Losing
+  it *quietly*, forever, on the next restart is the failure mode this rule
+  closes: :func:`_import_telemetry` and :func:`_import_datasets` each log at
+  ERROR and report whether they fully succeeded, and
+  ``meta.legacy_imported_at`` is only written when every piece succeeded or
+  was genuinely absent (an absent file is success). An incomplete import
+  therefore retries its failed piece - and only that piece, since a
+  succeeded one already has its row - on every subsequent start until the
+  file is fixed or removed.
 
 :class:`LegacyEnv` is a copy of the ``config.py:Settings`` field list as it
 stood before the settings moved into the database: same environment names,
@@ -375,16 +387,33 @@ def import_legacy(db: Database, env: LegacyEnv, data_dir: Path) -> bool:
     environment supplies the values, the caller supplies the location, so a
     hub whose ``DATA_DIR`` comes from somewhere other than the environment
     still reads its own files.
+
+    ``meta.legacy_imported_at`` - the gate - is only written when
+    :func:`_import_telemetry` and :func:`_import_datasets` both report they
+    fully succeeded (an absent file counts as success). A failed piece is
+    logged at ERROR and leaves the gate open, so the next start retries
+    whatever failed instead of leaving it lost. ``_import_hub`` is not part
+    of that: an unreadable ``hub.json`` still raises and stops the start
+    outright, as it always has.
     """
     if db.meta_get(LEGACY_IMPORTED_KEY) is not None:
         return False
 
     _import_hub(db, data_dir / "hub.json")
-    _import_telemetry(db, env.telemetry_db_path or (data_dir / "telemetry.sqlite"))
-    _import_datasets(db, env, data_dir)
+    telemetry_ok = _import_telemetry(db, env.telemetry_db_path or (data_dir / "telemetry.sqlite"))
+    datasets_ok = _import_datasets(db, env, data_dir)
     _import_settings(db, env)
 
-    db.meta_set(LEGACY_IMPORTED_KEY, utc_now_iso())
+    if telemetry_ok and datasets_ok:
+        db.meta_set(LEGACY_IMPORTED_KEY, utc_now_iso())
+    else:
+        log(
+            logger,
+            logging.ERROR,
+            "legacy import incomplete; the failed piece will be retried on the next start",
+            telemetry_imported=telemetry_ok,
+            datasets_imported=datasets_ok,
+        )
     return True
 
 
@@ -447,21 +476,26 @@ def _read_hub_json(path: Path) -> HubConfig:
         raise HubConfigUnreadable(message) from exc
 
 
-def _import_telemetry(db: Database, path: Path) -> None:
+def _import_telemetry(db: Database, path: Path) -> bool:
     """The old ``telemetry.sqlite`` rows, only when ``telemetry`` is empty.
 
     ``ATTACH`` and one ``INSERT ... SELECT`` over the columns both files have
     in common: an old file predates ``battery_mode`` and the rest, and those
-    rows keep their NULLs rather than being dropped. A file that will not
-    attach or will not read is logged and skipped, never fatal: losing the
-    history costs a chart, not the hub.
+    rows keep their NULLs rather than being dropped.
+
+    Returns True when there was nothing to do (rows already present, or the
+    file is absent) or the copy succeeded; False when a file that exists
+    could not be attached or read, which is now an ERROR rather than a
+    WARNING: :func:`import_legacy` reads this to decide whether the legacy
+    gate may close, so a broken file is retried on the next start instead of
+    being lost quietly for good the moment the gate closes behind it.
     """
     with db.reading() as connection:
         count = int(connection.execute("SELECT COUNT(*) AS n FROM telemetry").fetchone()["n"])
     if count:
-        return
+        return True
     if not path.is_file():
-        return
+        return True
     copied = 0
     with db.writing() as connection:
         target = {str(row["name"]) for row in connection.execute("PRAGMA table_info(telemetry)")}
@@ -470,12 +504,12 @@ def _import_telemetry(db: Database, path: Path) -> None:
         except sqlite3.Error as exc:
             log(
                 logger,
-                logging.WARNING,
+                logging.ERROR,
                 "cannot attach legacy telemetry",
                 path=str(path),
                 error=str(exc),
             )
-            return
+            return False
         try:
             source = [
                 str(row["name"])
@@ -485,11 +519,11 @@ def _import_telemetry(db: Database, path: Path) -> None:
             if not shared:
                 log(
                     logger,
-                    logging.WARNING,
+                    logging.ERROR,
                     "legacy telemetry has no usable columns",
                     path=str(path),
                 )
-                return
+                return False
             columns = ", ".join(shared)
             copied = max(
                 0,
@@ -501,12 +535,12 @@ def _import_telemetry(db: Database, path: Path) -> None:
         except sqlite3.Error as exc:
             log(
                 logger,
-                logging.WARNING,
+                logging.ERROR,
                 "cannot import legacy telemetry",
                 path=str(path),
                 error=str(exc),
             )
-            return
+            return False
         finally:
             # DETACH refuses to run inside a transaction, and the INSERT above
             # opened one, so the commit has to happen here rather than on the
@@ -514,6 +548,7 @@ def _import_telemetry(db: Database, path: Path) -> None:
             connection.commit()
             connection.execute("DETACH DATABASE legacy_import")
     log(logger, logging.INFO, "legacy telemetry imported", path=str(path), rows=copied)
+    return True
 
 
 def _dataset_files(env: LegacyEnv, data_dir: Path) -> dict[str, Path]:
@@ -528,8 +563,20 @@ def _dataset_files(env: LegacyEnv, data_dir: Path) -> dict[str, Path]:
     }
 
 
-def _import_datasets(db: Database, env: LegacyEnv, data_dir: Path) -> None:
-    """The four pushed files into ``datasets``, each only when its row is absent."""
+def _import_datasets(db: Database, env: LegacyEnv, data_dir: Path) -> bool:
+    """The four pushed files into ``datasets``, each only when its row is
+    absent.
+
+    Returns True when every existing file imported cleanly (an absent file
+    or one already imported both count as success); False when at least one
+    existing file could not be read. That failure is now an ERROR rather
+    than a WARNING, and the loop still visits every other file - a broken
+    ``tasks.json`` must not cost the hub its ``ai_usage`` or ``brief`` import
+    too - but :func:`import_legacy` reads the returned False to keep the
+    legacy gate open, so the broken file is retried (and only that one,
+    since the rest already have their rows) on the next start.
+    """
+    ok = True
     for name, path in _dataset_files(env, data_dir).items():
         if not path.is_file():
             continue
@@ -542,7 +589,8 @@ def _import_datasets(db: Database, env: LegacyEnv, data_dir: Path) -> None:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            log(logger, logging.WARNING, "cannot import pushed file", path=str(path), error=str(exc))
+            log(logger, logging.ERROR, "cannot import pushed file", path=str(path), error=str(exc))
+            ok = False
             continue
         received_at = _received_at(payload, path)
         with db.writing() as connection:
@@ -558,6 +606,7 @@ def _import_datasets(db: Database, env: LegacyEnv, data_dir: Path) -> None:
             path=str(path),
             received_at=received_at,
         )
+    return ok
 
 
 def _received_at(payload: Any, path: Path) -> str:
