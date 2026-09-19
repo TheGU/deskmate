@@ -67,6 +67,7 @@ from app.backup import (
     restore_temp_path,
 )
 from app.config import Env, Settings
+from app.datasets import write_dataset
 from app.db import get_database
 from app.hub_config import (
     ADMIN_SESSION_MAX_AGE_SECONDS,
@@ -271,33 +272,6 @@ def etag_matches(header: str | None, etag: str) -> bool:
     return False
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    """Atomic JSON write: fsync the temp file, then ``os.replace`` it into place.
-
-    Same pattern as ``app/alerts.py`` and ``app/hub_config.py``, plus two
-    things they do not need for a single small file written on every push:
-    ``fsync`` before the rename, so a crash right after does not leave the
-    rename pointing at a truncated file, and removing the temp file on any
-    failure (a bad serializer, a full disk) instead of leaving a stray
-    ``*.tmp`` in ``DATA_DIR``. Creates the parent directory when absent, so
-    a first push into ``DATA_DIR/brief`` does not need it to exist already.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"
-    )
-    tmp_path = Path(handle.name)
-    try:
-        with handle:
-            json.dump(payload, handle, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-
-
 async def _read_capped_body(request: Request) -> bytes:
     """Read ``request``'s body in chunks, rejecting it once it passes
     ``MAX_OPEN_BODY_BYTES`` instead of buffering an arbitrarily large one.
@@ -409,7 +383,7 @@ def _push_warning(section: str, configured: str) -> str | None:
     the panel actually draws: the source is pinned to ``fixture`` (a fresh
     hub still shows demo data for this dataset) or, for tasks only,
     ``obsidian`` (the push landed but the panel keeps reading the vault).
-    ``None`` when the source is ``push``, since that is exactly the file this
+    ``None`` when the source is ``push``, since that is exactly the row this
     route just wrote.
     """
     if configured == "push":
@@ -597,11 +571,11 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
                 "configured": hub.identity.configured,
                 "version": __version__,
                 "timezone": hub.hub_settings.general.timezone,
-                # Straight from the section models: with "push" always the
-                # strict file adapter in this package (see
-                # adapters/base.py's docstring), there is no live/last-fetch
-                # split left to report (that was the "auto" selector's own
-                # story, dropped per the plan's Non-goals).
+                # Straight from the section models: "push" always reads the
+                # matching ``datasets`` row (app/datasets.py) directly, so
+                # there is no live/last-fetch split left to report (that was
+                # the "auto" selector's own story, dropped per the plan's
+                # Non-goals).
                 "sources": {
                     "ai_usage": {"source": hub.hub_settings.ai_usage.source},
                     "brief": {"source": hub.hub_settings.brief.source},
@@ -611,7 +585,7 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         )
 
     # -- pushed data -------------------------------------------------------
-    # Every push writes atomically in a threadpool, then invalidates the
+    # Every push writes its dataset row in a threadpool, then invalidates the
     # matching CachedAdapter so /api/state reflects it on the very next
     # build, not after the adapter's own TTL.
     @app.post("/api/ai-usage", dependencies=[Depends(require_token)])
@@ -619,15 +593,13 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         hub: Hub = app.state.hub
         received_at = datetime.now(dt_timezone.utc)
         document = {
-            "received_at": received_at.isoformat(),
             "providers": [item.model_dump(mode="json") for item in payload.providers],
         }
-        target = hub.env.data_dir / "ai-usage.json"
-        await run_in_threadpool(_write_json_atomic, target, document)
+        await run_in_threadpool(write_dataset, hub.db, "ai_usage", document, received_at)
         hub.state_service.ai_usage.invalidate()
         configured = hub.hub_settings.ai_usage.source
         body: dict[str, Any] = {
-            "stored": target.name,
+            "stored": "ai_usage",
             "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             "count": len(payload.providers),
             "effective_source": configured,
@@ -643,19 +615,17 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         received_at = datetime.now(dt_timezone.utc)
         mode = payload.mode or current_mode(hub.hub_settings.brief, hub.hub_settings.general)
         document = {
-            "received_at": received_at.isoformat(),
             "mode": mode.value,
             "headline": payload.headline,
             "note": payload.note or "",
             "sections": [section.model_dump(mode="json") for section in payload.sections],
             "generated_at": payload.generated_at.isoformat(),
         }
-        target = hub.env.data_dir / "brief" / "current.json"
-        await run_in_threadpool(_write_json_atomic, target, document)
+        await run_in_threadpool(write_dataset, hub.db, "brief", document, received_at)
         hub.state_service.brief.invalidate()
         configured = hub.hub_settings.brief.source
         body: dict[str, Any] = {
-            "stored": target.name,
+            "stored": "brief",
             "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             "count": len(payload.sections),
             "effective_source": configured,
@@ -670,15 +640,13 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         hub: Hub = app.state.hub
         received_at = datetime.now(dt_timezone.utc)
         document = {
-            "received_at": received_at.isoformat(),
             "tasks": [item.model_dump(mode="json") for item in payload.tasks],
         }
-        target = hub.env.data_dir / "tasks.json"
-        await run_in_threadpool(_write_json_atomic, target, document)
+        await run_in_threadpool(write_dataset, hub.db, "tasks", document, received_at)
         hub.state_service.tasks.invalidate()
         configured = hub.hub_settings.tasks.source
         body: dict[str, Any] = {
-            "stored": target.name,
+            "stored": "tasks",
             "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             "count": len(payload.tasks),
             "effective_source": configured,
