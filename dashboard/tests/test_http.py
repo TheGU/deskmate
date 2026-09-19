@@ -25,7 +25,10 @@ flow, and keeps its explicit ``auth(token)`` headers for the write routes
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +37,7 @@ from fastapi.testclient import TestClient
 
 from app.config import REPO_ROOT, Settings
 from app.db import Database
-from app.hub_config import COOKIE_NAME, ClaimedSecrets
+from app.hub_config import ADMIN_SESSION_MAX_AGE_SECONDS, COOKIE_NAME, ClaimedSecrets, session_role
 from app.main import MAX_OPEN_BODY_BYTES, create_app, etag_matches
 from app.renderer.palette import DISPLAY_SIZE
 from app.renderer.render import PAGES
@@ -150,6 +153,13 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
         # from any column of the row.
         assert stored["token_sha256"] != token
         assert token not in [str(value) for value in stored.values()]
+
+        # The claimer was just shown the token on this page: setup-done
+        # signs them in as admin right there, cookie included.
+        admin_cookie = right.cookies.get(COOKIE_NAME)
+        assert admin_cookie
+        assert session_role(hub.identity.config.session_secret, admin_cookie, time.time()) == "admin"
+        assert f"Max-Age={ADMIN_SESSION_MAX_AGE_SECONDS}" in right.headers["set-cookie"]
 
         configured_page = flow_client.get("/setup")
         assert configured_page.status_code == 200
@@ -601,6 +611,116 @@ def test_login_with_the_device_key_sets_a_cookie_good_for_preview_and_state(
     # /preview must not be able to inject a reading or fire an alert).
     assert cookie_only.post("/api/alert", json={"title": "x"}).status_code == 401
     assert cookie_only.post("/api/device/telemetry", json={"device": "x"}).status_code == 401
+
+
+# -- roles: /settings and /settings/general (package 1.4 replaces the stub) -
+def test_device_key_bearer_is_refused_at_the_settings_routes(
+    client: TestClient, device_key: str
+) -> None:
+    """The device key is a valid reader credential but never an admin one
+    (require_admin/require_admin_html check the bearer with verify_token
+    only): POST is a plain 401, GET is sent to /login rather than a bare
+    401 page."""
+    assert (
+        client.post("/settings/general", data={}, headers=auth(device_key)).status_code == 401
+    )
+    redirect = client.get("/settings", headers=auth(device_key), follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].startswith("/login")
+
+
+def test_token_bearer_is_accepted_at_the_settings_routes(
+    client: TestClient, hub_token: str
+) -> None:
+    assert (
+        client.post("/settings/general", data={}, headers=auth(hub_token)).status_code == 204
+    )
+    page = client.get("/settings", headers=auth(hub_token))
+    assert page.status_code == 200
+    assert "Settings" in page.text
+
+
+def test_login_with_the_token_yields_an_admin_cookie_that_reaches_settings(
+    client: TestClient, hub_token: str
+) -> None:
+    response = client.post(
+        "/login", data={"key": hub_token, "next": "/preview"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    cookie = response.cookies.get(COOKIE_NAME)
+    assert cookie
+    config = client.app.state.hub.identity.config
+    assert session_role(config.session_secret, cookie, time.time()) == "admin"
+    assert f"Max-Age={ADMIN_SESSION_MAX_AGE_SECONDS}" in response.headers["set-cookie"]
+
+    cookie_only = TestClient(client.app, cookies={COOKIE_NAME: cookie})
+    assert cookie_only.get("/settings").status_code == 200
+    assert cookie_only.post("/settings/general", data={}).status_code == 204
+
+
+def test_login_with_the_device_key_yields_a_reader_cookie_turned_away_from_settings(
+    client: TestClient, device_key: str
+) -> None:
+    response = client.post(
+        "/login", data={"key": device_key, "next": "/preview"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    cookie = response.cookies.get(COOKIE_NAME)
+    assert cookie
+    config = client.app.state.hub.identity.config
+    assert session_role(config.session_secret, cookie, time.time()) == "reader"
+
+    cookie_only = TestClient(client.app, cookies={COOKIE_NAME: cookie})
+    assert cookie_only.get("/preview").status_code == 200
+    redirect = cookie_only.get("/settings", follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].startswith("/login")
+    assert cookie_only.post("/settings/general", data={}).status_code == 401
+
+
+def test_a_reader_cookie_is_refused_by_admin_authenticated(
+    client: TestClient, device_key: str
+) -> None:
+    """A cookie minted for the reader role (here, by signing in with the
+    device key) must never pass admin_authenticated, on either settings
+    route."""
+    login = client.post(
+        "/login", data={"key": device_key, "next": "/preview"}, follow_redirects=False
+    )
+    reader_cookie = login.cookies.get(COOKIE_NAME)
+    assert reader_cookie
+    cookie_only = TestClient(client.app, cookies={COOKIE_NAME: reader_cookie})
+    assert cookie_only.post("/settings/general", data={}).status_code == 401
+    redirect = cookie_only.get("/settings", follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].startswith("/login")
+
+
+def test_an_old_format_cookie_is_rejected_everywhere(client: TestClient) -> None:
+    """A cookie in the pre-role "<exp>.<mac>" format (the MAC over
+    "browser|<exp>") must be rejected by every guard, reader and admin
+    alike - never treated as a valid, let alone admin, session."""
+    config = client.app.state.hub.identity.config
+    exp = int(time.time() + 1000)
+    old_mac = hmac.new(
+        config.session_secret.encode("utf-8"), f"browser|{exp}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    old_cookie = f"{exp}.{old_mac}"
+    cookie_only = TestClient(client.app, cookies={COOKIE_NAME: old_cookie})
+    assert cookie_only.get("/preview", follow_redirects=False).status_code == 303
+    assert cookie_only.get("/api/state").status_code == 401
+    redirect = cookie_only.get("/settings", follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].startswith("/login")
+    assert cookie_only.post("/settings/general", data={}).status_code == 401
+
+
+def test_post_settings_general_rejects_an_oversized_body(
+    client: TestClient, hub_token: str
+) -> None:
+    oversized = {"anything": "x" * (MAX_OPEN_BODY_BYTES + 1)}
+    response = client.post("/settings/general", data=oversized, headers=auth(hub_token))
+    assert response.status_code == 413
 
 
 def test_device_telemetry_post_accepts_the_device_key_bearer_on_a_claimed_hub(

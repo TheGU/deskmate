@@ -4,6 +4,8 @@ check, claim_hub, the session cookie."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 from collections.abc import Iterator
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
@@ -12,13 +14,14 @@ import pytest
 
 from app.db import Database
 from app.hub_config import (
+    ADMIN_SESSION_MAX_AGE_SECONDS,
     AlreadyConfigured,
     ClaimedSecrets,
     HubConfig,
     HubConfigUnreadable,
     HubIdentity,
     InvalidBaseURL,
-    SESSION_MAX_AGE_SECONDS,
+    READER_SESSION_MAX_AGE_SECONDS,
     claim_hub,
     generate_token,
     hash_token,
@@ -26,6 +29,7 @@ from app.hub_config import (
     load_hub_config,
     mint_session_cookie,
     session_cookie_valid,
+    session_role,
     token_matches,
     validate_base_url,
     write_hub_config,
@@ -238,33 +242,78 @@ def test_a_claim_is_what_a_fresh_identity_reads_back(database: Database) -> None
 
 
 # -- session cookie -----------------------------------------------------
-def test_session_cookie_round_trips_when_valid() -> None:
+@pytest.mark.parametrize("role", ["admin", "reader"])
+def test_session_cookie_round_trips_when_valid(role: str) -> None:
     now = 1_000_000.0
-    cookie = mint_session_cookie("s3cr3t", now)
+    cookie = mint_session_cookie("s3cr3t", now, role)
+    assert session_role("s3cr3t", cookie, now) == role
     assert session_cookie_valid("s3cr3t", cookie, now)
+
+
+def test_admin_and_reader_cookies_have_different_lifetimes() -> None:
+    """Admin cookies (from the token) last 7 days; reader cookies (from the
+    device key) last 30: an admin credential is shorter-lived on purpose."""
+    now = 1_000_000.0
+    admin_cookie = mint_session_cookie("s3cr3t", now, "admin")
+    reader_cookie = mint_session_cookie("s3cr3t", now, "reader")
+    assert session_role("s3cr3t", admin_cookie, now + ADMIN_SESSION_MAX_AGE_SECONDS - 1) == "admin"
+    assert session_role("s3cr3t", admin_cookie, now + ADMIN_SESSION_MAX_AGE_SECONDS + 1) is None
+    assert (
+        session_role("s3cr3t", reader_cookie, now + READER_SESSION_MAX_AGE_SECONDS - 1)
+        == "reader"
+    )
+    assert session_role("s3cr3t", reader_cookie, now + READER_SESSION_MAX_AGE_SECONDS + 1) is None
 
 
 def test_session_cookie_rejects_after_expiry() -> None:
     now = 1_000_000.0
-    cookie = mint_session_cookie("s3cr3t", now)
-    past_expiry = now + SESSION_MAX_AGE_SECONDS + 1
+    cookie = mint_session_cookie("s3cr3t", now, "reader")
+    past_expiry = now + READER_SESSION_MAX_AGE_SECONDS + 1
+    assert session_role("s3cr3t", cookie, past_expiry) is None
     assert not session_cookie_valid("s3cr3t", cookie, past_expiry)
 
 
 def test_session_cookie_rejects_a_tampered_mac() -> None:
     now = 1_000_000.0
-    cookie = mint_session_cookie("s3cr3t", now)
-    exp, _, mac = cookie.partition(".")
-    tampered = f"{exp}.{'0' if mac[0] != '0' else '1'}{mac[1:]}"
+    cookie = mint_session_cookie("s3cr3t", now, "reader")
+    payload, _, mac = cookie.rpartition(".")
+    tampered = f"{payload}.{'0' if mac[0] != '0' else '1'}{mac[1:]}"
+    assert session_role("s3cr3t", tampered, now) is None
     assert not session_cookie_valid("s3cr3t", tampered, now)
 
 
 def test_session_cookie_rejects_the_wrong_secret() -> None:
     now = 1_000_000.0
-    cookie = mint_session_cookie("s3cr3t", now)
-    assert not session_cookie_valid("a-different-secret", cookie, now)
+    cookie = mint_session_cookie("s3cr3t", now, "reader")
+    assert session_role("a-different-secret", cookie, now) is None
 
 
-@pytest.mark.parametrize("malformed", ["", "no-dot-here", "not-an-int.deadbeef", "."])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "",
+        "no-dot-here",
+        "not-an-int.deadbeef",
+        ".",
+        "reader|not-an-int.deadbeef",
+        "owner|123456.deadbeef",
+    ],
+)
 def test_session_cookie_rejects_malformed_values(malformed: str) -> None:
+    assert session_role("s3cr3t", malformed, 1_000_000.0) is None
     assert not session_cookie_valid("s3cr3t", malformed, 1_000_000.0)
+
+
+def test_session_cookie_rejects_the_old_pre_role_cookie_format() -> None:
+    """Before roles existed, the cookie was ``"<exp>.<mac>"`` with the MAC
+    over ``"browser|<exp>"``. That must never be read as any role - the
+    upgrade note says every browser is logged out once, not silently
+    upgraded to admin."""
+    now = 1_000_000.0
+    exp = int(now + 1000)
+    old_style_mac = hmac.new(
+        b"s3cr3t", f"browser|{exp}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    old_cookie = f"{exp}.{old_style_mac}"
+    assert session_role("s3cr3t", old_cookie, now) is None
+    assert not session_cookie_valid("s3cr3t", old_cookie, now)

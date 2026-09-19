@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deskmate settings</title>
+<style>
+  /* Same visual language as login.html / setup-done.html: a developer/owner
+     tool, viewed in a browser, not a panel page. Package 1.4 replaces this
+     placeholder with the real settings page (app/forms.py, section forms,
+     save and test, wizard routes). */
+  @font-face {
+    font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
+    font-display: block;
+    src: url('/static/fonts/GoogleSans-LatinThai-var.ttf') format('truetype');
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #FFFFFF; color: #000000;
+    font-family: 'Google Sans', sans-serif; font-weight: 600;
+    max-width: 560px;
+  }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
+  p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>Settings</h1>
+  <p class="sub">Hub <strong>{{ name }}</strong>.</p>
+</body>
+</html>

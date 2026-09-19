@@ -11,6 +11,22 @@ server; it only signs the browser session cookie). Losing any of this means
 stopping the container, deleting ``data/deskmate.sqlite``, and running
 ``/setup`` again: there is no edit or regenerate mode yet.
 
+**Roles.** The session cookie carries a :data:`Role`: ``admin`` or
+``reader``. Signing in with the bearer token grants ``admin``; signing in
+with the device key grants ``reader`` (:func:`mint_session_cookie`,
+``main.py:post_login``). ``admin`` cookies last
+:data:`ADMIN_SESSION_MAX_AGE_SECONDS` (7 days); ``reader`` cookies last
+:data:`READER_SESSION_MAX_AGE_SECONDS` (30 days). :func:`session_role`
+never falls back to admin: a malformed, expired, tampered or unknown-role
+cookie - including one in the pre-role ``"<exp>.<mac>"`` format - decodes to
+``None``, same as no cookie at all. The device key is deliberately never an
+admin credential, even though it is a valid reader credential: it sits in
+the device's unencrypted flash, so :func:`require_admin` and
+:func:`require_admin_html` check a bearer only against
+:meth:`HubIdentity.verify_token`, never :meth:`HubIdentity.verify_device_key`
+or :meth:`HubIdentity.verify_reader`. Losing a flashed device therefore
+never hands out admin access to the hub's settings.
+
 An install from before the database read ``data/hub.json``. That file is
 imported once by ``app/legacy.py`` and then left alone, which is the only
 thing :data:`HUB_CONFIG_SCHEMA` and :meth:`HubConfig.from_json` are still for.
@@ -41,7 +57,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request
@@ -65,10 +81,19 @@ _bearer_scheme = HTTPBearer(
 )
 
 #: The browser session cookie set by POST /login (see mint_session_cookie /
-#: session_cookie_valid below). Stateless: no server-side session table, just
-#: an expiry and an HMAC over it keyed by the hub's session_secret.
+#: session_role below). Stateless: no server-side session table, just a
+#: role, an expiry and an HMAC over both keyed by the hub's session_secret.
 COOKIE_NAME = "deskmate_session"
-SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+
+#: The two roles a session cookie can carry (see the module docstring).
+Role = Literal["admin", "reader"]
+_ROLE_WORDS: frozenset[str] = frozenset({"admin", "reader"})
+
+#: The bearer token signs in as admin; the device key signs in as reader.
+#: An admin cookie is shorter-lived: it is the credential that reaches the
+#: settings pages, so a stolen one should stop working sooner.
+ADMIN_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+READER_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 #: The ``schema`` number the old ``data/hub.json`` carried. Read only by the
 #: legacy import in ``app/legacy.py``; the ``hub`` row has no schema of its
@@ -244,36 +269,56 @@ def claim_hub(
     return config, token, device_key
 
 
-def mint_session_cookie(session_secret: str, now: float) -> str:
-    """A stateless browser session cookie: ``"<exp>.<mac>"``.
+def mint_session_cookie(session_secret: str, now: float, role: Role) -> str:
+    """A stateless browser session cookie: ``"<role>|<exp>.<mac>"``.
 
-    No server-side session table - ``exp`` is the expiry (unix seconds) and
-    ``mac`` is an HMAC over it keyed by the hub's ``session_secret``, so
-    :func:`session_cookie_valid` can check a cookie against nothing but that
-    one secret and the clock.
+    No server-side session table - ``exp`` is the expiry (unix seconds,
+    :data:`ADMIN_SESSION_MAX_AGE_SECONDS` or
+    :data:`READER_SESSION_MAX_AGE_SECONDS` out from ``now`` depending on
+    ``role``) and ``mac`` is an HMAC over ``"<role>|<exp>"`` keyed by the
+    hub's ``session_secret``, so :func:`session_role` can check a cookie
+    against nothing but that one secret and the clock. The role sits inside
+    the MAC'd payload, not just alongside it, so a cookie cannot be edited
+    from reader to admin without invalidating the MAC.
     """
-    exp = int(now + SESSION_MAX_AGE_SECONDS)
-    mac = hmac.new(
-        session_secret.encode("utf-8"), f"browser|{exp}".encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    return f"{exp}.{mac}"
+    max_age = ADMIN_SESSION_MAX_AGE_SECONDS if role == "admin" else READER_SESSION_MAX_AGE_SECONDS
+    exp = int(now + max_age)
+    payload = f"{role}|{exp}"
+    mac = hmac.new(session_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}.{mac}"
 
 
-def session_cookie_valid(session_secret: str, value: str, now: float) -> bool:
-    """Reject a malformed value, an expired one, or a tampered MAC."""
-    exp_text, sep, mac = value.partition(".")
+def session_role(session_secret: str, value: str, now: float) -> Role | None:
+    """The role a valid cookie carries, or ``None`` for anything else:
+    malformed, expired, a tampered MAC, an unrecognized role word, or the
+    pre-role ``"<exp>.<mac>"`` format (the MAC was over ``"browser|<exp>"``
+    there, which never parses as ``"<role>|<exp>"`` here, so it always
+    fails the role check below - it never falls back to admin, or to
+    anything else). Never raises: every malformed shape returns ``None``.
+    """
+    payload, sep, mac = value.rpartition(".")
     if not sep:
-        return False
+        return None
+    role_text, role_sep, exp_text = payload.partition("|")
+    if not role_sep or role_text not in _ROLE_WORDS:
+        return None
     try:
         exp = int(exp_text)
     except ValueError:
-        return False
+        return None
     if exp <= now:
-        return False
-    expected = hmac.new(
-        session_secret.encode("utf-8"), f"browser|{exp}".encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(mac, expected)
+        return None
+    expected = hmac.new(session_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(mac, expected):
+        return None
+    return role_text  # type: ignore[return-value]  # narrowed by the _ROLE_WORDS check above
+
+
+def session_cookie_valid(session_secret: str, value: str, now: float) -> bool:
+    """True when ``value`` decodes to any known role. A thin wrapper around
+    :func:`session_role` for a caller that only needs to know a cookie is
+    valid at all, not which role it grants."""
+    return session_role(session_secret, value, now) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +522,8 @@ def reader_authenticated(
     request: Request, credentials: HTTPAuthorizationCredentials | None
 ) -> bool:
     """True when this request already carries a valid reader credential:
-    the bearer token, the device key, or a valid session cookie. Shared by
+    the bearer token, the device key, or a session cookie of either role
+    (``admin`` or ``reader`` - an admin is a reader too). Shared by
     :func:`require_reader`, :func:`require_reader_html` and ``/healthz``
     (which decides its own response shape rather than raising).
 
@@ -493,7 +539,43 @@ def reader_authenticated(
     if config is None:
         return False
     cookie = request.cookies.get(COOKIE_NAME)
-    return cookie is not None and session_cookie_valid(config.session_secret, cookie, time.time())
+    if cookie is None:
+        return False
+    return session_role(config.session_secret, cookie, time.time()) is not None
+
+
+def admin_authenticated(
+    request: Request, credentials: HTTPAuthorizationCredentials | None
+) -> bool:
+    """True when this request already carries a valid admin credential: the
+    bearer token, or a session cookie whose role is ``admin``. Shared by
+    :func:`require_admin` and :func:`require_admin_html`.
+
+    Deliberately narrower than :func:`reader_authenticated`: the device key
+    is never accepted here, as a bearer or through a cookie. It lives in the
+    device's unencrypted flash and is a read-only credential by design (see
+    the module docstring and :meth:`HubIdentity.verify_reader`); trusting it
+    with admin actions (rotating the Home Assistant token, editing
+    calendars, restoring the database) would let anyone who dumps a flashed
+    device's storage manage the hub, not just read its pages. So this checks
+    the bearer with :meth:`HubIdentity.verify_token` only, never
+    :meth:`HubIdentity.verify_reader` or :meth:`HubIdentity.verify_device_key`.
+
+    Callers check ``identity.configured`` themselves first: this only knows
+    how to check a credential against a config that exists.
+    """
+    identity: HubIdentity = request.app.state.hub.identity
+    if credentials is not None:
+        value = credentials.credentials.strip()
+        if value and identity.verify_token(value):
+            return True
+    config = identity.config
+    if config is None:
+        return False
+    cookie = request.cookies.get(COOKIE_NAME)
+    if cookie is None:
+        return False
+    return session_role(config.session_secret, cookie, time.time()) == "admin"
 
 
 async def require_device(
@@ -549,4 +631,42 @@ async def require_reader_html(
     if not identity.configured:
         raise SetupRedirect()
     if not reader_authenticated(request, credentials):
+        raise LoginRedirect(request.url.path)
+
+
+async def require_admin(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> None:
+    """Admin routes (JSON, e.g. the settings POSTs): 503 until the hub is set
+    up, then the bearer token or an admin session cookie - never the device
+    key (see :func:`admin_authenticated` for why).
+    """
+    identity: HubIdentity = request.app.state.hub.identity
+    if identity.error is not None:
+        raise HTTPException(status_code=503, detail=identity.error)
+    if not identity.configured:
+        raise HTTPException(status_code=503, detail="hub is not set up; open /setup")
+    if not admin_authenticated(request, credentials):
+        raise HTTPException(
+            status_code=401,
+            detail="sign in at /login with the token or send the bearer token",
+        )
+
+
+async def require_admin_html(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> None:
+    """Same rule as :func:`require_admin`, for the HTML settings pages: a
+    browser is sent to /setup while the hub is unconfigured, or to /login
+    when it is configured but carries no admin credential, instead of a bare
+    503 or 401.
+    """
+    identity: HubIdentity = request.app.state.hub.identity
+    if identity.error is not None:
+        raise HTTPException(status_code=503, detail=identity.error)
+    if not identity.configured:
+        raise SetupRedirect()
+    if not admin_authenticated(request, credentials):
         raise LoginRedirect(request.url.path)

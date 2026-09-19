@@ -7,6 +7,8 @@ Endpoints follow docs/ARCHITECTURE.md::
     POST   /setup
     GET    /login
     POST   /login
+    GET    /settings
+    POST   /settings/general
     GET    /api/hub
     GET    /api/state
     POST   /api/ai-usage
@@ -52,17 +54,21 @@ from app.alerts import AlertStore
 from app.config import Settings, get_settings
 from app.db import get_database
 from app.hub_config import (
+    ADMIN_SESSION_MAX_AGE_SECONDS,
     AlreadyConfigured,
     COOKIE_NAME,
     HubIdentity,
     InvalidBaseURL,
     LoginRedirect,
-    SESSION_MAX_AGE_SECONDS,
+    READER_SESSION_MAX_AGE_SECONDS,
+    Role,
     SetupRedirect,
     _bearer_scheme,
     is_private_client_host,
     mint_session_cookie,
     reader_authenticated,
+    require_admin,
+    require_admin_html,
     require_device,
     require_reader,
     require_reader_html,
@@ -770,9 +776,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             skill_path="skills/deskmate/SKILL.md",
         )
         # This page carries both secrets, shown once: never cache or store it.
-        return HTMLResponse(
+        response = HTMLResponse(
             html, headers={"Cache-Control": "no-store", "Pragma": "no-cache"}
         )
+        # The claimer was just shown the token on this very page, so signing
+        # them in as admin here adds no exposure and saves them pasting it
+        # straight back in at /login.
+        response.set_cookie(
+            COOKIE_NAME,
+            mint_session_cookie(config.session_secret, time.time(), "admin"),
+            max_age=ADMIN_SESSION_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/",
+            secure=config.base_url.startswith("https"),
+        )
+        return response
 
     # -- login -------------------------------------------------------------
     @app.get("/login", response_class=HTMLResponse)
@@ -807,21 +826,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         config = hub.identity.config
         assert config is not None
-        if not key or not hub.identity.verify_reader(key):
+        # The token signs in as admin, the device key as reader - two
+        # independent credentials, so this checks each explicitly rather
+        # than the combined verify_reader (which cannot say which one
+        # matched).
+        role: Role
+        if key and hub.identity.verify_token(key):
+            role = "admin"
+        elif key and hub.identity.verify_device_key(key):
+            role = "reader"
+        else:
             template = hub.renderer.environment.get_template("login.html")
             html = template.render(next=next_path, error="wrong key")
             return HTMLResponse(html, status_code=401)
+        max_age = ADMIN_SESSION_MAX_AGE_SECONDS if role == "admin" else READER_SESSION_MAX_AGE_SECONDS
         response = RedirectResponse(next_path, status_code=303)
         response.set_cookie(
             COOKIE_NAME,
-            mint_session_cookie(config.session_secret, time.time()),
-            max_age=SESSION_MAX_AGE_SECONDS,
+            mint_session_cookie(config.session_secret, time.time(), role),
+            max_age=max_age,
             httponly=True,
             samesite="lax",
             path="/",
             secure=config.base_url.startswith("https"),
         )
         return response
+
+    # -- settings ----------------------------------------------------------
+    # Placeholder for package 1.4 (the real settings page, forms and save):
+    # this pair only proves require_admin/require_admin_html gate the way
+    # 1.3 wants, before there is anything real behind them.
+    @app.get(
+        "/settings", response_class=HTMLResponse, dependencies=[Depends(require_admin_html)]
+    )
+    async def settings_page(request: Request) -> HTMLResponse:
+        hub: Hub = app.state.hub
+        config = hub.identity.config
+        assert config is not None
+        template = hub.renderer.environment.get_template("settings.html")
+        html = template.render(name=config.name)
+        return HTMLResponse(html)
+
+    @app.post("/settings/general", dependencies=[Depends(require_admin)])
+    async def post_settings_general(request: Request) -> Response:
+        # Stub: package 1.4 replaces this body with the real general-section
+        # save (validate, write the settings row, Hub.reload()). Only the
+        # guard and the shared 64 KiB form cap need to be real yet.
+        await _cap_form_body(request)
+        await request.form()
+        return Response(status_code=204)
 
     # -- preview ---------------------------------------------------------
     @app.get("/")
