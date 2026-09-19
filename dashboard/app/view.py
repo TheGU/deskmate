@@ -308,21 +308,10 @@ def _event_end(event: Event) -> datetime:
     return event.end if event.end is not None else event.start
 
 
-#: The day scale runs 06:00 to 24:00, a span the fixed-size panel never
-#: changes.
-SCALE_START_HOUR: int = 6
+#: The day clamps a same-day event end to 24:00, an hour a plain "minutes
+#: since midnight" cannot itself represent (see
+#: :func:`_event_end_minutes_same_day`, which :func:`next_seven_days` uses).
 SCALE_END_HOUR: int = 24
-SCALE_SPAN_MINUTES: int = (SCALE_END_HOUR - SCALE_START_HOUR) * 60
-
-def scale_position(minutes_since_midnight: float) -> float:
-    """Percent along the 06:00-24:00 scale, clamped to [0, 100].
-
-    Takes minutes since midnight rather than a datetime so the 24:00 end of
-    the span (an hour a :class:`~datetime.datetime` cannot itself hold) is a
-    plain number: 360 gives 0, 1440 gives 100, 15:06 (906) gives about 50.6.
-    """
-    minutes = minutes_since_midnight - SCALE_START_HOUR * 60
-    return max(0.0, min(100.0, minutes / SCALE_SPAN_MINUTES * 100.0))
 
 
 def _minutes_since_midnight(value: datetime) -> float:
@@ -831,13 +820,6 @@ AGENDA_LEFT_BODY_HEIGHT_PX: float = 372.0
 #: "TODAY" plus the long date, one baseline-aligned row.
 AGENDA_HEAD_HEIGHT_PX: float = 24.0
 AGENDA_HEAD_GAP_PX: float = 8.0
-#: One all-day row (hollow dot plus title) and the gap before the timed route.
-AGENDA_ALLDAY_ROW_HEIGHT_PX: float = 22.0
-AGENDA_ALLDAY_GAP_PX: float = 8.0
-#: The minimum vertical clearance a label needs from the one stacked above it.
-AGENDA_LABEL_ROW_HEIGHT_PX: float = 22.0
-#: Calendar lines on the route sit this many px apart, left to right.
-AGENDA_LINE_GAP_PX: float = 16.0
 
 #: The "rough answer" strip's own span: 06:00 to 22:00, not the full day.
 NEXT7_START_MIN: int = 6 * 60
@@ -857,94 +839,106 @@ def _event_end_minutes_same_day(event: Event) -> float:
     return _minutes_since_midnight(end)
 
 
-def agenda_route(
-    state: DashboardState, colors: dict[str, str], today: date, reference: datetime
-) -> dict[str, Any]:
-    """Geometry for the agenda's vertical route strip.
+#: One list row, event or divider alike: the body below "TODAY" and the long
+#: date is a plain list, so every row it holds - an event, a day divider, or
+#: the trailing "+N more" - is quantized to this one fixed height. Picked at
+#: the dense-list-row floor (DESIGN.md: "22 to 28 px for dense list rows"),
+#: which packs the most rows into the fixed 372 px body, matching the owner's
+#: "until it fills the screen".
+AGENDA_LIST_ROW_HEIGHT_PX: float = 28.0
+#: How many list rows the body has room for below the head: 372 - (24 + 8)
+#: leaves 340 px, and 340 // 28 is 12 whole rows (336 px used, 4 px spare;
+#: never a thirteenth partial row).
+AGENDA_LIST_ROW_LIMIT: int = int(
+    (AGENDA_LEFT_BODY_HEIGHT_PX - AGENDA_HEAD_HEIGHT_PX - AGENDA_HEAD_GAP_PX)
+    // AGENDA_LIST_ROW_HEIGHT_PX
+)
+#: The time column's own fixed width: wide enough for "ALL DAY" (the widest
+#: label this column ever prints, measured at 65.9 px against the real
+#: render, this row's own weight 700 20 px Google Sans; a plain "HH:MM" is
+#: narrower at 43.2 px), with a couple of pixels of margin.
+AGENDA_LIST_TIME_PX: float = 68.0
+#: Gap between the time column and the title, matching the agenda row's own
+#: convention on Today's left column (`.agenda-row` in today.html).
+AGENDA_LIST_GAP_PX: float = 12.0
+#: The title's own available width: the 440 px row (the 456 px column minus
+#: its own 16 px padding) minus the time column and its gap.
+AGENDA_LIST_TITLE_AVAILABLE_PX: float = 440.0 - AGENDA_LIST_TIME_PX - AGENDA_LIST_GAP_PX
+#: Per-character width at this row's 20 px/500 weight: the same measured
+#: figure Brief's own 20 px/500 task titles use (see :data:`BRIEF_TITLE_CHAR_PX`),
+#: since it is the identical font, weight and size.
+AGENDA_LIST_TITLE_CHAR_PX: float = 10.5
+AGENDA_LIST_TITLE_MAX_CHARS: int = int(AGENDA_LIST_TITLE_AVAILABLE_PX // AGENDA_LIST_TITLE_CHAR_PX)
 
-    One line per calendar with a timed event today, positioned left to right
-    in the order its first event appears; a dot and a busy bar per event on
-    its own line; labels stacked top to bottom, each pushed down only as far
-    as it needs to clear :data:`AGENDA_LABEL_ROW_HEIGHT_PX` from the one
-    above (two events on different calendars at the same time land on the
-    same dot position and their labels stack automatically, which is the
-    interchange the spec calls for, with no special case needed); and NOW.
-    """
-    events_today = (
-        [event for event in state.calendar.items if event.start.date() == today]
-        if state.calendar.usable
-        else []
-    )
-    allday = [
-        {"title": event.title, "color": event_color(event, colors)}
-        for event in sorted((e for e in events_today if e.all_day), key=lambda e: e.title)
-    ]
-    timed = sorted((e for e in events_today if not e.all_day), key=lambda e: e.start)
 
-    route_height = AGENDA_LEFT_BODY_HEIGHT_PX - AGENDA_HEAD_HEIGHT_PX - AGENDA_HEAD_GAP_PX
-    if allday:
-        route_height -= len(allday) * AGENDA_ALLDAY_ROW_HEIGHT_PX + AGENDA_ALLDAY_GAP_PX
-    route_height = max(0.0, route_height)
+def _agenda_day_label(day: date, today: date) -> str:
+    """Divider text introducing a later day: TOMORROW for the next day (the
+    one place the word is still used, naming the very next day rather than a
+    weekday that could be mistaken for this week), else the weekday and date
+    (:func:`fmt_day_header`, e.g. "SAT 21 SEP")."""
+    if day == today + timedelta(days=1):
+        return "TOMORROW"
+    return fmt_day_header(day)
 
-    hours = [
+
+def _agenda_day_event_rows(events: list[Event], colors: dict[str, str]) -> list[dict[str, Any]]:
+    """One row per event on a single day: all-day events first, then timed
+    events in start order. The day itself is never repeated here (the head
+    or a divider row already named it), so the time slot is bare "HH:MM" or
+    "ALL DAY"."""
+    ordered = sorted(events, key=lambda event: (not event.all_day, event.start))
+    return [
         {
-            "pct": scale_position(hour * 60),
-            "label": f"{hour:02d}",
-            # 24:00 keeps its tick but not its numeral: centered on the route
-            # body's very last pixel, a printed "24" would drop its descent
-            # past the body and into the footer rule below it.
-            "labeled": hour in (6, 9, 12, 15, 18, 21),
+            "kind": "event",
+            "when": "ALL DAY" if event.all_day else event.start.strftime("%H:%M"),
+            "title": clip_words(event.title, AGENDA_LIST_TITLE_MAX_CHARS),
+            "color": event_color(event, colors),
         }
-        for hour in range(SCALE_START_HOUR, SCALE_END_HOUR + 1)
+        for event in ordered
     ]
 
-    line_order: list[str] = []
-    line_color: dict[str, str] = {}
-    for event in timed:
-        key = (event.calendar or "").lower()
-        if key not in line_color:
-            line_order.append(key)
-            line_color[key] = event_color(event, colors)
-    lines = [
-        {"color": line_color[key], "x": index * AGENDA_LINE_GAP_PX}
-        for index, key in enumerate(line_order)
-    ]
-    line_x = {key: index * AGENDA_LINE_GAP_PX for index, key in enumerate(line_order)}
 
-    markers: list[dict[str, Any]] = []
-    next_min_top = 0.0
-    for event in timed:
-        start_pct = scale_position(_minutes_since_midnight(event.start))
-        end_pct = scale_position(_event_end_minutes_same_day(event))
-        dot_top = start_pct / 100.0 * route_height
-        end_top = end_pct / 100.0 * route_height
-        label_top = max(dot_top, next_min_top)
-        next_min_top = label_top + AGENDA_LABEL_ROW_HEIGHT_PX
-        key = (event.calendar or "").lower()
-        markers.append(
-            {
-                "x": line_x.get(key, 0.0),
-                "color": event_color(event, colors),
-                "dot_top": round(dot_top, 1),
-                "bar_top": round(min(dot_top, end_top), 1),
-                "bar_height": round(abs(end_top - dot_top), 1),
-                "label_top": round(label_top, 1),
-                "time": event.start.strftime("%H:%M"),
-                "title": event.title,
-            }
-        )
+def agenda_list_rows(
+    state: DashboardState, colors: dict[str, str], today: date
+) -> list[dict[str, Any]]:
+    """The agenda's left column: today's events (including ones already
+    past), then as many later days as the column has room for, each
+    introduced by its own divider row, packed into
+    :data:`AGENDA_LIST_ROW_LIMIT` fixed-height rows.
 
-    now_pct = scale_position(_minutes_since_midnight(reference))
-    return {
-        "allday": allday,
-        "height_px": round(route_height, 1),
-        "hours": hours,
-        "lines": lines,
-        "markers": markers,
-        "now_pct": now_pct,
-        "empty": not allday and not timed,
-        "empty_top_px": round(scale_position(12 * 60) / 100.0 * route_height, 1),
-    }
+    Returns an empty list when there is nothing to show at all (the template
+    prints "Nothing scheduled" once); otherwise the last row reads "+N more"
+    in place of a divider or event once the remaining rows would not fit,
+    ``N`` counting only events, never the dividers that introduced them.
+    """
+    if not state.calendar.usable:
+        return []
+    events_by_day: dict[date, list[Event]] = {}
+    for event in state.calendar.items:
+        day = event.start.date()
+        if day < today:
+            continue
+        events_by_day.setdefault(day, []).append(event)
+    if not events_by_day:
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for day in sorted(events_by_day):
+        if day != today:
+            entries.append({"kind": "divider", "label": _agenda_day_label(day, today)})
+        entries.extend(_agenda_day_event_rows(events_by_day[day], colors))
+
+    rows: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        more_after = index < len(entries) - 1
+        reserve = 1 if more_after else 0
+        if len(rows) + 1 + reserve > AGENDA_LIST_ROW_LIMIT:
+            remaining = sum(1 for later in entries[index:] if later["kind"] == "event")
+            if remaining:
+                rows.append({"kind": "more", "count": remaining})
+            break
+        rows.append(entry)
+    return rows
 
 
 def month_grid(state: DashboardState, colors: dict[str, str], today: date) -> dict[str, Any]:
@@ -1018,11 +1012,9 @@ def agenda_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
     colors = calendar_colors(state, settings)
 
     context["long_date"] = reference.strftime("%A %d %B").upper()
-    context["route"] = agenda_route(state, colors, today, reference)
+    context["agenda_list"] = agenda_list_rows(state, colors, today)
     context["month"] = month_grid(state, colors, today)
     context["next7"] = next_seven_days(state, today)
-    context["calendar_note"] = block_note(state.calendar.status, "calendar")
-    context["tasks_note"] = block_note(state.tasks.status, "tasks")
     return context
 
 

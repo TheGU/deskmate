@@ -121,10 +121,9 @@ components:
 
 deskmate is an instrument front panel rendered on paper. Every value the owner
 needs is a large numeral with its small capital label sitting beneath it;
-fields are split by a 2 px rule, not a boxed tile; one vertical scale is where
-time itself runs, on the agenda page's route. There is no title bar and no
-page-name band: the page's own name lives once, in the footer window list, so
-nothing on the page repeats what the footer already says.
+fields are split by a 2 px rule, not a boxed tile. There is no title bar and
+no page-name band: the page's own name lives once, in the footer window list,
+so nothing on the page repeats what the footer already says.
 
 The surface is unforgiving by construction and the system is built out of
 that. Every page is an exact 800x480 still, quantized to six pure colors with
@@ -136,11 +135,11 @@ numeral is drawn large and its label is drawn heavy rather than drawn small.
 Color still reports state, not decoration, everywhere except one page: the
 alert page is itself a state, so its priority color is allowed to fill the
 top band the way nothing else on the panel is allowed to. Elsewhere a colored
-field is always news: a chip, a tell-tale dot, a meter fill, a route line. The
+field is always news: a chip, a tell-tale dot, a meter fill. The
 explicit anti-reference remains the phone-widget look the owner named
 directly: rounded app cards, app-store gloss, generic dashboard tiles. Nothing
-here is rounded except the tell-tale and route dots, which are marks, never
-containers.
+here is rounded except the tell-tale and month-grid dots, which are marks,
+never containers.
 
 **Key Characteristics:**
 - Numeral over small-caps label is the base grammar of the whole panel.
@@ -148,7 +147,8 @@ containers.
 - Six pure colors, no dithering, no gray, no gradient, no shadow.
 - A color fills a field only to report a state, with one exception: the
   alert page's top band, which is the state.
-- Tell-tale dots and route/day dots are the panel's only round shapes.
+- Tell-tale dots and the month grid's day dots are the panel's only round
+  shapes.
 - Icons come only from the bundled Nerd Font subset.
 - Fixed 800x480 frame: nothing reflows, overflow clips or two-line clamps.
 
@@ -158,8 +158,8 @@ Six pure primaries, used as signals rather than as a decorative palette.
 
 ### Primary
 - **Ink Black** (`#000000`): the structural color and the default voice.
-  Every rule, every numeral and label at rest, body and route type, chart
-  axes, and the footer's inverted "you are here" block.
+  Every rule, every numeral and label at rest, body type, chart axes, and
+  the footer's inverted "you are here" block.
 - **Paper White** (`#FFFFFF`): the ground of every page and every field that
   has nothing to report.
 
@@ -180,7 +180,7 @@ Six pure primaries, used as signals rather than as a decorative palette.
   report."
 - **Weather Blue** (`#0000FF`): rain (probability at or above 50 percent, or
   a rain window in the header), a calendar's own identity color on the
-  agenda route and month grid, and the humidity trace on the desk chart.
+  agenda list and month grid, and the humidity trace on the desk chart.
 
 ### Named Rules
 
@@ -325,9 +325,8 @@ answered with one of those three instead.
 
 Every rectangle and rule is square: radius 0, no exception. The one family of
 round shapes on the panel is the mark, not the container: tell-tale dots
-(10 px), the agenda's route and all-day event dots (14 px), and the month
-grid's event dot (6 px) are all full circles, used exactly where a point in
-time or a point of attention needs marking. A hatch box (45 degree black and
+(10 px) and the month grid's event dot (6 px) are full circles, used exactly
+where a point of attention needs marking. A hatch box (45 degree black and
 white stripe, 2 px black border) stands in for any value that is unknown or
 unavailable, in place of a numeral, never as a numeral's decoration. Icons
 from the Nerd Font subset are the only other curved forms on the page.
@@ -364,15 +363,16 @@ state without coloring the reading itself: the header's weather condition,
 a UV or AQI reading, a brief section's risk flag, a stale device. It never
 appears for a healthy or neutral state; its absence is the quiet case.
 
-### Time Scale (Agenda's route)
-A vertical 06:00 to 24:00 scale: tick marks and hour numerals on the left,
-one 4 px colored line per calendar with an event today, a dot and a bar per
-event on its line, and a NOW marker that never moves position independent of
-the data. Labels stack top to bottom and only push down as far as needed to
-clear the label above them. The shared stylesheet also carries a generic
-`.scale-*` utility for the same grammar; the agenda page implements its own
-`.route-*` classes rather than that utility, so the two currently duplicate
-one concept.
+### Event List (Agenda)
+A plain list of fixed-height rows: a time (weight 700, the calendar's own
+identity color) beside its title in black, one row per event, starting with
+today's (including ones already past) and spilling into later days once
+today's own events run out. A later day is introduced by its own divider
+row, set in the shared `.label` style with a thin rule beside it: "TOMORROW"
+for the very next day, the weekday and date (for example "SAT 21 SEP") for
+anything further out. How many rows fit, and where the list has to stop and
+print "+N more" instead of a partial day, is decided once in `app/view.py`,
+never discovered by the template at render time.
 
 ### Line Meter
 A thin horizontal gauge: a 2 px (or 4 px, "thick") black-outlined bar on a
