@@ -257,3 +257,12 @@ Back up `./data` (or the equivalent host path if you changed the volume).
 It holds `hub.json` (the identity set up above), everything pushed by
 agents, the current alert, and the telemetry history. Fixtures and the
 container image are reproducible from the repository; `data/` is not.
+
+## End-to-end check
+
+`scripts/e2e-check.py` drives a real container through setup, the wizard,
+settings, a push, every page render, and backup/restore/rotate; run it
+against a throwaway image and an empty data directory, never against a
+production hub, since it claims the hub and rotates its secrets. Build the
+image, run it on a spare port with a fresh, empty volume, then point the
+script at it: `python scripts/e2e-check.py http://127.0.0.1:<port>`.
