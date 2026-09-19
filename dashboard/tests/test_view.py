@@ -63,6 +63,7 @@ from app.view import (
     build_context,
     cap_duration,
     clip_words,
+    dataset_age_label,
     desk_accent,
     device_panel,
     due_chip_kind,
@@ -70,6 +71,8 @@ from app.view import (
     footer_context,
     header_context,
     header_weather,
+    HOME_ROW_BUDGET,
+    hub_rows,
     meter_cells,
     month_grid,
     next_seven_days,
@@ -83,6 +86,7 @@ from app.view import (
     sensor_value,
     service_mark,
     stale_info,
+    strip_scheme,
     system_context,
     task_accent,
     task_sort_key,
@@ -136,7 +140,22 @@ def test_pages_render_context_when_everything_is_unavailable(settings: Settings)
     assert brief["lines"] == []
     system = build_context("system", state, settings)
     assert system["device"]["available"] is False
-    assert system["sensors"] == []
+    assert system["home_rows"] == []
+    assert len(system["hub"]) == 9
+    assert {row["name"] for row in system["hub"]} == {
+        "TASKS",
+        "CALENDAR",
+        "WEATHER",
+        "AI USAGE",
+        "BRIEF",
+        "HOME",
+        "DEVICE SYNC",
+        "DEVICE IP",
+        "HUB URL",
+    }
+    assert all(row["value"] == "NEVER" for row in system["hub"][:7])
+    assert system["hub"][7]["available"] is False  # DEVICE IP: hatch
+    assert system["hub"][8]["available"] is False  # HUB URL: hatch
 
 
 def test_task_order_puts_overdue_first_then_priority() -> None:
@@ -1332,9 +1351,92 @@ def test_system_context_sensor_and_service_rows(settings: Settings) -> None:
         ),
     )
     context = system_context(state, settings)
-    assert context["sensors"][0]["accent"] == ""
-    assert context["services"][0]["mark"] == "red"
-    assert context["services"][0]["down"] is True
+    home_rows = context["home_rows"]
+    sensor_row = next(row for row in home_rows if row["kind"] == "sensor")
+    service_row = next(row for row in home_rows if row["kind"] == "service")
+    assert sensor_row["accent"] == ""
+    assert service_row["mark"] == "red"
+    assert service_row["down"] is True
+    # Sensors first: with one of each, the sensor row leads the merged list.
+    assert home_rows[0]["kind"] == "sensor"
+    assert home_rows[1]["kind"] == "service"
+
+
+def test_home_rows_merge_sensors_and_services_under_one_budget(settings: Settings) -> None:
+    """A merged HOME column with more sensors and services than fit is
+    capped to HOME_ROW_BUDGET total, sensors first, not per half."""
+    sensors = [
+        HomeSensor(key=f"s{i}", name=f"Sensor {i}", value="1", severity="ok")
+        for i in range(HOME_ROW_BUDGET)
+    ]
+    services = [
+        ServiceStatus(key=f"svc{i}", name=f"Service {i}", health=ServiceHealth.OK)
+        for i in range(HOME_ROW_BUDGET)
+    ]
+    state = DashboardState(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
+        timezone="Asia/Bangkok",
+        home=HomeBlock(status=AdapterStatus.OK, home=HomeState(sensors=sensors, services=services)),
+    )
+    context = system_context(state, settings)
+    home_rows = context["home_rows"]
+    assert len(home_rows) == HOME_ROW_BUDGET
+    assert all(row["kind"] == "sensor" for row in home_rows)
+
+
+def test_dataset_age_label_buckets() -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    assert dataset_age_label(None, now) == "NEVER"
+    assert dataset_age_label(now, now) == "NOW"
+    assert dataset_age_label(now - timedelta(minutes=5), now) == "5 MIN"
+    assert dataset_age_label(now - timedelta(hours=2), now) == "2 H"
+    assert dataset_age_label(now - timedelta(days=3), now) == "3 D"
+
+
+def test_strip_scheme_drops_the_scheme_only() -> None:
+    assert strip_scheme("https://192.0.2.10:8080") == "192.0.2.10:8080"
+    assert strip_scheme("http://hub.local") == "hub.local"
+
+
+def test_hub_rows_mark_a_stale_pushed_dataset_yellow(settings: Settings) -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    state = DashboardState(
+        generated_at=now,
+        timezone="Asia/Bangkok",
+        tasks=TasksBlock(
+            status=AdapterStatus.OK,
+            source="agent",
+            updated_at=now - timedelta(hours=20),
+            received_at=now - timedelta(hours=20),
+        ),
+    )
+    rows = hub_rows(state, settings, now)
+    tasks_row = next(row for row in rows if row["name"] == "TASKS")
+    assert tasks_row["value"] == "20 H"
+    assert tasks_row["accent"] == "yellow"
+
+
+def test_hub_rows_device_origin_from_device_state(settings: Settings) -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    device = DeviceState(
+        status=DeviceStatus.OK,
+        device="reterminal-e1002",
+        received_at=now,
+        age_seconds=0.0,
+        newest_at=now - timedelta(minutes=5),
+        remote_addr="192.0.2.10",
+        hub_host="https://192.0.2.1:8080",
+    )
+    state = DashboardState(
+        generated_at=now,
+        timezone="Asia/Bangkok",
+        device=DeviceBlock(status=AdapterStatus.OK, device=device),
+    )
+    rows = hub_rows(state, settings, now)
+    by_name = {row["name"]: row for row in rows}
+    assert by_name["DEVICE SYNC"]["value"] == "5 MIN"
+    assert by_name["DEVICE IP"]["value"] == "192.0.2.10"
+    assert by_name["HUB URL"]["value"] == "192.0.2.1:8080"
 
 
 def test_power_label_words_feed_the_battery_meter_caption() -> None:
