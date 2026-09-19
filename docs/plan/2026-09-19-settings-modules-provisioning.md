@@ -472,8 +472,9 @@ groups.
 
 | Package | State | Notes |
 | --- | --- | --- |
-| F.1 | planned | |
-| 1.1 | planned | |
+| gate | done | tests/test_render_gate.py, frozen state and six hashes, 74cfa57 |
+| F.1 | in progress | |
+| 1.1 | in progress | |
 | 1.2a | planned | |
 | 1.2b | planned | |
 | 1.2c | planned | |
