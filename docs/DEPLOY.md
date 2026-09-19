@@ -52,28 +52,33 @@ Volumes (already wired in `docker-compose.yml`):
 runs entirely on fixtures.
 
 **Single worker only.** The compose service and the Dockerfile's `CMD` both
-run exactly one uvicorn worker. The claim code and the setup lock live in
-that one process's memory; a second worker would let two `POST /setup`
-calls race each other at the filesystem, or serve a claim code that another
-worker never generated. Scale by running one container, never by adding
+run exactly one uvicorn worker. The setup lock lives in that one process's
+memory; a second worker would let two `POST /setup` calls race each other
+at the filesystem. Scale by running one container, never by adding
 `--workers` or a second replica.
 
-## First run and claiming the hub
+## First run and setting up the hub
 
 On first start, with no `data/hub.json` yet, the container log prints a line
 like:
 
 ```
-Setup needed: open http://0.0.0.0:8080/setup and enter claim code XXXX-XXXX
+Hub not set up: open /setup on this hub's address now; until then it serves nothing else
 ```
 
-`0.0.0.0` is not an address you can open from another device; use the
-server's own LAN address or hostname instead, on the port `.env` set.
-Follow that log line to `http://<server>:<port>/setup`, enter the hub name,
-the public base URL (what the device and any pushing agent will use to
-reach this hub), and the claim code. The result page shows **two secrets**,
-each **once**; copy both immediately, there is no way to display either
-again:
+There is no claim code and no login yet at this point, so setting up the
+hub is a race with anyone else who can reach it: open
+`http://<server>:<port>/setup` - the server's own LAN address or hostname,
+on the port `.env` set, not the bind-all address the container listens on
+internally, which is not reachable from another device - right after the
+first start, and enter the hub name and the public base URL (what the
+device and any pushing agent will use to reach this hub). `POST /setup`
+itself also refuses a caller whose
+address is not loopback, private, or link-local, so the exposure is
+"first LAN device to submit the form", not "the whole internet" - but it
+is still first come, first served, so do not leave this step for later.
+The result page shows **two secrets**, each **once**; copy both
+immediately, there is no way to display either again:
 
 - The **bearer token**, for agents: read and write. Follow
   `docs/LOCAL-AGENT.md` to get it onto an agent machine.
@@ -88,10 +93,9 @@ The result page also shows the exact lines to put in
 Only each secret's hash is written to `data/hub.json`; the plaintext
 secrets exist only in that one response and wherever you paste them.
 
-Claim the hub right after this first start: until it is claimed, every
-`GET /display/{page}.png`, `/preview*`, `/api/state` and `/api/hub` request
-stays open with no credential, so the hub shows demo pages (fixture data)
-to anyone on the LAN who reaches it.
+Until the hub is set up, it serves nothing but `GET`/`POST /setup` and
+`GET /healthz` (minimal body); every other route answers `503`, or
+redirects to `/setup` for a browser hitting `/` or a preview route.
 
 Once you have the token, `docs/LOCAL-AGENT.md` covers getting it onto an
 agent machine and setting up the pushes.
@@ -114,29 +118,34 @@ are intentionally open (see below). Never expose the hub directly to the
 public internet as-is; deploy it on a LAN, or behind a reverse proxy that
 you also control access to.
 
-If the hub was claimed with an `https` base URL, its login cookie is
+If the hub was set up with an `https` base URL, its login cookie is
 marked `Secure` and a browser will silently drop it if you then open the
 hub over plain `http` on the LAN; `/login` will appear to do nothing.
-Either claim the hub with the same scheme you actually browse it with, or
+Either set the hub up with the same scheme you actually browse it with, or
 always reach it through the `https` hostname the reverse proxy terminates.
 
 ## What is unauthenticated, on purpose
 
-Before the hub is claimed, every read route (`/healthz`, `/api/hub`,
-`/api/state`, `/display/*.png`, `/preview*`, `GET /api/device/telemetry`
-and `/api/device/history`) stays open, so a fresh hub shows fixture data to
-anyone on the LAN who reaches it; nothing can be pushed before a claim.
-Claim the hub right after the first start (see above) to close that
-window.
+**Setup is unauthenticated and first come, first served**, limited to
+callers on this hub's own loopback or private network - that is the whole
+trade-off, so open `/setup` right after the first start rather than
+leaving it for later. Before the hub is set up, every read route
+(`/healthz` minimal, `/api/hub`, `/api/state`, `/display/*.png`,
+`/preview*`, `GET /api/device/telemetry` and `/api/device/history`)
+answers `503` (or redirects a browser to `/setup`), and nothing can be
+pushed either; the hub serves nothing but `GET`/`POST /setup` and a
+minimal `/healthz` until then.
 
-Once claimed, still open by design: `GET`/`POST /setup` (guarded by the
-claim code), `GET /login`, `/docs` and `/openapi.json` (the schema is
-public in the repository anyway), and `/static` (fonts). Every other read
-route then requires the bearer token, the device key, or a `/login` session
-cookie, and `POST /api/device/telemetry` requires the token or the device
-key (never the cookie); see "Auth" in `docs/ARCHITECTURE.md` for the full
-rule. Keep the hub on a trusted LAN or behind access control you control,
-not on the open internet.
+Once set up, still open by design: `GET`/`POST /setup` (guarded by the
+caller's address while unconfigured; `409` once set up), `GET /login`,
+`/healthz` (minimal body for an unauthenticated caller), `/docs` and
+`/openapi.json` (the schema is public in the repository anyway), and
+`/static` (fonts). Every other read route then requires the bearer token,
+the device key, or a `/login` session cookie, and
+`POST /api/device/telemetry` requires the token or the device key (never
+the cookie); see "Auth" in `docs/ARCHITECTURE.md` for the full rule. Keep
+the hub on a trusted LAN or behind access control you control, not on the
+open internet.
 
 ## Reset
 
@@ -146,10 +155,10 @@ device can no longer fetch pages or post telemetry until you update
 `firmware/secrets.yaml`'s `hub_key` with the new device key and reflash it
 (OTA is fine). Do the reflash before you rely on the panel again.
 
-Losing the token, or wanting to reclaim the hub under a new name, has one
-path: stop the container, delete `data/hub.json`, and start it again. A new
-claim code is generated and logged on that next start, exactly as on first
-run. There is no edit or regenerate mode; this is deliberate, so the
+Losing the token, or wanting to set the hub up again under a new name, has
+one path: stop the container, delete `data/hub.json`, and start it again -
+exactly as on first run, including the first-come-first-served window on
+`/setup`. There is no edit or regenerate mode; this is deliberate, so the
 secrets in `data/hub.json` are always the ones currently in use.
 
 ```sh
@@ -169,6 +178,6 @@ starting `DATA_DIR /data is not writable`.
 ## Backup
 
 Back up `./data` (or the equivalent host path if you changed the volume).
-It holds `hub.json` (the claim), everything pushed by agents, the current
-alert, and the telemetry history. Fixtures and the container image are
-reproducible from the repository; `data/` is not.
+It holds `hub.json` (the identity set up above), everything pushed by
+agents, the current alert, and the telemetry history. Fixtures and the
+container image are reproducible from the repository; `data/` is not.

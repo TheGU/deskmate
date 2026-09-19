@@ -41,8 +41,8 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8080
 
 Then open <http://127.0.0.1:8080/preview> to flip through the pages: the
 simulated panel, the RGB stage before quantization, and the raw HTML, left to
-right. A fresh, unclaimed hub serves `/preview` with no login; once you claim
-it (see Setup below), a browser needs to sign in at `/login` with the device
+right. A fresh, unconfigured hub serves nothing but `/setup`; once you set it
+up (see Setup below), a browser needs to sign in at `/login` with the device
 key first.
 
 Tests:
@@ -56,9 +56,8 @@ cd dashboard && uv run pytest
 ```sh
 cp .env.example .env      # optional, the defaults are fixture-only
 docker compose up -d --build
-docker compose logs dashboard-hub   # first run: prints the claim code
+docker compose logs dashboard-hub   # first run: confirms setup is needed
 curl -s http://127.0.0.1:8080/healthz
-curl -o today.png http://127.0.0.1:8080/display/today.png
 ```
 
 If host port 8080 is already in use, set `HUB_PORT` in `.env` (for example
@@ -68,36 +67,39 @@ If host port 8080 is already in use, set `HUB_PORT` in `.env` (for example
 The compose service mounts `./data` read-write (files other agents write),
 `./fixtures` read-only, and optionally an Obsidian vault read-only at `/vault`.
 
-### Setup (claiming the hub)
+### Setup
 
-A fresh hub is unconfigured: `GET /` redirects to `/setup`, and every write
-(pushes, alerts) answers `503` until it is claimed. Reads (`/display`,
-`/preview`, `/api/state`, `/api/hub`) stay open until then too, so an
-unclaimed hub shows demo pages to anyone who reaches it - claim it right
-after the first start. Open `http://127.0.0.1:8080/setup` (or the container
-log line), enter a hub name, the public base URL, and the claim code from
-the log. The result page shows **two secrets**, each **once**; save both,
-there is no way to see either again: a bearer token for agents (read and
-write), and a device key for the E1002 firmware (read only). Push endpoints
-and `POST`/`DELETE /api/alert` need `Authorization: Bearer <token>`; every
-read route above needs the token, the device key, or a browser session from
-`/login`. See [docs/DEPLOY.md](docs/DEPLOY.md) for the full server setup and
+A fresh hub is unconfigured: it serves nothing but `GET`/`POST /setup`,
+`GET /healthz` (minimal body), `/static`, `/docs` and `/openapi.json` -
+`GET /` and every reader route redirect or answer `503` until it is set up,
+and firmware telemetry answers `503` too. There is no claim code: the first
+`POST /setup` to reach the hub wins, so set it up right after the first
+start. It is guarded by address instead - only a caller on this machine's
+own loopback or private network may call it; anyone else gets `403`. Open
+`http://127.0.0.1:8080/setup` and enter a hub name and the public base URL.
+The result page shows **two secrets**, each **once**; save both, there is no
+way to see either again: a bearer token for agents (read and write), and a
+device key for the E1002 firmware (read only). Push endpoints and
+`POST`/`DELETE /api/alert` need `Authorization: Bearer <token>`; every read
+route needs the token, the device key, or a browser session from `/login`.
+See [docs/DEPLOY.md](docs/DEPLOY.md) for the full server setup and
 [skills/deskmate/SKILL.md](skills/deskmate/SKILL.md) for how an agent pushes
 data once it has the token. Once you have the token, set up an agent to
 push data with [docs/LOCAL-AGENT.md](docs/LOCAL-AGENT.md).
 
 ## Endpoints
 
-Once the hub is claimed, every row below except `/setup` and `/login` needs
+Once the hub is set up, every row below except `/setup` and `/login` needs
 a credential: the bearer token or device key as `Authorization: Bearer <...>` for a read, only the
 token for a write, and a `/login` session cookie also works for a read from
-a browser. Before claiming, reads stay open and writes answer `503`. See
-"Auth" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full rule.
+a browser. Before it is set up, every one of these answers `503` (the
+reader routes) or redirects to `/setup` (`/preview` and `/`). See "Auth" in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full rule.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/healthz` | Liveness. Last known status per adapter, never fetches; `unknown` before the first render. `GET /api/state` forces the adapters. Always `200`; an unauthenticated caller gets a minimal body once claimed |
-| GET, POST | `/setup` | Claim the hub (see Setup above); open, guarded by the claim code |
+| GET | `/healthz` | Liveness. Last known status per adapter, never fetches; `unknown` before the first render. `GET /api/state` forces the adapters. Always `200`; a minimal body while unconfigured or for an unauthenticated caller once set up |
+| GET, POST | `/setup` | Set up the hub (see Setup above); open, guarded by the caller's address, not a credential |
 | GET | `/login` | Sign in with the device key or the token; sets a session cookie |
 | GET | `/api/hub` | Hub name, base URL, configured sources |
 | GET | `/api/state` | The normalized state the pages render from |

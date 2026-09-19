@@ -42,7 +42,7 @@ whatever the last push said.
 
 ## 3. Prerequisites
 
-- The hub is claimed (see "First run and claiming the hub" in
+- The hub is set up (see "First run and setting up the hub" in
   `docs/DEPLOY.md`) and reachable over HTTP from the machine that will run
   the agent.
 - Each selector the agent will push to (`AI_USAGE_SOURCE`, `BRIEF_SOURCE`,
@@ -54,14 +54,14 @@ whatever the last push said.
 - An HTTP client on the agent machine that can send an `Authorization:
   Bearer <token>` header and a JSON body: `curl`, or the agent's own HTTP
   library.
-- `GET /api/hub` and `GET /api/state` also need that same header once the
-  hub is claimed: reads are open only before a claim, per "Auth" in
-  `docs/ARCHITECTURE.md`.
+- `GET /api/hub` and `GET /api/state` need that same header: they answer
+  `503` before the hub is set up, and `401` without a credential once it
+  is, per "Auth" in `docs/ARCHITECTURE.md`.
 
 ## 4. Credentials on the agent machine
 
-The token is shown exactly once, at claim time, on the hub's `/setup`
-result page. Saving it onto the agent machine is part of claiming the hub,
+The token is shown exactly once, when the hub is set up, on its `/setup`
+result page. Saving it onto the agent machine is part of that setup step,
 not a separate step you can do later from the hub itself - there is no way
 to display it again (see "Reset" in `docs/DEPLOY.md` if it is lost).
 
@@ -96,8 +96,8 @@ not read your shell profile, so set them in the crontab itself or in an
 Smoke test in two steps once the variables are set:
 
 1. `curl -s -o /dev/null -w "%{http_code}" "$DESKMATE_URL/api/hub"` - no
-   header. `401` proves the hub is reachable and already claimed (a `200`
-   here means it is not claimed yet; claim it first, see `docs/DEPLOY.md`).
+   header. `401` proves the hub is reachable and set up (a `503` here means
+   it is not set up yet; set it up first, see `docs/DEPLOY.md`).
 2. The same request with the header: `curl -s -o /dev/null -w "%{http_code}"
    -H "Authorization: Bearer $DESKMATE_TOKEN" "$DESKMATE_URL/api/hub"` -
    `200` proves the token is correct.
@@ -233,7 +233,7 @@ no need to poll the hub or fetch `/display/*.png` to watch for the change.
 | --- | --- |
 | `401` | Missing or wrong `DESKMATE_TOKEN` on the agent machine. |
 | `422` | Body rejected. Check for a naive datetime first (every timestamp needs a UTC offset) before other field problems. |
-| `503` | The hub itself is not claimed yet, or its `hub.json` is unreadable; an owner step, not an agent one (see `docs/DEPLOY.md`). |
+| `503` | The hub itself is not set up yet, or its `hub.json` is unreadable; an owner step, not an agent one (see `docs/DEPLOY.md`). |
 | Connection refused / DNS failure | Wrong `DESKMATE_URL`, the hub container is down, or a network path is missing between the agent machine and the server. |
 | `effective_source` stays `fixture` or `obsidian` | The selector on the server (`AI_USAGE_SOURCE`, `BRIEF_SOURCE`, or `TASKS_SOURCE`) is pinned away from `file`; change it in the server's `.env` and restart the container. |
 | A stale flag will not clear | The pushed `generated_at` / `collected_at` is old, or an agent keeps re-pushing an old timestamp instead of the real one; push current content with its true timestamp. |
@@ -242,7 +242,7 @@ no need to poll the hub or fetch `/display/*.png` to watch for the change.
 ## 10. Token rotation
 
 There is no way to rotate the token in place. Follow "Reset" in
-`docs/DEPLOY.md` to reclaim the hub and get a new token, then update
+`docs/DEPLOY.md` to set the hub up again and get a new token, then update
 `DESKMATE_TOKEN` on every agent machine and hook that pushes to it. A reset
 also rotates the device key, so the device needs `firmware/secrets.yaml`'s
 `hub_key` updated and a reflash (OTA is fine) before it can fetch pages or

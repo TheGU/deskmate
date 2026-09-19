@@ -41,8 +41,9 @@
 <body>
   <h1>deskmate setup</h1>
   <p class="sub">
-    This hub is not configured yet. Find the claim code in the container
-    log line starting "Setup needed", then fill in this form.
+    This hub is not configured yet. Fill in this form to set it up. Only
+    accepted from this hub's own local network, and only until the first
+    submission succeeds.
   </p>
   <form method="post" action="/setup">
     <label for="name">Hub name</label>
@@ -50,9 +51,7 @@
     <label for="base_url">Public base URL</label>
     <input id="base_url" name="base_url" value="{{ default_base_url }}">
     <p class="hint">http or https, a host, no path, no query, no credentials.</p>
-    <label for="claim_code">Claim code</label>
-    <input id="claim_code" name="claim_code" placeholder="XXXX-XXXX" autocomplete="off">
-    <button type="submit">Claim this hub</button>
+    <button type="submit">Set up this hub</button>
   </form>
 </body>
 </html>
