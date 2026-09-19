@@ -25,6 +25,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final
 
+from starlette.concurrency import run_in_threadpool
+
 from app.adapters.base import AdapterUnavailable, received_at_or_mtime
 from app.adapters.fixtures import day_delta, load_fixture, shift_iso
 from app.config import Settings
@@ -305,7 +307,9 @@ class ObsidianTasksAdapter:
             raise AdapterUnavailable("OBSIDIAN_VAULT_PATH is not set")
         if not vault.is_dir():
             raise AdapterUnavailable(f"vault directory not found: {vault}")
-        return read_vault(vault, self._settings.obsidian_task_glob)
+        # read_vault globs and reads up to MAX_FILES files; off the event loop
+        # so a large vault does not block every other request while it runs.
+        return await run_in_threadpool(read_vault, vault, self._settings.obsidian_task_glob)
 
 
 def read_vault(vault: Path, pattern: str) -> list[Task]:

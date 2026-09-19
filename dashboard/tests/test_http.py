@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import REPO_ROOT, Settings
-from app.main import create_app, etag_matches
+from app.main import MAX_OPEN_BODY_BYTES, create_app, etag_matches
 from app.renderer.palette import DISPLAY_SIZE
 from app.renderer.render import PAGES
 from tests.conftest import open_png
@@ -118,6 +118,23 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
         )
         assert allowed.status_code == 201
         flow_client.delete("/api/alert", headers=auth(token))
+
+
+def test_post_setup_rejects_a_form_over_the_cap(tmp_path: Path) -> None:
+    """A form with Content-Length over MAX_OPEN_BODY_BYTES is rejected before
+    request.form() ever reads it."""
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    app = create_app(settings)
+    with TestClient(app) as oversized_client:
+        oversized = {"name": "x" * (MAX_OPEN_BODY_BYTES + 1)}
+        response = oversized_client.post("/setup", data=oversized)
+        assert response.status_code == 413
 
 
 def test_a_corrupt_hub_config_503s_setup_and_writes_but_the_panel_keeps_working(

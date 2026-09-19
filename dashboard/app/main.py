@@ -77,6 +77,12 @@ logger = logging.getLogger("app.main")
 #: always names 0.0.0.0 with a note to use the LAN address instead.
 DEFAULT_PORT = 8080
 
+#: /api/device/telemetry and /setup are the only POST routes with no token
+#: (see the trade-off note on the telemetry route below), so anyone on the
+#: LAN can point either one at this single-worker container. Cap what either
+#: route will buffer in memory before validation ever runs.
+MAX_OPEN_BODY_BYTES = 64 * 1024
+
 
 @dataclass(slots=True)
 class RenderCacheEntry:
@@ -176,6 +182,27 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
+
+
+async def _read_capped_body(request: Request) -> bytes:
+    """Read ``request``'s body in chunks, rejecting it once it passes
+    ``MAX_OPEN_BODY_BYTES`` instead of buffering an arbitrarily large one.
+
+    Sets ``request._body`` on the way out (the same attribute
+    ``Request.body()`` caches), so a route that goes on to call
+    ``request.form()`` or ``request.json()`` reuses this read instead of
+    trying to consume the already-drained stream again.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_OPEN_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="body too large")
+        chunks.append(chunk)
+    body = b"".join(chunks)
+    request._body = body  # noqa: SLF001 - see docstring
+    return body
 
 
 def _effective_source_after_push(configured: str) -> str:
@@ -435,8 +462,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/device/telemetry")
     async def post_device_telemetry(request: Request) -> JSONResponse:
         hub: Hub = app.state.hub
+        body = await _read_capped_body(request)
         try:
-            payload: Any = await request.json()
+            payload: Any = json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             log(logger, logging.WARNING, "telemetry rejected", reason="body is not JSON")
             return JSONResponse(
@@ -550,6 +578,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hub: Hub = app.state.hub
         if hub.identity.error is not None:
             raise HTTPException(status_code=503, detail=hub.identity.error)
+        # request.form() reads request.stream() itself, so it cannot be handed
+        # the capped helper's bytes directly. When Content-Length is present,
+        # reject an oversized body before form() ever touches the stream; when
+        # it is absent (e.g. chunked), read the capped body first so it is
+        # cached on request._body, which stream() (and so form()) reuses.
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                declared_length = None
+            if declared_length is not None and declared_length > MAX_OPEN_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="body too large")
+        else:
+            await _read_capped_body(request)
         form = await request.form()
         name = str(form.get("name", "")).strip()
         base_url = str(form.get("base_url", ""))

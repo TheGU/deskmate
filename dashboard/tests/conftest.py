@@ -57,6 +57,9 @@ def settings(tmp_path_factory: pytest.TempPathFactory) -> Settings:
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
+        # DEVICE_SOURCE now defaults to "store"; the shared renderer/state
+        # fixtures below need fixture device data to draw the system-page chart.
+        DEVICE_SOURCE="fixture",
     )
 
 

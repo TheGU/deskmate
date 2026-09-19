@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD = REPO_ROOT / "dashboard"
 if str(DASHBOARD) not in sys.path:
     sys.path.insert(0, str(DASHBOARD))
+
+# DEVICE_SOURCE now defaults to "store"; this script renders without a real
+# device on the LAN, so it needs the fixture explicitly, same as the tests.
+# setdefault so a developer's own env/`.env` can still override it.
+os.environ.setdefault("DEVICE_SOURCE", "fixture")
 
 from PIL import Image  # noqa: E402
 

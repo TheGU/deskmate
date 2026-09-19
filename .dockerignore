@@ -1,0 +1,19 @@
+# private-backups holds firmware dumps with credentials, and the venvs are
+# hundreds of MB; none of it is COPYed into the image (see dashboard/Dockerfile).
+.git
+.venv
+**/.venv
+private-backups
+output
+data
+*.log
+firmware
+.impeccable
+dashboard/.venv
+dashboard/tests
+**/__pycache__
+.pytest_cache
+.env
+docs
+scripts
+skills

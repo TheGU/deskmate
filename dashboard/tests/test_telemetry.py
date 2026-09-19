@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
@@ -23,7 +24,7 @@ from app.adapters.device import (
     load_device_fixture,
 )
 from app.config import Settings
-from app.main import create_app
+from app.main import MAX_OPEN_BODY_BYTES, create_app
 from app.models import (
     DEVICE_STALE_AFTER_SECONDS,
     AdapterStatus,
@@ -755,6 +756,17 @@ def test_post_telemetry_rejects_a_non_json_body(device_client: TestClient, body:
     )
     assert response.status_code == 400
     assert response.json()["accepted"] is False
+
+
+def test_post_telemetry_rejects_a_body_over_the_cap(device_client: TestClient) -> None:
+    oversized = json.dumps({"device": "reterminal-e1002", "note": "x" * MAX_OPEN_BODY_BYTES})
+    response = device_client.post(
+        "/api/device/telemetry",
+        content=oversized,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert device_client.get("/api/device/telemetry").json()["summary"]["sample_count"] == 0
 
 
 @pytest.mark.parametrize(

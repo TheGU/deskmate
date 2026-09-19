@@ -37,3 +37,10 @@ services:
       timeout: 10s
       start_period: 30s
       retries: 3
+    logging:
+      # The hub logs every request and telemetry sample; on a box meant to run
+      # for a year, an unbounded json-file log only grows, so cap and rotate it.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

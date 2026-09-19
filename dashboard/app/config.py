@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     ha_entities_raw: str = Field(default="", alias="HA_ENTITIES")
 
     # -- device telemetry -----------------------------------------------
-    device_source: DeviceSource = Field(default="fixture", alias="DEVICE_SOURCE")
+    device_source: DeviceSource = Field(default="store", alias="DEVICE_SOURCE")
     telemetry_db_path: Path | None = Field(default=None, alias="TELEMETRY_DB_PATH")
     telemetry_retention_days: int = Field(
         default=30, ge=1, le=3650, alias="TELEMETRY_RETENTION_DAYS"
