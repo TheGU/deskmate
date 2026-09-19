@@ -370,14 +370,24 @@ footer entry through the existing footer-flag logic.
 ## Device (ESPHome)
 
 - Framework esp-idf, PSRAM octal. Flash layout 16MB (chip has 32MB, but ESP-IDF needs an experimental flag for 32MB with OTA).
-- No business logic. Only: page list, current index, download, display,
-  buttons, buzzer, sensors, alert timer.
+- No business logic. Only: current page index, download, display, buttons,
+  buzzer, sensors, alert timer.
 - Page URL base and the device key are runtime text components
   (`hub_base_url`, `hub_key`), not hard-coded in the YAML: `secrets.yaml`
   only seeds their first-boot value, and both are edited afterwards on the
   device's own web page or as Home Assistant text entities, with no
   reflash. Wi-Fi is likewise provisioned at runtime, through the captive
   portal or Improv, never from `secrets.yaml`.
+- The device holds no fixed page list. It cycles a page index (0-based,
+  wrapping on the buttons and the ESPHome API) and requests
+  `/display/<index>.png`; it learns the page count and the id at each
+  index from every telemetry response's `page_count` and `pages` fields
+  and keeps them in restorable globals, so enabling, disabling or
+  reordering a module on the hub's settings page reaches the device on its
+  next telemetry post, with no reflash. Before the first response of a
+  session (a fresh boot, or a hub that has never answered), the device
+  assumes a page count of 5 and does not yet know any ids; `/display/{n}.png`
+  still resolves for it either way. `alert` is always requested by name.
 - Refresh policy on the device: a periodic timer (default 30 min)
   re-requests the current page URL; ESPHome sends the conditional request
   and only refreshes the panel when the image changed. Server-side TTLs
@@ -390,13 +400,17 @@ footer entry through the existing footer-flag logic.
   about 32 s and the driver drops updates while busy, so the firmware waits
   for the driver to be idle before refreshing.
 - Telemetry: every 5 min (or once per wake on battery) the device POSTs
-  battery, temperature, humidity, Wi-Fi RSSI, uptime, page, power mode,
-  USB presence and charge state to `/api/device/telemetry`. The hub also
-  records that POST's own origin - the caller's address and the `Host`
-  header it used - and carries it on `DeviceState` as `remote_addr` and
-  `hub_host`. Both reach `GET /api/state` (reader-authenticated) and the
-  System page's HUB column (DEVICE IP, HUB URL); neither is returned by
-  `GET`/`POST /api/device/telemetry` itself.
+  battery, temperature, humidity, Wi-Fi RSSI, uptime, page, page_index,
+  power mode, USB presence and charge state to `/api/device/telemetry`.
+  `page` is the resolved page id when the device already knows it, `alert`
+  while an alert is showing (with `page_index` still naming the page
+  underneath), or `null` when the device has not yet been told the id for
+  that index; the hub treats `page` as authoritative and `page_index` as
+  the fallback. The hub also records that POST's own origin - the caller's
+  address and the `Host` header it used - and carries it on `DeviceState`
+  as `remote_addr` and `hub_host`. Both reach `GET /api/state`
+  (reader-authenticated) and the System page's HUB column (DEVICE IP, HUB
+  URL); neither is returned by `GET`/`POST /api/device/telemetry` itself.
 
 ### Power modes
 

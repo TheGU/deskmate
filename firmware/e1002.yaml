@@ -23,7 +23,9 @@ substitutions:
   # hub_base_url and hub_key are runtime text components (below), not
   # substitutions: rotating a key or moving the hub is a browser edit, not
   # a reflash. secrets.yaml still supplies their first-boot seed value.
-  page_count: "5"                           # today agenda weather brief system
+  # page_count and page_names (globals, below) are likewise runtime state,
+  # not substitutions: the device starts with a default count of 5 and no
+  # known ids, then learns both from every telemetry response.
   auto_refresh_interval: 30min              # conditional request, 304 means no panel refresh
   alert_default_seconds: "90"
   telemetry_interval: 5min                  # POST sensors to the hub
@@ -38,6 +40,7 @@ esphome:
   includes:
     - deskmate_sleep.h
     - deskmate_charger.h
+    - deskmate_pages.h
   on_boot:
     - priority: 900           # before the gpio binary_sensors (HARDWARE = 800)
       then:
@@ -47,6 +50,14 @@ esphome:
         - output.turn_on: bsp_battery_enable
     - priority: -100          # after every component is set up
       then:
+        # page_count and page_index are both restore_value: true and are
+        # restored before on_boot runs, so clamp here in case the enabled
+        # page count shrank since the last time this device was on.
+        - lambda: |-
+            if (id(page_count) < 1) id(page_count) = 1;
+            if (id(page_count) > 32) id(page_count) = 32;
+            int count = id(page_count);
+            id(page_index) = ((id(page_index) % count) + count) % count;
         - pcf85063.read_time: rtc_time
         # Decide the power mode first: a battery wake that finds USB plugged
         # in switches back to always-on before any sleep timer is armed.
@@ -197,7 +208,7 @@ deep_sleep:
           - lambda: |-
               id(wake_pin) = 5;
               id(wake_cause) = "button_left";
-              int count = ${page_count};
+              int count = id(page_count);
               id(page_index) = ((id(page_index) - 1) % count + count) % count;
       - pin:
           number: GPIO4
@@ -206,7 +217,7 @@ deep_sleep:
           - lambda: |-
               id(wake_pin) = 4;
               id(wake_cause) = "button_right";
-              id(page_index) = (id(page_index) + 1) % ${page_count};
+              id(page_index) = (id(page_index) + 1) % id(page_count);
       - pin:
           number: GPIO3
           allow_other_uses: true
@@ -278,6 +289,20 @@ globals:
   - id: current_url
     type: std::string
     restore_value: false
+  # Runtime page state, replacing what used to be the compile-time
+  # page_count substitution and a hard-coded PAGES[] name list: the device
+  # learns both from every telemetry response (docs/ARCHITECTURE.md,
+  # "Device (ESPHome)"). page_count defaults to 5 and survives a reboot;
+  # page_names does not, since a fresh session has not yet been told the
+  # ids and should say so rather than show a stale name.
+  - id: page_count
+    type: int
+    restore_value: true
+    initial_value: "5"
+  - id: page_names
+    type: std::string
+    restore_value: false
+    initial_value: '""'
   - id: page_index
     type: int
     restore_value: true
@@ -427,15 +452,16 @@ script:
                     auth = std::string("Bearer ") + id(hub_key).state;
                     return auth.c_str();
                 body: !lambda |-
-                  static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
                   auto num = [](float v, int decimals) -> std::string {
                     if (std::isnan(v)) return "null";
                     char b[24];
                     snprintf(b, sizeof(b), "%.*f", decimals, v);
                     return b;
                   };
+                  int count = id(page_count);
                   int idx = id(page_index);
-                  if (idx < 0 || idx >= ${page_count}) idx = 0;
+                  if (idx < 0 || idx >= count) idx = 0;
+                  std::string page_id = deskmate::page_name(id(page_names), idx);
                   std::string body = "{";
                   body += "\"device\":\"${name}\"";
                   body += ",\"battery_voltage\":" + num(id(battery_voltage).state, 3);
@@ -444,14 +470,25 @@ script:
                   body += ",\"humidity\":" + num(id(hum_sensor).state, 1);
                   body += ",\"wifi_rssi\":" + num(id(wifi_rssi).state, 0);
                   body += ",\"uptime_s\":" + num(id(uptime_s).state, 0);
-                  body += std::string(",\"page\":\"") + (id(alert_active) ? "alert" : PAGES[idx]) + "\"";
+                  // page: the resolved id when known, "alert" while an alert
+                  // is showing (page_index below still names the page
+                  // underneath), or null when this session has not yet been
+                  // told the id for this index; the hub resolves that case.
+                  if (id(alert_active)) {
+                    body += ",\"page\":\"alert\"";
+                  } else if (!page_id.empty()) {
+                    body += ",\"page\":\"" + page_id + "\"";
+                  } else {
+                    body += ",\"page\":null";
+                  }
+                  body += ",\"page_index\":" + std::to_string(idx);
                   body += std::string(",\"battery_mode\":") + (id(battery_mode) ? "true" : "false");
                   body += std::string(",\"usb_present\":") + (id(usb_present) ? "true" : "false");
                   body += std::string(",\"charge_state\":\"") + deskmate::charge_state_name(id(charger_status)) + "\"";
                   body += std::string(",\"wake_cause\":\"") + id(wake_cause) + "\"";
                   body += "}";
                   return body;
-                capture_response: false
+                capture_response: true
                 on_response:
                   - if:
                       condition:
@@ -461,6 +498,30 @@ script:
                             level: WARN
                             format: "Telemetry rejected by hub, HTTP %d: set the Hub key on the device's web page or in Home Assistant"
                             args: [response->status_code]
+                      else:
+                        # Learn the page count and ids for this session. The
+                        # loop is already blocked for the duration of the
+                        # POST, so keep this short.
+                        - lambda: |-
+                            json::parse_json(body, [](JsonObject root) -> bool {
+                              if (root["page_count"].is<int>()) {
+                                int n = root["page_count"].as<int>();
+                                if (n >= 1 && n <= 32) id(page_count) = n;
+                              }
+                              if (root["pages"].is<JsonArray>()) {
+                                JsonArray pages = root["pages"].as<JsonArray>();
+                                std::string joined;
+                                for (JsonVariant v : pages) {
+                                  if (!v.is<std::string>()) continue;
+                                  if (!joined.empty()) joined += ",";
+                                  joined += v.as<std::string>();
+                                }
+                                id(page_names) = joined;
+                              }
+                              return true;
+                            });
+                            int count = id(page_count);
+                            id(page_index) = ((id(page_index) % count) + count) % count;
                 on_error:
                   - logger.log:
                       level: WARN
@@ -611,10 +672,10 @@ script:
             - online_image.release: dashboard_image
       - lambda: |-
           id(force_display_update) = force_display;
-          static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
+          int count = id(page_count);
           int idx = id(page_index);
-          if (idx < 0 || idx >= ${page_count}) idx = 0;
-          std::string url = id(hub_base_url).state + "/display/" + PAGES[idx] + ".png";
+          if (idx < 0 || idx >= count) idx = 0;
+          std::string url = id(hub_base_url).state + "/display/" + std::to_string(idx) + ".png";
           if (bust_cache) url += "?t=" + std::to_string(millis());
           // set_url() unconditionally clears the ETag, so only call it when the
           // URL really changed. Same URL keeps the ETag and lets the hub answer 304.
@@ -644,7 +705,7 @@ script:
       bust_cache: bool
     then:
       - lambda: |-
-          int count = ${page_count};
+          int count = id(page_count);
           id(page_index) = ((page % count) + count) % count;
       - script.execute:
           id: load_current_page
@@ -967,11 +1028,13 @@ text_sensor:
     id: current_page
     name: "Current page"
     lambda: |-
-      static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
       if (id(alert_active)) return std::string("alert");
+      int count = id(page_count);
       int idx = id(page_index);
-      if (idx < 0 || idx >= ${page_count}) idx = 0;
-      return std::string(PAGES[idx]);
+      if (idx < 0 || idx >= count) idx = 0;
+      std::string page_id = deskmate::page_name(id(page_names), idx);
+      if (!page_id.empty()) return page_id;
+      return std::string("page ") + std::to_string(idx);
     update_interval: 60s
 
 switch:
