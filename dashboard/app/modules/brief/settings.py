@@ -31,10 +31,16 @@ class BriefSettings(BaseModel):
     )
     ttl_seconds: float = Field(
         default=60.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How long a pushed brief is cached before it is re-read.",
     )
     stale_seconds: float = Field(
         default=36000.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How old the pushed brief can get before the panel marks it stale.",
     )
 

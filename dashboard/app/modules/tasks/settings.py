@@ -38,14 +38,22 @@ class TasksSettings(BaseModel):
     )
     max_priority_tasks: int = Field(
         default=3,
+        ge=1,
+        le=10,
         description="How many of the highest-priority open tasks the panel shows at once.",
     )
     ttl_seconds: float = Field(
         default=300.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How long a fetched task list is cached before it is fetched again.",
     )
     stale_seconds: float = Field(
         default=36000.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How old a pushed task list can get before the panel marks it stale.",
     )
 

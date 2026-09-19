@@ -30,6 +30,9 @@ class DeviceSettings(BaseModel):
     )
     ttl_seconds: float = Field(
         default=60.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How long the latest telemetry summary is cached before it is re-read.",
     )
 

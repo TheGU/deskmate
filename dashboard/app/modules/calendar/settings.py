@@ -49,10 +49,15 @@ class CalendarSettings(BaseModel):
     )
     agenda_days: int = Field(
         default=7,
+        ge=1,
+        le=31,
         description="How many days ahead the agenda page shows.",
     )
     ttl_seconds: float = Field(
         default=300.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How long a fetched calendar is cached before it is fetched again.",
     )
 

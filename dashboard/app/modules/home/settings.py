@@ -60,6 +60,9 @@ class HomeSettings(BaseModel):
     )
     ttl_seconds: float = Field(
         default=120.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How long a fetched Home Assistant snapshot is cached before it is fetched again.",
     )
 

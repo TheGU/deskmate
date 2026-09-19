@@ -274,6 +274,38 @@ def test_a_secret_left_blank_survives_a_save_of_its_section(admin: AdminHub) -> 
     assert "ha-token-value" not in page.text
 
 
+def test_a_nan_ttl_is_422(admin: AdminHub) -> None:
+    """Every ``float`` settings field is ``allow_inf_nan=False``: a NaN TTL
+    would otherwise sail through validation and wreck any comparison the
+    caching code does against it."""
+    response = admin.client.post(
+        "/settings/weather",
+        headers=admin.auth,
+        data={
+            "source": "open_meteo",
+            "latitude": "",
+            "longitude": "",
+            "location_name": "",
+            "ttl_seconds": "nan",
+            "action": "save",
+        },
+    )
+
+    assert response.status_code == 422
+    assert admin.hub.hub_settings.weather.ttl_seconds != float("nan")
+
+
+def test_agenda_days_of_zero_is_422(admin: AdminHub) -> None:
+    response = admin.client.post(
+        "/settings/calendar",
+        headers=admin.auth,
+        data={"source": "ics", "agenda_days": "0", "ttl_seconds": "300", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    assert admin.hub.hub_settings.calendar.agenda_days == 7
+
+
 def test_an_unknown_section_is_404(admin: AdminHub) -> None:
     assert admin.client.post("/settings/nope", headers=admin.auth, data={}).status_code == 404
 

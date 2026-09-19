@@ -25,10 +25,16 @@ class AIUsageSettings(BaseModel):
     )
     ttl_seconds: float = Field(
         default=300.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How long a pushed usage snapshot is cached before it is re-read.",
     )
     stale_seconds: float = Field(
         default=21600.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How old the newest pushed usage sample can get before the panel marks it stale.",
     )
 
