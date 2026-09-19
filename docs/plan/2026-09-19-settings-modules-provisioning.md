@@ -482,11 +482,11 @@ groups.
 | 1.3 | done | roles, require_admin, settings stub |
 | 1.4 | done | forms.py, geocode.py, /settings, wizard, save and test |
 | 1.5 | done | backup POST, restore close-replace-reopen, rotate with session secret |
-| 1.6 | in progress | |
+| 1.6 | done | SETTINGS.md, .env.example cut, docs rewritten, render-all.py fixed |
 | 2.1a | in progress | |
 | 2.1b | planned | |
 | 2.2 | planned | |
-| 2.3 | planned | |
-| 2.4 | planned | |
+| 2.3 | in progress | CONTRIBUTING.md merged; MODULES.md and the example module follow 2.1a |
+| 2.4 | in progress | |
 | 3.1 | planned | |
 | 3.3 | planned | |
