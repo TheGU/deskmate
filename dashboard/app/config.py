@@ -215,6 +215,46 @@ class Settings(BaseSettings):
         return APP_DIR / "static"
 
 
+class Env(BaseSettings):
+    """What stays in the environment once settings move into the database
+    (plan section "What stays in the environment"): process and container
+    knobs that make no sense as a settings-page field, plus the demo knobs
+    used only in development. Everything else in ``.env.example`` moves to
+    ``app/settings.py`` sections; compose keeps ``HUB_PORT``, ``PUID``,
+    ``PGID`` and the Obsidian bind mount path, which are never read here.
+
+    Introduced in 1.2a alongside the section models; nothing constructs it
+    yet (``Settings`` above is still what the running hub reads). 1.2c is
+    where ``Settings`` is deleted and every call site takes an ``Env`` plus a
+    ``HubSettings`` instead.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+        populate_by_name=True,
+    )
+
+    data_dir: Path = Field(default=REPO_ROOT / "data", alias="DATA_DIR")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    render_timeout_ms: int = Field(default=15000, alias="RENDER_TIMEOUT_MS")
+    http_timeout_seconds: float = Field(default=10.0, alias="HTTP_TIMEOUT_SECONDS")
+    #: Shift fixture dates so the demo always looks like "today".
+    fixture_relative_dates: bool = Field(default=True, alias="FIXTURE_RELATIVE_DATES")
+    #: Phase 1 only: phase 2 moves fixtures into each module's own directory.
+    fixtures_dir: Path = Field(default=REPO_ROOT / "fixtures", alias="FIXTURES_DIR")
+
+    @property
+    def templates_dir(self) -> Path:
+        return APP_DIR / "templates"
+
+    @property
+    def static_dir(self) -> Path:
+        return APP_DIR / "static"
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Process-wide settings singleton."""
