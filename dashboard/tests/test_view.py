@@ -105,6 +105,7 @@ from app.view import (
     window_flags,
     worst_accent,
 )
+from tests.conftest import make_state
 
 TODAY = date(2026, 9, 4)
 
@@ -112,7 +113,7 @@ TODAY = date(2026, 9, 4)
 def empty_state() -> DashboardState:
     """A state where every adapter failed. Pages must still render."""
     tz = zone("Asia/Bangkok")
-    return DashboardState(
+    return make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
     )
@@ -170,7 +171,7 @@ def test_task_order_puts_overdue_first_then_priority() -> None:
 
 def test_priority_tasks_skips_completed_and_respects_the_limit(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -215,7 +216,7 @@ def test_brief_due_label_drops_the_due_word() -> None:
 
 
 def test_today_priority_tasks_shows_weekday_for_tomorrow(hub_settings: HubSettings) -> None:
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -231,7 +232,7 @@ def test_today_priority_tasks_shows_weekday_for_tomorrow(hub_settings: HubSettin
 def test_upcoming_events_labels_and_skips_the_past() -> None:
     tz = zone("Asia/Bangkok")
     now = datetime(2026, 9, 4, 12, 0, tzinfo=tz)
-    state = DashboardState(
+    state = make_state(
         generated_at=now,
         timezone="Asia/Bangkok",
         calendar=CalendarBlock(
@@ -259,7 +260,7 @@ def test_upcoming_events_labels_and_skips_the_past() -> None:
 
 def test_ai_capacity_rows_show_unavailable_when_collection_failed() -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         ai_usage=AIUsageBlock(
@@ -290,7 +291,7 @@ def test_ai_capacity_rows_show_unavailable_when_collection_failed() -> None:
 
 def test_ai_capacity_rows_5h_label_carries_the_reset_time() -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         ai_usage=AIUsageBlock(
@@ -314,7 +315,7 @@ def test_ai_capacity_rows_5h_label_carries_the_reset_time() -> None:
 
 def test_ai_capacity_rows_5h_label_is_bare_without_a_reset_time() -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         ai_usage=AIUsageBlock(
@@ -335,7 +336,7 @@ def test_ai_capacity_rows_5h_label_is_bare_without_a_reset_time() -> None:
 
 def test_ai_capacity_rows_meter_fraction_is_the_used_share() -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         ai_usage=AIUsageBlock(
@@ -372,13 +373,13 @@ def test_header_weather_without_data_is_the_hatch_flag() -> None:
 
 def test_header_weather_marks_a_stale_block_as_unavailable() -> None:
     state = empty_state()
-    state.weather = WeatherBlock(status=AdapterStatus.STALE, weather=None)
+    state.blocks["weather"] = WeatherBlock(status=AdapterStatus.STALE, weather=None)
     assert header_weather(state)["available"] is False
 
 
 def test_header_weather_rain_gives_blue_and_the_rain_label() -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         weather=WeatherBlock(
@@ -396,7 +397,7 @@ def test_header_weather_rain_gives_blue_and_the_rain_label() -> None:
 
 def test_header_weather_heat_outranks_rain_and_gives_red() -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         weather=WeatherBlock(
@@ -414,7 +415,7 @@ def test_header_weather_heat_outranks_rain_and_gives_red() -> None:
 
 def test_header_weather_plain_condition_has_no_dot() -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         weather=WeatherBlock(
@@ -451,7 +452,7 @@ def test_today_next_rows_orders_future_events_and_labels_by_day() -> None:
             Event(id="tomorrow", title="Drill", start=datetime(2026, 9, 5, 18, 0, tzinfo=tz)),
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = today_next_rows(state, reference, {})
     assert [row["title"] for row in rows] == ["Demo", "Drill"]
     assert rows[0]["when"] == "16:30"
@@ -480,7 +481,7 @@ def test_today_next_rows_all_day_variants() -> None:
             ),
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = today_next_rows(state, reference, {})
     assert rows[0]["when"] == "ALL DAY"
     assert rows[1]["when"] == "SUN"
@@ -496,7 +497,7 @@ def test_today_next_rows_caps_at_the_row_limit() -> None:
             for n in range(8)
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = today_next_rows(state, reference, {}, limit=3)
     assert len(rows) == 3
     assert [row["title"] for row in rows] == ["Event 0", "Event 1", "Event 2"]
@@ -505,7 +506,7 @@ def test_today_next_rows_caps_at_the_row_limit() -> None:
 def test_today_next_rows_empty_calendar_gives_no_rows() -> None:
     tz = zone("Asia/Bangkok")
     reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok")
     assert today_next_rows(state, reference, {}) == []
 
 
@@ -521,7 +522,7 @@ def test_today_next_rows_shows_placeholder_when_nothing_left_today() -> None:
             Event(id="tomorrow", title="Drill", start=datetime(2026, 9, 5, 18, 0, tzinfo=tz)),
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = today_next_rows(state, reference, {})
     assert rows[0] == {"when": "TODAY", "title": "Nothing left today", "color": "black"}
     assert rows[1]["title"] == "Drill"
@@ -536,7 +537,7 @@ def test_today_next_rows_no_placeholder_when_today_has_events() -> None:
         status=AdapterStatus.OK,
         items=[Event(id="later-today", title="Demo", start=datetime(2026, 9, 4, 16, 30, tzinfo=tz))],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = today_next_rows(state, reference, {})
     assert all(row["title"] != "Nothing left today" for row in rows)
     assert rows[0]["title"] == "Demo"
@@ -552,7 +553,7 @@ def test_today_next_rows_placeholder_counts_against_the_row_limit() -> None:
             for n in range(5)
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = today_next_rows(state, reference, {}, limit=3)
     assert len(rows) == 3
     assert rows[0]["title"] == "Nothing left today"
@@ -604,7 +605,7 @@ def test_every_page_carries_the_header_and_the_window_list(hub_settings: HubSett
 
 def test_overdue_segment_counts_only_open_late_tasks(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -631,7 +632,7 @@ def _flagged(state: DashboardState, hub_settings: HubSettings) -> set[str]:
 
 def _flag_state(**blocks: Any) -> DashboardState:
     tz = zone("Asia/Bangkok")
-    return DashboardState(
+    return make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         **blocks,
@@ -736,7 +737,7 @@ def test_agenda_and_weather_have_no_title_accents_left_to_carry(hub_settings: Hu
 
 def test_ai_capacity_accent_never_goes_green(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         ai_usage=AIUsageBlock(
@@ -759,7 +760,7 @@ def test_ai_capacity_accent_never_goes_green(hub_settings: HubSettings) -> None:
 
 def test_header_carries_the_overdue_flag_and_a_neutral_battery(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -784,7 +785,7 @@ def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere() -> None
     LATE chip; the header's own chip is only for the pages that do not."""
     tz = zone("Asia/Bangkok")
     reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
-    state = DashboardState(
+    state = make_state(
         generated_at=reference,
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -803,7 +804,7 @@ def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere() -> None
 def test_header_overdue_chip_hidden_when_nothing_is_overdue() -> None:
     tz = zone("Asia/Bangkok")
     reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok")
     assert header_context(state, reference.date(), reference, "agenda")["show_overdue_chip"] is False
 
 
@@ -860,7 +861,7 @@ def test_agenda_list_rows_today_all_day_first_then_time_including_past() -> None
             ),
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = agenda_list_rows(state, {"work": "blue", "personal": "green"}, today)
     assert [row["kind"] for row in rows] == ["event", "event", "event"]
     assert rows[0]["when"] == "ALL DAY"
@@ -879,7 +880,7 @@ def test_agenda_list_rows_inserts_a_divider_once_today_runs_out() -> None:
             Event(id="b", title="Sprint planning", start=datetime(2026, 9, 5, 9, 30, tzinfo=tz)),
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = agenda_list_rows(state, {}, today)
     assert rows[0]["kind"] == "event"
     # The next day is announced by name, never by its weekday.
@@ -896,7 +897,7 @@ def test_agenda_list_rows_divider_names_weekday_and_date_for_a_later_day() -> No
         status=AdapterStatus.OK,
         items=[Event(id="a", title="QBR", start=datetime(2026, 9, 7, 13, 0, tzinfo=tz))],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = agenda_list_rows(state, {}, today)
     assert rows[0] == {"kind": "divider", "label": "MON 07 SEP"}
     assert rows[1]["when"] == "13:00"
@@ -918,7 +919,7 @@ def test_agenda_list_rows_shows_more_when_the_budget_is_exceeded() -> None:
             for i in range(total_events)
         ],
     )
-    state = DashboardState(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok", calendar=events)
     rows = agenda_list_rows(state, {}, today)
     assert len(rows) == AGENDA_LIST_ROW_LIMIT
     assert rows[-1]["kind"] == "more"
@@ -941,7 +942,7 @@ def test_agenda_list_rows_never_exceeds_the_row_budget() -> None:
         for day_offset in range(10)
         for hour in range(5)
     ]
-    state = DashboardState(
+    state = make_state(
         generated_at=reference,
         timezone="Asia/Bangkok",
         calendar=CalendarBlock(status=AdapterStatus.OK, items=items),
@@ -955,9 +956,9 @@ def test_agenda_list_rows_nothing_scheduled_when_the_window_is_empty() -> None:
     tz = zone("Asia/Bangkok")
     today = date(2026, 9, 4)
     reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
-    unusable = DashboardState(generated_at=reference, timezone="Asia/Bangkok")
+    unusable = make_state(generated_at=reference, timezone="Asia/Bangkok")
     assert agenda_list_rows(unusable, {}, today) == []
-    usable_but_empty = DashboardState(
+    usable_but_empty = make_state(
         generated_at=reference,
         timezone="Asia/Bangkok",
         calendar=CalendarBlock(status=AdapterStatus.OK, items=[]),
@@ -970,7 +971,7 @@ def test_agenda_context_calendar_note_is_blank_when_the_calendar_is_just_empty(
 ) -> None:
     """An empty but usable calendar has nothing wrong with it: the note must
     be blank so the template's default "Nothing scheduled" prints."""
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
         timezone="Asia/Bangkok",
         calendar=CalendarBlock(status=AdapterStatus.OK, items=[]),
@@ -987,7 +988,7 @@ def test_agenda_context_calendar_note_explains_an_unusable_calendar(
     the empty agenda list must say why instead of the generic "Nothing
     scheduled", which would read as "you have no events" rather than "the
     calendar is not configured"."""
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
         timezone="Asia/Bangkok",
         calendar=CalendarBlock(status=AdapterStatus.UNAVAILABLE),
@@ -1000,7 +1001,7 @@ def test_agenda_context_calendar_note_explains_an_unusable_calendar(
 
 def test_month_grid_starts_monday_and_marks_today() -> None:
     today = date(2026, 9, 5)  # a Saturday; 1 Sep 2026 is a Tuesday
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 5, 8, 0, tzinfo=zone("Asia/Bangkok")), timezone="Asia/Bangkok"
     )
     grid = month_grid(state, {}, today)
@@ -1024,7 +1025,7 @@ def test_month_grid_dots_use_calendar_color_and_black_for_multiple() -> None:
             Event(id="c", title="Two", calendar="personal", start=datetime(2026, 9, 12, 14, 0, tzinfo=tz)),
         ],
     )
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 5, 8, 0, tzinfo=tz), timezone="Asia/Bangkok", calendar=events
     )
     grid = month_grid(state, {"work": "blue", "personal": "green"}, today)
@@ -1049,7 +1050,7 @@ def test_next_seven_days_clamp_busy_bars_and_blank_count() -> None:
             ),
         ],
     )
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 5, 8, 0, tzinfo=tz), timezone="Asia/Bangkok", calendar=events
     )
     rows = next_seven_days(state, today)
@@ -1131,7 +1132,7 @@ def test_weather_daily_rows_cap_at_seven() -> None:
 # ---------------------------------------------------------------------------
 def _brief_state(brief: Brief | None, *, status: AdapterStatus = AdapterStatus.OK) -> DashboardState:
     tz = zone("Asia/Bangkok")
-    return DashboardState(
+    return make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         brief=BriefBlock(status=status, brief=brief),
@@ -1224,7 +1225,7 @@ def test_brief_context_headline_drops_to_24px_when_it_does_not_fit_one_line(
 
 def _tasks_state(titles: list[str]) -> DashboardState:
     tz = zone("Asia/Bangkok")
-    return DashboardState(
+    return make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -1351,7 +1352,7 @@ def test_today_priorities_title_beside_a_weekday_chip_is_not_clipped(hub_setting
     "MON" chip under the old uniform budget now reads whole, because that
     row's own (lighter) chip hands its title the extra room."""
     today = date(2026, 9, 4)
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -1393,7 +1394,7 @@ def _device_state(**overrides: Any) -> DeviceState:
 
 
 def test_device_panel_hatches_the_battery_block_when_level_is_none(hub_settings: HubSettings) -> None:
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
         timezone="Asia/Bangkok",
         device=DeviceBlock(status=AdapterStatus.OK, device=_device_state(battery_level=None)),
@@ -1408,7 +1409,7 @@ def test_device_panel_flags_stale_with_a_tell_tale_and_age(hub_settings: HubSett
     device = _device_state(
         status=DeviceStatus.STALE, received_at=now - timedelta(hours=2), age_seconds=7200.0
     )
-    state = DashboardState(
+    state = make_state(
         generated_at=now, timezone="Asia/Bangkok", device=DeviceBlock(status=AdapterStatus.OK, device=device)
     )
     panel = device_panel(state, hub_settings)
@@ -1441,7 +1442,7 @@ def test_service_mark_per_health() -> None:
 
 
 def test_system_context_sensor_and_service_rows(hub_settings: HubSettings) -> None:
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
         timezone="Asia/Bangkok",
         home=HomeBlock(
@@ -1477,7 +1478,7 @@ def test_home_rows_merge_sensors_and_services_under_one_budget(hub_settings: Hub
         ServiceStatus(key=f"svc{i}", name=f"Service {i}", health=ServiceHealth.OK)
         for i in range(HOME_ROW_BUDGET)
     ]
-    state = DashboardState(
+    state = make_state(
         generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc),
         timezone="Asia/Bangkok",
         home=HomeBlock(status=AdapterStatus.OK, home=HomeState(sensors=sensors, services=services)),
@@ -1504,7 +1505,7 @@ def test_strip_scheme_drops_the_scheme_only() -> None:
 
 def test_hub_rows_mark_a_stale_pushed_dataset_yellow(hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
-    state = DashboardState(
+    state = make_state(
         generated_at=now,
         timezone="Asia/Bangkok",
         tasks=TasksBlock(
@@ -1531,7 +1532,7 @@ def test_hub_rows_device_origin_from_device_state(hub_settings: HubSettings) -> 
         remote_addr="192.0.2.10",
         hub_host="https://192.0.2.1:8080",
     )
-    state = DashboardState(
+    state = make_state(
         generated_at=now,
         timezone="Asia/Bangkok",
         device=DeviceBlock(status=AdapterStatus.OK, device=device),
@@ -1559,7 +1560,7 @@ def test_wake_label_spaces_out_the_firmware_word() -> None:
 # alert page
 # ---------------------------------------------------------------------------
 def _alert_state(alert: Alert | None) -> DashboardState:
-    return DashboardState(
+    return make_state(
         generated_at=datetime(2026, 9, 4, 15, 6, tzinfo=dt_timezone.utc),
         timezone="Asia/Bangkok",
         alert=alert,
@@ -1646,7 +1647,7 @@ def test_stale_info_buckets_to_whole_hours() -> None:
 
 
 def _empty_state_with(**blocks: Any) -> DashboardState:
-    return DashboardState(generated_at=NOW, timezone="Asia/Bangkok", **blocks)
+    return make_state(generated_at=NOW, timezone="Asia/Bangkok", **blocks)
 
 
 def test_ai_usage_stale_uses_the_oldest_providers_collected_at(hub_settings: HubSettings) -> None:

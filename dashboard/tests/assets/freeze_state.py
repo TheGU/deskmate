@@ -26,6 +26,14 @@ Re-run this script with no flag only when a change to the rendered pixels is
 intended; otherwise a mismatch there is a regression to fix, not a hash to
 refresh.
 
+The committed ``frozen-state.json`` is still written in the pre-2.1a shape
+(the seven typed block fields at the top level, not the ``blocks`` mapping),
+because rewriting it would mean rewriting the hashes beside it, and a gate
+that refreshes its own expectation proves nothing.
+``tests/test_render_gate.py:load_frozen_state`` reads either shape, and a
+fresh run of this script writes the current one, so ``--check`` reports the
+payload as differing for that reason as well as for the device block below.
+
 Pass ``--check`` instead to prove the script still works (the point of
 running it at all outside of an intentional pixel change) without touching
 either committed file: it builds the state and renders every page the same
@@ -82,6 +90,7 @@ from app.modules.weather.settings import WeatherSettings  # noqa: E402
 from app.renderer.render import PAGES, Renderer  # noqa: E402
 from app.settings import HubSettings  # noqa: E402
 from app.state import StateService  # noqa: E402
+from tests.test_render_gate import load_frozen_state  # noqa: E402
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 ASSETS_DIR = Path(__file__).resolve().parent
@@ -135,7 +144,7 @@ def _freeze_timestamps(state: DashboardState) -> DashboardState:
         name: block.model_copy(update={"updated_at": FROZEN_AT})
         for name, block in state.blocks.items()
     }
-    return state.model_copy(update={"generated_at": FROZEN_AT, **frozen_blocks})
+    return state.model_copy(update={"generated_at": FROZEN_AT, "blocks": frozen_blocks})
 
 
 async def _build_frozen_state(env: Env, hub_settings: HubSettings) -> DashboardState:
@@ -149,15 +158,16 @@ async def _build_frozen_state(env: Env, hub_settings: HubSettings) -> DashboardS
 
 def _dump_and_round_trip(state: DashboardState) -> str:
     payload = state.model_dump_json(indent=2) + "\n"
-    # Confirm the JSON round-trips: a change to models.py that makes a Block
-    # subclass lose fields on the way back through model_validate_json would
+    # Confirm the JSON round-trips through the very loader the gate uses
+    # (tests/test_render_gate.py:load_frozen_state): a change to models.py
+    # that makes a Block subclass lose fields on the way back would
     # otherwise pass silently, since the state built above is never compared
     # against anything else in the write path.
-    reloaded = DashboardState.model_validate_json(payload)
+    reloaded = load_frozen_state(payload)
     if reloaded != state:
         raise RuntimeError(
             "the freshly built state does not round-trip: "
-            "DashboardState.model_validate_json(...) != the model that produced it"
+            "load_frozen_state(...) != the model that produced it"
         )
     return payload
 

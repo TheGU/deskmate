@@ -47,7 +47,7 @@ from app.telemetry import (
     parse_utc,
     utc_iso,
 )
-from tests.conftest import FIXTURES_DIR, run
+from tests.conftest import FIXTURES_DIR, make_state, run
 
 #: The exact payload firmware/e1002.yaml posts.
 DEVICE_PAYLOAD: dict[str, object] = {
@@ -587,7 +587,7 @@ def test_chart_annotates_temperature_min_and_max_inside_the_box() -> None:
 # DESK panel
 # ---------------------------------------------------------------------------
 def _state_with(device: DeviceBlock, timezone_name: str = "Asia/Bangkok") -> DashboardState:
-    return DashboardState(
+    return make_state(
         generated_at=datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc),
         timezone=timezone_name,
         device=device,
@@ -1036,6 +1036,6 @@ def test_state_and_healthz_carry_the_device_block(device_client: _DeviceKeyClien
 
     device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD)
     state = device_client.get("/api/state").json()
-    assert state["device"]["status"] == "ok"
-    assert state["device"]["device"]["status"] == "ok"
-    assert state["device"]["device"]["temperature"] == pytest.approx(32.80)
+    assert state["blocks"]["device"]["status"] == "ok"
+    assert state["blocks"]["device"]["device"]["status"] == "ok"
+    assert state["blocks"]["device"]["device"]["temperature"] == pytest.approx(32.80)

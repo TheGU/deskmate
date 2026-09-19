@@ -18,7 +18,17 @@ from pathlib import Path
 
 import pytest
 
-from app.models import DashboardState
+from app.models import (
+    AIUsageBlock,
+    Block,
+    BriefBlock,
+    CalendarBlock,
+    DashboardState,
+    DeviceBlock,
+    HomeBlock,
+    TasksBlock,
+    WeatherBlock,
+)
 from app.renderer.render import PAGES, Renderer
 from tests.conftest import run
 
@@ -26,10 +36,47 @@ ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 STATE_PATH = ASSETS_DIR / "frozen-state.json"
 HASHES_PATH = ASSETS_DIR / "frozen-hashes.json"
 
+#: The seven typed block fields ``DashboardState`` carried at the top level
+#: until 2.1a turned them into the ``blocks`` mapping. The committed frozen
+#: state is in that older shape on purpose: regenerating it would also
+#: regenerate the hashes, and a gate that rewrites its own expectation is
+#: not a gate. So the loader below lifts the old keys into ``blocks``
+#: instead, which is a pure rename of where each block sits, not a change
+#: to a single value inside one.
+LEGACY_BLOCK_MODELS: dict[str, type[Block]] = {
+    "tasks": TasksBlock,
+    "calendar": CalendarBlock,
+    "weather": WeatherBlock,
+    "ai_usage": AIUsageBlock,
+    "brief": BriefBlock,
+    "home": HomeBlock,
+    "device": DeviceBlock,
+}
+
+
+def load_frozen_state(payload: str) -> DashboardState:
+    """The committed frozen state, in whichever shape it is written in."""
+    document = json.loads(payload)
+    if "blocks" not in document:
+        document["blocks"] = {
+            name: document.pop(name)
+            for name in list(LEGACY_BLOCK_MODELS)
+            if name in document
+        }
+    blocks = {
+        name: LEGACY_BLOCK_MODELS[name].model_validate(value)
+        if name in LEGACY_BLOCK_MODELS
+        else Block.model_validate(value)
+        for name, value in document.pop("blocks").items()
+    }
+    return DashboardState.model_validate({**document, "blocks": {}}).model_copy(
+        update={"blocks": blocks}
+    )
+
 
 @pytest.fixture(scope="module")
 def frozen_state() -> DashboardState:
-    return DashboardState.model_validate_json(STATE_PATH.read_text(encoding="utf-8"))
+    return load_frozen_state(STATE_PATH.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")

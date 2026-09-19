@@ -458,11 +458,21 @@ def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Pa
 
 
 def test_api_state_returns_normalized_state(reader: _ReaderClient) -> None:
+    """Schema 2: every dataset under ``blocks``, keyed by its name.
+
+    The task title and the location name are the ``SerializeAsAny`` guard
+    (models.py:DashboardState): ``blocks`` is declared as the base ``Block``,
+    so without it pydantic would serialize seven bare envelopes and this
+    body would carry no data at all.
+    """
     payload = reader.get("/api/state").json()
+    assert payload["schema"] == 2
     assert payload["timezone"] == "Asia/Bangkok"
-    assert payload["tasks"]["status"] == "ok"
-    assert payload["tasks"]["items"], "fixture tasks should not be empty"
-    assert payload["weather"]["weather"]["location_name"] == "Bangkok"
+    blocks = payload["blocks"]
+    assert blocks["tasks"]["status"] == "ok"
+    assert blocks["tasks"]["items"], "fixture tasks should not be empty"
+    assert blocks["tasks"]["items"][0]["title"]
+    assert blocks["weather"]["weather"]["location_name"] == "Bangkok"
 
 
 def test_api_state_requires_a_reader_credential(client: TestClient) -> None:

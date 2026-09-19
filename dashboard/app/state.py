@@ -114,13 +114,15 @@ class StateService:
         state = DashboardState(
             generated_at=now_local(self._hub_settings.general.timezone),
             timezone=self._hub_settings.general.timezone,
-            tasks=_block(TasksBlock, tasks_out, "items", []),
-            calendar=_block(CalendarBlock, calendar_out, "items", []),
-            weather=_block(WeatherBlock, weather_out, "weather", None),
-            ai_usage=_block(AIUsageBlock, usage_out, "providers", []),
-            brief=_block(BriefBlock, brief_out, "brief", None),
-            home=_block(HomeBlock, home_out, "home", None),
-            device=_block(DeviceBlock, device_out, "device", None),
+            blocks={
+                "tasks": build_block(TasksBlock, tasks_out, "items"),
+                "calendar": build_block(CalendarBlock, calendar_out, "items"),
+                "weather": build_block(WeatherBlock, weather_out, "weather"),
+                "ai_usage": build_block(AIUsageBlock, usage_out, "providers"),
+                "brief": build_block(BriefBlock, brief_out, "brief"),
+                "home": build_block(HomeBlock, home_out, "home"),
+                "device": build_block(DeviceBlock, device_out, "device"),
+            },
             alert=self._alerts.current,
         )
         log(
@@ -133,8 +135,17 @@ class StateService:
         return state
 
 
-def _block(model: type[BlockT], outcome: Outcome[Any], field: str, empty: Any) -> BlockT:
-    value = outcome.value if outcome.value is not None else empty
+def build_block(model: type[BlockT], outcome: Outcome[Any], value_field: str) -> BlockT:
+    """One adapter outcome as its block: the envelope plus the one field the
+    block type carries the value in.
+
+    An outcome with no value leaves ``value_field`` off entirely rather than
+    passing an empty sentinel, so the block type's own default (an empty
+    list, or ``None``) is what an unavailable dataset shows. That is the
+    same result the explicit ``empty`` argument produced before 2.1a, minus
+    a second place to keep the two in step.
+    """
+    extra: dict[str, Any] = {} if outcome.value is None else {value_field: outcome.value}
     return model(
         status=outcome.status,
         source=outcome.source,
@@ -143,7 +154,7 @@ def _block(model: type[BlockT], outcome: Outcome[Any], field: str, empty: Any) -
         # Only AIUsageBlock, BriefBlock and TasksBlock declare this field;
         # pydantic's default extra="ignore" drops it for the other blocks.
         received_at=outcome.received_at,
-        **{field: value},
+        **extra,
     )
 
 
@@ -157,4 +168,4 @@ def state_fingerprint(state: DashboardState) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-__all__ = ["StateService", "state_fingerprint"]
+__all__ = ["StateService", "build_block", "state_fingerprint"]

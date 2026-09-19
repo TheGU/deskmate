@@ -142,7 +142,7 @@ def test_post_ai_usage_preserves_an_aware_collected_at(
     )
     assert response.status_code == 200
     state = push_client.get("/api/state", headers=auth(token)).json()
-    provider = next(p for p in state["ai_usage"]["providers"] if p["provider"] == "aware-check")
+    provider = next(p for p in state["blocks"]["ai_usage"]["providers"] if p["provider"] == "aware-check")
     # Same UTC offset as the hub's own Asia/Bangkok timezone, so re-localizing
     # for display must leave the wall-clock value unchanged, not shifted.
     assert provider["collected_at"].startswith("2026-09-16T10:00:00")
@@ -179,10 +179,10 @@ def test_post_ai_usage_valid_writes_the_dataset_row_and_reaches_state(
     assert received_at is not None
 
     state = push_client.get("/api/state", headers=auth(token)).json()
-    providers = state["ai_usage"]["providers"]
+    providers = state["blocks"]["ai_usage"]["providers"]
     assert providers[0]["provider"] == "claude"
     assert providers[0]["short_window_percent_remaining"] == 62
-    assert state["ai_usage"]["received_at"] is not None
+    assert state["blocks"]["ai_usage"]["received_at"] is not None
 
 
 # -- brief --------------------------------------------------------------------
@@ -247,8 +247,8 @@ def test_post_brief_valid_writes_the_dataset_row_and_reaches_state(
     assert received_at is not None
 
     state = push_client.get("/api/state", headers=auth(token)).json()
-    assert state["brief"]["brief"]["headline"] == "Two deadlines today"
-    assert state["brief"]["received_at"] is not None
+    assert state["blocks"]["brief"]["brief"]["headline"] == "Two deadlines today"
+    assert state["blocks"]["brief"]["received_at"] is not None
 
 
 # -- tasks ----------------------------------------------------------------
@@ -289,9 +289,9 @@ def test_post_tasks_valid_writes_the_dataset_row_and_reaches_state(
     assert received_at is not None
 
     state = push_client.get("/api/state", headers=auth(token)).json()
-    items = state["tasks"]["items"]
+    items = state["blocks"]["tasks"]["items"]
     assert [item["id"] for item in items] == ["agent-1"]
-    assert state["tasks"]["received_at"] is not None
+    assert state["blocks"]["tasks"]["received_at"] is not None
 
 
 # -- warning when the selector is explicitly "fixture" -----------------------
