@@ -487,6 +487,6 @@ groups.
 | 2.1b | planned | |
 | 2.2 | planned | |
 | 2.3 | in progress | CONTRIBUTING.md merged; MODULES.md and the example module follow 2.1a |
-| 2.4 | in progress | |
+| 2.4 | done | page_count/page_names globals, index URLs, page_index in telemetry; compiled; not flashed |
 | 3.1 | planned | |
 | 3.3 | planned | |
