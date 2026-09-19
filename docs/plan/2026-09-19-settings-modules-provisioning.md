@@ -473,15 +473,15 @@ groups.
 | Package | State | Notes |
 | --- | --- | --- |
 | gate | done | tests/test_render_gate.py, frozen state and six hashes, 74cfa57 |
-| F.1 | in progress | |
-| 1.1 | in progress | |
-| 1.2a | planned | |
-| 1.2b | planned | |
+| F.1 | done | text components, AP-only Wi-Fi, improv_serial, web_server v3; compiled on ESPHome 2026.8.2; upgrade note for Wi-Fi re-provisioning after OTA; not flashed |
+| 1.1 | done | db.py, legacy.py, hub row, Hub.reload, 544 tests |
+| 1.2a | done | section models, HubSettings, SettingsStore, Env |
+| 1.2b | in progress | |
 | 1.2c | planned | |
 | 1.2d | planned | |
-| 1.3 | planned | |
+| 1.3 | done | roles, require_admin, settings stub |
 | 1.4 | planned | |
-| 1.5 | planned | |
+| 1.5 | in progress | |
 | 1.6 | planned | |
 | 2.1a | planned | |
 | 2.1b | planned | |
