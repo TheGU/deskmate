@@ -45,12 +45,13 @@ whatever the last push said.
 - The hub is set up (see "First run and setting up the hub" in
   `docs/DEPLOY.md`) and reachable over HTTP from the machine that will run
   the agent.
-- Each selector the agent will push to (`AI_USAGE_SOURCE`, `BRIEF_SOURCE`,
-  `TASKS_SOURCE`) is `auto` or `file` on the server, never `fixture` - a
-  push to a selector pinned to `fixture` is stored but never shown, and the
-  push response says so with a `warning`. `TASKS_SOURCE` must also not be
-  `obsidian` if the agent itself is the one pushing tasks (see section 6 for
-  why Obsidian usually cannot be read by the hub directly).
+- Each section the agent will push to (ai_usage, brief, tasks) has its
+  source set to `push` on `/settings` (the default for all three), never
+  `fixture` - a push to a section pinned to `fixture` is stored but never
+  shown, and the push response says so with a `warning`. The tasks section
+  must also not be set to `obsidian` if the agent itself is the one pushing
+  tasks (see section 6 for why Obsidian usually cannot be read by the hub
+  directly). See docs/SETTINGS.md for where these live.
 - An HTTP client on the agent machine that can send an `Authorization:
   Bearer <token>` header and a JSON body: `curl`, or the agent's own HTTP
   library.
@@ -150,12 +151,12 @@ characters renders smaller.
 
 **Tasks.** If your real task list lives in an Obsidian vault on your own
 PC, and the hub runs on a separate homelab server, the hub cannot mount
-that vault - `TASKS_SOURCE=obsidian` only works when the vault is on the
-same machine (or reachable by bind mount) as the hub container. In that
-case a local agent on the PC reads the vault and pushes the tasks over
-HTTP instead; `TASKS_SOURCE` on the server stays `auto` or `file`. Every
-push replaces the whole list (there is no merge by id), so push the whole
-current list every time, including a `{"tasks": []}` push on a day with
+that vault - setting the tasks section's source to `obsidian` only works
+when the vault is on the same machine (or reachable by bind mount) as the
+hub container. In that case a local agent on the PC reads the vault and
+pushes the tasks over HTTP instead; the tasks section on the server stays
+`push`. Every push replaces the whole list (there is no merge by id), so
+push the whole current list every time, including a `{"tasks": []}` push on a day with
 nothing open - pushing nothing at all just leaves the previous list on the
 panel. If you generate each task's `id` yourself, base it on the source
 path plus the title (or your own tool's stable id), not a line number,
@@ -166,8 +167,9 @@ in the timezone `GET /api/hub` reports, not the agent machine's.
 ## 7. Scheduling the loop
 
 Three runs a day matches the suggested cadence in `SKILL.md`: 07:30, 11:30
-and 17:30. `BRIEF_EVENING_HOUR` (default 14) decides which of those runs
-count as "morning" versus "evening" on the hub's side; with the default,
+and 17:30. The brief section's Evening hour field (default 14, on
+`/settings`) decides which of those runs count as "morning" versus
+"evening" on the hub's side; with the default,
 07:30 and 11:30 both land as morning, and the second push overwrites the
 first, so treat 11:30 as a refresh of the same morning brief rather than a
 second, separate one.
@@ -218,14 +220,15 @@ policy it follows.
 
 ## 8. Verifying on the panel
 
-A push response with `effective_source == "file"` and no `warning` is the
-confirmation that it worked; `GET /api/hub`'s `effective` field for that
-dataset updates instantly too (send the same `Authorization` header there;
-see section 3). The panel itself lags behind that: the
-Today page's own cache and the device's refresh timer are each about 30
-minutes, so DEMO or old content can still be showing for a few minutes
-after a good push. That is expected, not a sign anything failed - there is
-no need to poll the hub or fetch `/display/*.png` to watch for the change.
+A push response with `effective_source == "push"` and no `warning` is the
+confirmation that it worked; `GET /api/hub`'s `sources` entry for that
+dataset reports the same source instantly too (send the same
+`Authorization` header there; see section 3). The panel itself lags behind
+that: the Today page's own cache and the device's refresh timer are each
+about 30 minutes, so DEMO or old content can still be showing for a few
+minutes after a good push. That is expected, not a sign anything failed -
+there is no need to poll the hub or fetch `/display/*.png` to watch for the
+change.
 
 ## 9. Troubleshooting
 
@@ -233,17 +236,18 @@ no need to poll the hub or fetch `/display/*.png` to watch for the change.
 | --- | --- |
 | `401` | Missing or wrong `DESKMATE_TOKEN` on the agent machine. |
 | `422` | Body rejected. Check for a naive datetime first (every timestamp needs a UTC offset) before other field problems. |
-| `503` | The hub itself is not set up yet, or its `hub.json` is unreadable; an owner step, not an agent one (see `docs/DEPLOY.md`). |
+| `503` | The hub itself is not set up yet, or its database is unreadable; an owner step, not an agent one (see `docs/DEPLOY.md`). |
 | Connection refused / DNS failure | Wrong `DESKMATE_URL`, the hub container is down, or a network path is missing between the agent machine and the server. |
-| `effective_source` stays `fixture` or `obsidian` | The selector on the server (`AI_USAGE_SOURCE`, `BRIEF_SOURCE`, or `TASKS_SOURCE`) is pinned away from `file`; change it in the server's `.env` and restart the container. |
+| `effective_source` stays `fixture` or `obsidian` | The section's source on `/settings` (ai_usage, brief, or tasks) is pinned away from `push`; change it there (see docs/SETTINGS.md). |
 | A stale flag will not clear | The pushed `generated_at` / `collected_at` is old, or an agent keeps re-pushing an old timestamp instead of the real one; push current content with its true timestamp. |
 | The task or brief list keeps changing unexpectedly | More than one writer is pushing the same dataset; revisit section 2 and settle on one. |
 
 ## 10. Token rotation
 
-There is no way to rotate the token in place. Follow "Reset" in
-`docs/DEPLOY.md` to set the hub up again and get a new token, then update
-`DESKMATE_TOKEN` on every agent machine and hook that pushes to it. A reset
-also rotates the device key, so the device needs `firmware/secrets.yaml`'s
-`hub_key` updated and a reflash (OTA is fine) before it can fetch pages or
-post telemetry again.
+`POST /settings/rotate` (see "Rotate secrets" in docs/SETTINGS.md) mints a
+new token in place, without an owner having to set the hub up again. Update
+`DESKMATE_TOKEN` on every agent machine and hook that pushes to it right
+after. Rotating also mints a new device key, so the flashed device needs
+its Hub key field updated (its own web page, or the Home Assistant text
+entity - no reflash needed on firmware with the runtime `hub_key` field)
+before it can fetch pages or post telemetry again.

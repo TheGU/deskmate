@@ -30,13 +30,12 @@ curl -s -H "Authorization: Bearer $DESKMATE_TOKEN" "$DESKMATE_URL/api/hub"
 ```
 
 Returns `{name, base_url, configured, version, timezone, sources}`, where `sources` is
-`{ai_usage: {configured, effective}, brief: {...}, tasks: {...}}`. `configured` is the selector
-(`fixture`, `file`, `auto`, or `obsidian` for tasks); `effective` is what the *next* render will
-use, checked live on every call, so it already shows `file` right after you push, before the panel
-has re-rendered anything (the footer's own DEMO mark instead tracks what is currently drawn, and
-only catches up at the panel's own next render). If `effective` stays `fixture` or `obsidian`
-after you push, the selector is pinned away from your data; the push response also warns you (see
-below).
+`{ai_usage: {source}, brief: {source}, tasks: {source}}`. `source` is that section's setting on
+the hub's own settings page: `push`, `fixture`, or (tasks only) `obsidian`. It is a live read on
+every call, so it already shows `push` right after your first push (the footer's own DEMO mark
+instead tracks what is currently drawn on the panel, and only catches up at the panel's own next
+render). If `source` is `fixture` or `obsidian`, the section is not reading what you push; the
+push response also warns you (see below).
 
 **GET `/openapi.json` before posting.** The schema there is the truth: field names, types, length
 caps and examples for every model in this document are generated from the same pydantic models the
@@ -54,14 +53,13 @@ environment, and so on). Owner setup: docs/LOCAL-AGENT.md in the repository.
 
 ## One run
 
-1. `GET /api/hub` to confirm the hub is reachable and see each dataset's `configured` and
-   `effective` source.
+1. `GET /api/hub` to confirm the hub is reachable and see each dataset's `source`.
 2. Gather only the datasets you actually have real values for this run (see Ground rules above).
 3. Push each dataset you have, at most once per run.
-4. Read each response's `effective_source` and `warning`. If `effective_source` is not `file`, the
-   data was stored but the panel will not show it: the owner needs to change that dataset's
-   selector in the hub's `.env` on the server. Do not retry the push hoping for a different result.
-5. Report what you pushed, what you skipped and why, and any selector mismatch from step 4.
+4. Read each response's `effective_source` and `warning`. If `effective_source` is not `push`, the
+   data was stored but the panel will not show it: the owner needs to change that section's source
+   on the hub's settings page. Do not retry the push hoping for a different result.
+5. Report what you pushed, what you skipped and why, and any source mismatch from step 4.
 6. Stop. Do not loop, poll, or push the same dataset twice in one run.
 
 ## Push endpoints
@@ -70,8 +68,8 @@ All three: `POST`, require the token, `schema_version` optional (defaults to 1; 
 understood), unknown fields are rejected (422), every datetime field must carry a UTC offset
 (`+07:00` or `Z`; a naive value is 422, never silently assumed to be the hub's own timezone).
 Response 200: `{stored, received_at, count, effective_source}`, plus `warning` when
-`effective_source` is not what you pushed toward (the selector is pinned to `fixture`, or to
-`obsidian` for tasks).
+`effective_source` is not what you pushed toward (the section's source is pinned to `fixture`, or
+to `obsidian` for tasks).
 
 ### AI usage / quota
 
@@ -175,7 +173,7 @@ Every error is JSON with a `detail` string (or a list of pydantic problems under
 | 401 | Missing or wrong bearer token. |
 | 403 | `/setup` was called from off the hub's local network (the owner's step, not yours). |
 | 422 | Body rejected: unknown field, `schema_version` other than 1, a length or count cap, a duplicate task id, or a naive datetime. |
-| 503 | The hub is not set up yet, or its `hub.json` is unreadable (detail says which). |
+| 503 | The hub is not set up yet, or its database is unreadable (detail says which). |
 | (connection refused, DNS failure, timeout) | The hub is unreachable: wrong `DESKMATE_URL`, the hub is down, or a network problem sits between you and it. |
 
 401, 422 and 503 are permanent for this run: fix the cause (a corrected token, a corrected body,
@@ -196,8 +194,8 @@ three pushed datasets), the footer prints DEMO for as long as one of them is sti
 
 ## Verification
 
-The push response is the confirmation: `effective_source == "file"` with no `warning` means the
-panel will show it, and `GET /api/hub`'s `effective` field updates instantly too. The panel itself
+The push response is the confirmation: `effective_source == "push"` with no `warning` means the
+panel will show it, and `GET /api/hub`'s `source` field for that dataset updates instantly too. The panel itself
 lags: Today's page cache is 30 minutes and the device's own refresh timer is another 30 minutes,
 so DEMO or old data still showing for a few minutes after a good push is normal, not a failure. Do
 not poll the hub to watch for the change, do not fetch `/display/*.png` to check, and do not push
