@@ -350,7 +350,7 @@ Lookup order:
 | `generated_at` | ISO 8601 or null | Falls back to the file mtime. Also the age `BRIEF_STALE_SECONDS` measures from, see `docs/ARCHITECTURE.md`. |
 | `headline` | string | One line, shown large. Keep it under about 60 characters. |
 | `note` | string | One sentence. Also used as the AI NOTE bar on the Today page. |
-| `sections` | list | At most 4 are drawn, each with at most 3 items. |
+| `sections` | list | The Brief page has room for 9 lines total (`BRIEF_MAX_LINES` in `app/view.py`); each section title and each item counts as one line, and whatever does not fit past that budget is cut. |
 | `received_at` | ISO 8601, optional | Written by the push endpoint; a hand-authored file can omit it. |
 
 The file may also hold both modes at once, as
@@ -675,3 +675,26 @@ curl -X DELETE http://deskmate.local:8080/api/alert \
 The `show_alert` ESPHome API action is defined in `firmware/e1002.yaml`
 (Phase 2). It is listed here so the Home Assistant side can be written and
 reviewed before the device is flashed.
+
+---
+
+## Adding a new pushed dataset
+
+To add a new kind of pushed data to the hub:
+
+1. Add its pydantic model in `app/models.py` (`extra="forbid"`,
+   `schema_version`, length caps, `AwareDatetime` for any timestamp).
+2. Add a `POST /api/<name>` endpoint in `app/main.py` that writes atomically
+   and calls the matching adapter's `invalidate()`.
+3. Add or extend a file adapter under `app/adapters/` plus an `auto` variant
+   (with its own pure `resolve()` for `GET /api/hub`) if it should fall back
+   to a fixture.
+4. In `app/view.py`: give it a label on the page and in the matching
+   template; add a `<dataset>_stale` wrapper around `stale_info` if it has a
+   staleness threshold; list every page that actually draws it in
+   `PAGE_PUSH_DATASETS`; and, if it should ever flag a page's footer with
+   `!`, add that check to `window_flags`. **A page missing from
+   `PAGE_PUSH_DATASETS` silently gets no DEMO mark and no stale flag for
+   that dataset**, even if the page draws it, so double check every page
+   that reads the new field, not just the page it is "for".
+5. Add one curl example and its cadence here.

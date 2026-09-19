@@ -21,8 +21,9 @@ after you flash the device.
 
 ## Compose
 
-The repository root ships `docker-compose.yml` and `.env.example`. On the
-server:
+The repository root ships `docker-compose.yml` and `.env.example`. The
+compose file uses the `env_file: [{path, required}]` form, which needs
+Docker Compose 2.24 or newer (`docker compose version`). On the server:
 
 ```sh
 git clone <this repository> deskmate
@@ -73,6 +74,9 @@ shows the exact line to put in `firmware/secrets.yaml`
 Only the token's SHA-256 hash is written to `data/hub.json`; the plaintext
 token exists only in that one response and wherever you paste it.
 
+Once you have the token, `docs/LOCAL-AGENT.md` covers getting it onto an
+agent machine and setting up the pushes.
+
 ## Firmware secret and one reflash
 
 Put the base URL the setup page showed into `firmware/secrets.yaml`
@@ -116,9 +120,13 @@ in `data/hub.json` is always the one currently in use.
 
 ```sh
 docker compose down
-rm data/hub.json
+sudo rm data/hub.json
 docker compose up -d
 ```
+
+The container runs as root, so everything it writes under `./data` is owned
+by root with mode 0600; that is why the `rm` above, and any backup of
+`./data`, needs `sudo` (or a root-run backup job) on the host.
 
 ## Backup
 

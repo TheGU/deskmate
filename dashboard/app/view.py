@@ -517,7 +517,7 @@ def tasks_stale(state: DashboardState, settings: Settings, now: datetime) -> str
 #: here and never print DEMO. A page missing from this map, or missing one
 #: of its own datasets, silently gets no DEMO mark and no stale flag for
 #: that dataset: keep it in step with what each page's template actually
-#: draws (see "Adding a new dataset" in skills/deskmate/SKILL.md). Today
+#: draws (see "Adding a new pushed dataset" in docs/DATA-SOURCES.md). Today
 #: also draws the brief note (view.py:brief_note, the Today page's NOTE
 #: field), so "brief" belongs here too, not just on the brief page.
 PAGE_PUSH_DATASETS: dict[str, tuple[str, ...]] = {

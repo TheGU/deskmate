@@ -78,7 +78,8 @@ endpoints and `POST`/`DELETE /api/alert` then need
 open (the device fetches without a token). See
 [docs/DEPLOY.md](docs/DEPLOY.md) for the full server setup and
 [skills/deskmate/SKILL.md](skills/deskmate/SKILL.md) for how an agent pushes
-data once it has the token.
+data once it has the token. Once you have the token, set up an agent to
+push data with [docs/LOCAL-AGENT.md](docs/LOCAL-AGENT.md).
 
 ## Endpoints
 
@@ -127,9 +128,9 @@ uv sync                                   # root: esptool
 cd firmware; uv venv .venv --python 3.12; uv pip install --python .venv\Scripts\python.exe esphome
 ```
 
-- Backup (read only): `scriptsackup-firmware.ps1 -Port COM3`, or the chunked
+- Backup (read only): `scripts\backup-firmware.ps1 -Port COM3`, or the chunked
   reader `scripts\dump-flash-chunked.py` when the CH340 link drops packets.
-  Verify with `scriptserify-backup.py`.
+  Verify with `scripts\verify-backup.py`.
 - Firmware config: `firmware\e1002.yaml`, secrets in `firmware\secrets.yaml`
   (copy from `secrets.yaml.example`, gitignored).
 - Validate and compile without touching the device:
@@ -153,6 +154,8 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
   pushes AI usage, a brief and tasks to the hub.
 - [docs/HOOKS.md](docs/HOOKS.md) - a POSIX sh hook that pushes AI quota
   numbers whenever they change.
+- [docs/LOCAL-AGENT.md](docs/LOCAL-AGENT.md) - setting up an external agent
+  that pushes AI usage, a brief and tasks to a claimed hub.
 - [docs/DEPLOY.md](docs/DEPLOY.md) - running dashboard-hub in Docker on a
   homelab server: claiming it, the firmware secret, reverse proxy, backup.
 - [docs/FACTORY-RESTORE.md](docs/FACTORY-RESTORE.md) - restoring the factory

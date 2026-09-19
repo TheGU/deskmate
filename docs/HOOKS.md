@@ -10,6 +10,9 @@ resets 13:00") already computes them somehow, and just takes them as
 arguments. Wiring that source up is the owner's own step; this file only
 covers getting the numbers to the hub once they exist.
 
+Once this hook is installed and running, it owns pushing `ai-usage`; a
+scheduled agent should not also push it. See `docs/LOCAL-AGENT.md`.
+
 ## What it does
 
 - Takes the provider name and its remaining-percent readings as arguments.
