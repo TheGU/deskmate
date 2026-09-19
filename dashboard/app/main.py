@@ -9,6 +9,9 @@ Endpoints follow docs/ARCHITECTURE.md::
     POST   /login
     GET    /settings
     POST   /settings/general
+    POST   /settings/backup
+    POST   /settings/restore
+    POST   /settings/rotate
     GET    /api/hub
     GET    /api/state
     POST   /api/ai-usage
@@ -41,16 +44,28 @@ from typing import Any, AsyncIterator
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
+from starlette.formparsers import MultiPartException
 
 from app import __version__
 from app.adapters.ai_brief import current_mode
 from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
+from app.backup import (
+    BACKUP_MEDIA_TYPE,
+    MAX_RESTORE_BYTES,
+    RestoreRejected,
+    backup_filename,
+    backup_temp_path,
+    inspect_backup,
+    restore_temp_path,
+)
 from app.config import Settings, get_settings
 from app.db import get_database
 from app.hub_config import (
@@ -73,7 +88,9 @@ from app.hub_config import (
     require_reader,
     require_reader_html,
     require_token,
+    rotate_secrets,
     validate_base_url,
+    write_hub_config,
 )
 from app.legacy import LegacyEnv, import_legacy
 from app.logging_setup import configure_logging, log
@@ -106,6 +123,12 @@ DEFAULT_PORT = 8080
 #: until then. Cap what either open POST route will buffer in memory before
 #: validation ever runs.
 MAX_OPEN_BODY_BYTES = 64 * 1024
+
+#: How much of a restore upload is copied into DATA_DIR per hop through the
+#: thread pool. Big enough that a 64 MiB file is a few hundred writes, small
+#: enough that the byte counter refuses an oversized upload long before it is
+#: all on disk.
+UPLOAD_CHUNK_BYTES = 256 * 1024
 
 #: Cap on the two telemetry-origin strings (main.py:post_device_telemetry,
 #: telemetry.py's remote_addr/hub_host columns): plenty for an IPv6 address
@@ -163,6 +186,13 @@ class Hub:
         self.identity = HubIdentity(self.db)
         self._cache: dict[str, RenderCacheEntry] = {}
         self._cache_lock = asyncio.Lock()
+        # Serializes the two flows that rewrite the hub's identity out from
+        # under everything else: restore (close, replace the file, reopen,
+        # reload) and rotate. Like HubIdentity's claim lock it is an
+        # asyncio.Lock on this object, so it serializes within this process,
+        # which is all a single-worker deployment needs (see the workers=1
+        # note by the uvicorn command in Dockerfile).
+        self.identity_lock = asyncio.Lock()
         if not self.identity.configured:
             log(
                 logger,
@@ -301,6 +331,70 @@ async def _cap_form_body(request: Request) -> None:
             raise HTTPException(status_code=413, detail="body too large")
     else:
         await _read_capped_body(request)
+
+
+def _cap_restore_length(request: Request) -> None:
+    """The declared-size half of the restore cap, checked before the
+    multipart parser reads a byte.
+
+    Content-Length is a claim, not a fact, so it is only ever a fast refusal:
+    :func:`_stream_upload_to`'s counter is what actually decides, and it runs
+    whether or not the header was there (a chunked upload carries none).
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is None:
+        return
+    try:
+        declared_length = int(content_length)
+    except ValueError:
+        return
+    if declared_length > MAX_RESTORE_BYTES:
+        raise HTTPException(status_code=413, detail="the uploaded file is too large")
+
+
+async def _stream_upload_to(upload: UploadFile, target: Path) -> int:
+    """Copy ``upload`` into ``target`` a chunk at a time, returning the byte
+    count and raising 413 the moment it passes :data:`MAX_RESTORE_BYTES`.
+
+    The count comes from the bytes actually written, never from
+    ``UploadFile.size`` or a Content-Length: both are the client's word for
+    it. Each write goes through the thread pool, the same rule every other
+    synchronous file write in this module follows.
+    """
+    written = 0
+    with target.open("wb") as handle:
+        while True:
+            chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > MAX_RESTORE_BYTES:
+                raise HTTPException(status_code=413, detail="the uploaded file is too large")
+            await run_in_threadpool(handle.write, chunk)
+    return written
+
+
+def _delete_quietly(path: Path) -> None:
+    """Remove a temp file, logging rather than raising when it will not go:
+    it runs as a response background task, where an exception would only
+    reach the server log anyway, long after the body was sent."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        log(logger, logging.WARNING, "temp file not removed", path=str(path), error=str(exc))
+
+
+def _settings_html(hub: "Hub", *, error: str | None = None, status_code: int = 200) -> HTMLResponse:
+    """The settings page, optionally carrying one error line.
+
+    Shared by GET /settings and by the POSTs that refuse a submission (a
+    browser form gets the page back with the reason, not a JSON detail).
+    """
+    config = hub.identity.config
+    assert config is not None
+    template = hub.renderer.environment.get_template("settings.html")
+    html = template.render(name=config.name, error=error)
+    return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
 def _effective_source_after_push(configured: str) -> str:
@@ -803,7 +897,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return RedirectResponse("/setup", status_code=303)
         next_path = request.query_params.get("next", "/preview")
         template = hub.renderer.environment.get_template("login.html")
-        html = template.render(next=next_path, error=None)
+        # POST /settings/restore lands here with its cookie deleted and these
+        # two flags set: the page is the only place left to tell the admin
+        # that the credentials they had are the backup's now, and whether the
+        # flashed device needs its key updated too.
+        html = template.render(
+            next=next_path,
+            error=None,
+            restored="restored" in request.query_params,
+            device_key_changed="device_key_changed" in request.query_params,
+        )
         return HTMLResponse(html)
 
     @app.post("/login", response_class=HTMLResponse)
@@ -837,7 +940,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             role = "reader"
         else:
             template = hub.renderer.environment.get_template("login.html")
-            html = template.render(next=next_path, error="wrong key")
+            html = template.render(
+                next=next_path, error="wrong key", restored=False, device_key_changed=False
+            )
             return HTMLResponse(html, status_code=401)
         max_age = ADMIN_SESSION_MAX_AGE_SECONDS if role == "admin" else READER_SESSION_MAX_AGE_SECONDS
         response = RedirectResponse(next_path, status_code=303)
@@ -853,19 +958,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     # -- settings ----------------------------------------------------------
-    # Placeholder for package 1.4 (the real settings page, forms and save):
-    # this pair only proves require_admin/require_admin_html gate the way
-    # 1.3 wants, before there is anything real behind them.
     @app.get(
         "/settings", response_class=HTMLResponse, dependencies=[Depends(require_admin_html)]
     )
     async def settings_page(request: Request) -> HTMLResponse:
         hub: Hub = app.state.hub
-        config = hub.identity.config
-        assert config is not None
-        template = hub.renderer.environment.get_template("settings.html")
-        html = template.render(name=config.name)
-        return HTMLResponse(html)
+        return _settings_html(hub)
 
     @app.post("/settings/general", dependencies=[Depends(require_admin)])
     async def post_settings_general(request: Request) -> Response:
@@ -875,6 +973,155 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await _cap_form_body(request)
         await request.form()
         return Response(status_code=204)
+
+    @app.post("/settings/backup", dependencies=[Depends(require_admin)])
+    async def post_settings_backup() -> Response:
+        """Download the whole hub as one SQLite file.
+
+        ``VACUUM INTO`` writes a fresh consistent copy next to the live
+        database (never a plain file copy: the live one has a WAL beside it),
+        the copy is streamed out as an attachment, and the background task
+        removes it once the body has been sent. ``no-store`` because the file
+        carries the session secret, every secret hash and any Home Assistant
+        token: it is a credential, and a proxy or a browser cache has no
+        business keeping a copy of it.
+        """
+        hub: Hub = app.state.hub
+        target = backup_temp_path(settings.data_dir)
+        await run_in_threadpool(hub.db.backup_to, target)
+        filename = backup_filename(datetime.now(dt_timezone.utc))
+        log(logger, logging.INFO, "backup written", file=filename)
+        return FileResponse(
+            target,
+            media_type=BACKUP_MEDIA_TYPE,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+            background=BackgroundTask(_delete_quietly, target),
+        )
+
+    @app.post("/settings/restore", dependencies=[Depends(require_admin)])
+    async def post_settings_restore(request: Request) -> Response:
+        """Replace the hub's database with an uploaded backup.
+
+        The upload lands in DATA_DIR under its own name and is validated
+        there (``app/backup.py``), so a file this build cannot restore is
+        refused with the live database still in place and untouched: the
+        answer is the settings page again, 422, with the reason on it.
+
+        A file that passes is swapped in under ``Hub.identity_lock``, in the
+        order ``Database.replace_file`` documents: close the connection,
+        unlink the WAL and shm sidecars, ``os.replace``, reopen, migrate.
+        Closing first is not tidiness - on Windows ``os.replace`` over a file
+        with an open sqlite connection fails outright - and it is why a
+        restore cannot be a copy over the live file. Then ``Hub.reload()``
+        rebuilds the identity from the restored ``hub`` row, and the response
+        sends the browser to /login with its cookie deleted: the session
+        secret is the backup's now, so every cookie this hub ever signed,
+        including the admin's own, is dead.
+        """
+        hub: Hub = app.state.hub
+        _cap_restore_length(request)
+        previous = hub.identity.config
+        previous_device_key = "" if previous is None else previous.device_key_sha256
+        try:
+            async with request.form(max_part_size=MAX_RESTORE_BYTES) as form:
+                upload = form.get("file")
+                if not isinstance(upload, UploadFile) or not upload.filename:
+                    return _settings_html(
+                        hub, error="Choose a backup file to restore.", status_code=422
+                    )
+                if not str(form.get("confirm", "")).strip():
+                    return _settings_html(
+                        hub,
+                        error="Tick the confirmation box: a restore replaces this hub's "
+                        "database, secrets and all.",
+                        status_code=422,
+                    )
+                temp = restore_temp_path(settings.data_dir)
+                try:
+                    size = await _stream_upload_to(upload, temp)
+                    facts = await run_in_threadpool(inspect_backup, temp)
+                except RestoreRejected as exc:
+                    temp.unlink(missing_ok=True)
+                    log(logger, logging.WARNING, "restore refused", reason=str(exc))
+                    return _settings_html(hub, error=str(exc), status_code=422)
+                except BaseException:
+                    temp.unlink(missing_ok=True)
+                    raise
+        except MultiPartException as exc:
+            raise HTTPException(status_code=413, detail="the uploaded file is too large") from exc
+
+        async with hub.identity_lock:
+            await run_in_threadpool(hub.db.replace_file, temp)
+            await hub.reload()
+        device_key_changed = facts.device_key_sha256 != previous_device_key
+        log(logger, logging.WARNING, "database restored", bytes=size, schema=facts.schema_version)
+        if device_key_changed:
+            log(
+                logger,
+                logging.WARNING,
+                "the restored backup carries a different device key: the flashed device "
+                "stops fetching until its hub key is set to the one from this backup",
+            )
+        # The query is what login.html turns into a notice: the two hashes are
+        # only knowable after the upload, so the warning cannot sit on the
+        # confirmation form with the other two.
+        location = "/login?restored=1" + ("&device_key_changed=1" if device_key_changed else "")
+        response = RedirectResponse(location, status_code=303)
+        response.delete_cookie(COOKIE_NAME, path="/")
+        return response
+
+    @app.post("/settings/rotate", dependencies=[Depends(require_admin)])
+    async def post_settings_rotate(request: Request) -> Response:
+        """Mint a new token, device key and session secret, shown once.
+
+        The old token and device key stop verifying as soon as the row is
+        written, and the new session secret kills every cookie this hub ever
+        signed. The response therefore carries a fresh admin cookie minted
+        with the new secret: it replaces the dead one under the same name and
+        path (which is how a cookie is deleted), so the admin reading the two
+        secrets off this page is not locked out of the page they are on.
+        """
+        hub: Hub = app.state.hub
+        await _cap_form_body(request)
+        form = await request.form()
+        if not str(form.get("confirm", "")).strip():
+            return _settings_html(
+                hub,
+                error="Tick the confirmation box: rotating replaces both secrets and "
+                "signs everyone out.",
+                status_code=422,
+            )
+        config = hub.identity.config
+        assert config is not None
+        async with hub.identity_lock:
+            replacement, token, device_key = rotate_secrets(config)
+            await run_in_threadpool(write_hub_config, hub.db, replacement)
+            await hub.reload()
+        log(logger, logging.WARNING, "hub secrets rotated", name=replacement.name)
+        template = hub.renderer.environment.get_template("rotated.html")
+        html = template.render(
+            name=replacement.name,
+            base_url=replacement.base_url,
+            token=token,
+            device_key=device_key,
+        )
+        # Both secrets, shown once: never cache or store this page.
+        response = HTMLResponse(
+            html, headers={"Cache-Control": "no-store", "Pragma": "no-cache"}
+        )
+        response.set_cookie(
+            COOKIE_NAME,
+            mint_session_cookie(replacement.session_secret, time.time(), "admin"),
+            max_age=ADMIN_SESSION_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/",
+            secure=replacement.base_url.startswith("https"),
+        )
+        return response
 
     # -- preview ---------------------------------------------------------
     @app.get("/")

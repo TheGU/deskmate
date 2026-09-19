@@ -37,6 +37,12 @@
   .error {
     border: 3px solid #FF0000; padding: 10px 12px; margin: 16px 0; font-weight: 700;
   }
+  /* A restore lands here with its cookie deleted: the notice is the only
+     place left to say why the old credentials stopped working. */
+  .notice {
+    border: 3px solid #000000; padding: 10px 12px; margin: 16px 0; font-weight: 700;
+    font-size: 14px;
+  }
 </style>
 </head>
 <body>
@@ -45,6 +51,19 @@
     Enter the bearer token or the device key shown once on the setup page.
   </p>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if restored %}
+  <div class="notice">
+    The database was restored from a backup. Sign in with the token from that
+    backup: the one you had belongs to the database that was replaced.
+  </div>
+  {% endif %}
+  {% if device_key_changed %}
+  <div class="notice">
+    That backup carries a different device key. The flashed panel stops
+    fetching until its Hub key is set to the backup's device key, on the
+    device's own web page or by a reflash on older firmware.
+  </div>
+  {% endif %}
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{{ next }}">
     <label for="key">Key</label>
