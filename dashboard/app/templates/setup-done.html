@@ -31,6 +31,12 @@
   }
   .hint { font-size: 13px; font-weight: 600; margin-top: 8px; }
   a { color: #000000; }
+  a.button {
+    display: inline-block; margin-top: 22px; border: 3px solid #000000;
+    background: #000000; color: #FFFFFF; padding: 10px 16px; font: inherit;
+    font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    text-decoration: none;
+  }
 </style>
 </head>
 <body>
@@ -53,6 +59,9 @@
     That same device key is what you type at <a href="/login">/login</a> to
     view the pages in a browser.
   </p>
+  {# The claim already signed this browser in as admin (main.py:post_setup),
+     so the wizard's first step is one click away and needs no sign-in. #}
+  <a class="button" href="/setup/general">Continue to setup</a>
   <p class="hint">
     See <a href="/docs">/docs</a> for the API and
     <code style="display:inline;border:none;padding:0">{{ skill_path }}</code>

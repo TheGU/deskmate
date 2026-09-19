@@ -4,58 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>deskmate settings</title>
-<style>
-  /* Same visual language as login.html / setup-done.html: a developer/owner
-     tool, viewed in a browser, not a panel page. No JavaScript anywhere on
-     the admin pages: every control here is a plain form POST. */
-  @font-face {
-    font-family: 'Google Sans'; font-style: normal; font-weight: 400 700;
-    font-display: block;
-    src: url('/static/fonts/GoogleSans-LatinThai-var.ttf') format('truetype');
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px; background: #FFFFFF; color: #000000;
-    font-family: 'Google Sans', sans-serif; font-weight: 600;
-    max-width: 560px;
-  }
-  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; margin: 0 0 6px 0; }
-  h2 {
-    font-size: 15px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    margin: 24px 0 8px 0;
-  }
-  p.sub { margin: 0 0 18px 0; font-size: 15px; font-weight: 600; }
-  p { font-size: 14px; font-weight: 600; margin: 8px 0; }
-  section { border-top: 3px solid #000000; padding-top: 4px; margin-top: 22px; }
-  section.danger { border-top-color: #FF0000; }
-  section.danger h2 { color: #FF0000; }
-  input[type="file"] { font: inherit; font-weight: 600; margin: 8px 0; max-width: 100%; }
-  label.check { display: block; font-size: 14px; font-weight: 700; margin: 10px 0; }
-  button {
-    margin-top: 10px; border: 3px solid #000000; background: #000000; color: #FFFFFF;
-    padding: 10px 16px; font: inherit; font-weight: 700; letter-spacing: 0.06em;
-    text-transform: uppercase; cursor: pointer;
-  }
-  button.danger { border-color: #FF0000; background: #FF0000; }
-  .warning {
-    border: 3px solid #FF0000; padding: 10px 12px; margin: 12px 0; font-weight: 700;
-    font-size: 14px;
-  }
-  .error {
-    border: 3px solid #FF0000; padding: 10px 12px; margin: 16px 0; font-weight: 700;
-  }
-  code { font-family: inherit; font-weight: 700; word-break: break-all; }
-  a { color: #000000; }
-</style>
+{% include "_admin_style.html" %}
 </head>
 <body>
+  {% from "_section_form.html" import section_form %}
   <h1>Settings</h1>
   <p class="sub">Hub <strong>{{ name }}</strong>.</p>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
-  {# Package 1.4 inserts the section forms (general, sources, the wizard)
-     here, above backup and the danger zone: everything below is about the
-     hub's one database and its credentials, and belongs at the bottom. #}
+  {# One form per section, in SECTIONS order (app/settings.py), each posting
+     to its own route. Everything below them is about the hub's one database
+     and its credentials, and belongs at the bottom. #}
+  {% for form in forms %}
+  {{ section_form(form, "/settings/" ~ form.section, "Save") }}
+  {% endfor %}
 
   <section>
     <h2>Backup</h2>

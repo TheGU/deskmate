@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deskmate setup: {{ form.title }}</title>
+{% include "_admin_style.html" %}
+</head>
+<body>
+  {% from "_section_form.html" import section_form %}
+  <h1>Set up {{ form.title }}</h1>
+  <p class="sub">
+    Step {{ step_number }} of {{ step_total }}. Every step is optional: a
+    section you skip keeps its defaults and its page shows an empty state
+    until you come back to it in Settings.
+  </p>
+  {{ section_form(form, "/setup/" ~ form.section, "Save and continue", skip_url) }}
+  <p class="hint"><a href="/settings">Leave the wizard and open Settings</a></p>
+</body>
+</html>
