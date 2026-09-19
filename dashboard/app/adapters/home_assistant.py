@@ -15,9 +15,10 @@ import httpx
 
 from app.adapters.base import AdapterUnavailable
 from app.adapters.fixtures import load_fixture
-from app.config import Settings
+from app.config import Env
 from app.logging_setup import log
 from app.models import HomeSensor, HomeState, ServiceHealth, ServiceStatus
+from app.modules.home.settings import HomeSettings
 
 logger = logging.getLogger("app.adapters.home")
 
@@ -71,11 +72,12 @@ class FixtureHomeAdapter:
     name = "home"
     source = "fixture"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, home: HomeSettings, env: Env) -> None:
+        self._home = home
+        self._env = env
 
     async def fetch(self) -> HomeState:
-        payload = load_fixture(self._settings.fixtures_dir / "home.json")
+        payload = load_fixture(self._env.fixtures_dir / "home.json")
         raw: Any = payload.get("home", {})
         return HomeState.model_validate(raw)
 
@@ -86,19 +88,21 @@ class RestHomeAdapter:
     name = "home"
     source = "rest"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, home: HomeSettings, env: Env) -> None:
+        self._home = home
+        self._env = env
 
     async def fetch(self) -> HomeState:
-        settings = self._settings
-        if not settings.ha_url or not settings.ha_token:
-            raise AdapterUnavailable("HA_URL / HA_TOKEN are not set")
-        url = settings.ha_url.rstrip("/") + "/api/states"
+        home = self._home
+        token = home.token.get_secret_value()
+        if not home.url or not token:
+            raise AdapterUnavailable("the home assistant url / token are not set")
+        url = home.url.rstrip("/") + "/api/states"
         headers = {
-            "Authorization": f"Bearer {settings.ha_token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=self._env.http_timeout_seconds) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
             payload: Any = response.json()
@@ -108,7 +112,7 @@ class RestHomeAdapter:
             str(item.get("entity_id")): item for item in payload if isinstance(item, dict)
         }
         log(logger, logging.INFO, "home assistant states read", entities=len(states))
-        return build_home_state(states, settings.ha_entities)
+        return build_home_state(states, home.entity_map())
 
 
 def build_home_state(
@@ -182,7 +186,7 @@ def build_home_state(
     return HomeState(sensors=sensors, services=services)
 
 
-def build_home_adapter(settings: Settings) -> FixtureHomeAdapter | RestHomeAdapter:
-    if settings.ha_source == "rest":
-        return RestHomeAdapter(settings)
-    return FixtureHomeAdapter(settings)
+def build_home_adapter(home: HomeSettings, env: Env) -> FixtureHomeAdapter | RestHomeAdapter:
+    if home.source == "rest":
+        return RestHomeAdapter(home, env)
+    return FixtureHomeAdapter(home, env)

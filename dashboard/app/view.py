@@ -11,7 +11,6 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from app import icons
-from app.config import Settings
 from app.models import (
     AdapterStatus,
     Alert,
@@ -27,6 +26,7 @@ from app.models import (
     Weather,
 )
 from app.renderer.chart import build_chart
+from app.settings import HubSettings
 from app.timeutil import to_local
 
 UNKNOWN = "unknown"
@@ -390,16 +390,11 @@ def today_next_rows(
 DEFAULT_CALENDAR_COLORS: tuple[str, ...] = ("blue", "green", "yellow")
 
 
-def calendar_colors(state: DashboardState, settings: Settings) -> dict[str, str]:
+def calendar_colors(state: DashboardState, settings: HubSettings) -> dict[str, str]:
     """Colour per calendar name, configured first, then the default cycle."""
     mapping: dict[str, str] = {}
-    configured = settings.calendar_color_list
-    for index, name in enumerate(settings.calendar_name_list):
-        mapping[name.lower()] = (
-            configured[index]
-            if index < len(configured)
-            else DEFAULT_CALENDAR_COLORS[index % len(DEFAULT_CALENDAR_COLORS)]
-        )
+    for index, feed in enumerate(settings.calendar.feeds):
+        mapping[settings.calendar.feed_name(index).lower()] = feed.color
     unnamed = 0
     for event in state.calendar.items:
         key = (event.calendar or "").lower()
@@ -478,25 +473,25 @@ def stale_info(
     return f"{hours} H AGO"
 
 
-def ai_usage_stale(state: DashboardState, settings: Settings, now: datetime) -> str | None:
+def ai_usage_stale(state: DashboardState, settings: HubSettings, now: datetime) -> str | None:
     """Age source: the oldest provider's ``collected_at``."""
     block = state.ai_usage
     collected = [p.collected_at for p in block.providers if p.collected_at is not None]
     reference = min(collected) if collected else None
-    return stale_info(reference, block.source, settings.ai_usage_stale_seconds, now)
+    return stale_info(reference, block.source, settings.ai_usage.stale_seconds, now)
 
 
-def brief_stale(state: DashboardState, settings: Settings, now: datetime) -> str | None:
+def brief_stale(state: DashboardState, settings: HubSettings, now: datetime) -> str | None:
     """Age source: ``Brief.generated_at``."""
     block = state.brief
     reference = block.brief.generated_at if block.brief is not None else None
-    return stale_info(reference, block.source, settings.brief_stale_seconds, now)
+    return stale_info(reference, block.source, settings.brief.stale_seconds, now)
 
 
-def tasks_stale(state: DashboardState, settings: Settings, now: datetime) -> str | None:
+def tasks_stale(state: DashboardState, settings: HubSettings, now: datetime) -> str | None:
     """Age source: ``TasksBlock.received_at``."""
     block = state.tasks
-    return stale_info(block.received_at, block.source, settings.tasks_stale_seconds, now)
+    return stale_info(block.received_at, block.source, settings.tasks.stale_seconds, now)
 
 
 #: Which pushed datasets each page actually shows: what the footer's DEMO
@@ -529,7 +524,7 @@ def page_shows_demo_data(state: DashboardState, page: str) -> bool:
 
 
 def window_flags(
-    state: DashboardState, settings: Settings, reference: datetime, overdue_count: int
+    state: DashboardState, settings: HubSettings, reference: datetime, overdue_count: int
 ) -> set[str]:
     """Pages the window list marks with a "!".
 
@@ -654,7 +649,7 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
 
 
 def footer_context(
-    state: DashboardState, settings: Settings, today: date, reference: datetime, page: str
+    state: DashboardState, settings: HubSettings, today: date, reference: datetime, page: str
 ) -> dict[str, Any]:
     """The window list: the five pages the buttons walk through, plus the
     DEMO mark at the footer's right end for this page."""
@@ -674,7 +669,7 @@ def footer_context(
     }
 
 
-def base_context(state: DashboardState, settings: Settings, page: str) -> dict[str, Any]:
+def base_context(state: DashboardState, settings: HubSettings, page: str) -> dict[str, Any]:
     reference = to_local(state.updated_at, state.timezone)
     today = reference.date()
     return {
@@ -695,14 +690,14 @@ def base_context(state: DashboardState, settings: Settings, page: str) -> dict[s
     }
 
 
-def today_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
+def today_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "today")
     reference: datetime = context["reference"]
     today: date = context["today"]
     colors = calendar_colors(state, settings)
 
     context["priorities"] = (
-        today_priority_tasks(state, today, settings.max_priority_tasks)
+        today_priority_tasks(state, today, settings.tasks.max_priority_tasks)
         if state.tasks.usable
         else []
     )
@@ -1006,7 +1001,7 @@ def next_seven_days(state: DashboardState, today: date) -> list[dict[str, Any]]:
     return rows
 
 
-def agenda_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
+def agenda_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "agenda")
     today: date = context["today"]
     reference: datetime = context["reference"]
@@ -1135,7 +1130,7 @@ def weather_daily_rows(weather: Weather | None, today: date, limit: int = 7) -> 
     return rows
 
 
-def weather_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
+def weather_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "weather")
     weather = state.weather.weather if state.weather.usable else None
     reference: datetime = context["reference"]
@@ -1353,7 +1348,7 @@ def brief_lines(
     return visible, True
 
 
-def brief_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
+def brief_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "brief")
     today: date = context["today"]
     reference: datetime = context["reference"]
@@ -1507,7 +1502,7 @@ def wake_label(wake_cause: str | None) -> str:
     return wake_cause.replace("_", " ").upper()
 
 
-def device_panel(state: DashboardState, settings: Settings) -> dict[str, Any]:
+def device_panel(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     """Everything the DESK instrument cluster and its chart draw."""
     device: DeviceState | None = state.device.device
     if not state.device.usable or device is None or not device.has_reading:
@@ -1601,7 +1596,7 @@ def strip_scheme(url: str) -> str:
 #: above), so they never draw the yellow telltale here; they still get an
 #: age like everything else.
 def _hub_dataset_rows(
-    state: DashboardState, settings: Settings, now: datetime
+    state: DashboardState, settings: HubSettings, now: datetime
 ) -> list[dict[str, Any]]:
     datasets: tuple[tuple[str, Block, str | None], ...] = (
         ("TASKS", state.tasks, tasks_stale(state, settings, now)),
@@ -1662,13 +1657,13 @@ def _hub_device_rows(state: DashboardState, now: datetime) -> list[dict[str, Any
     ]
 
 
-def hub_rows(state: DashboardState, settings: Settings, now: datetime) -> list[dict[str, Any]]:
+def hub_rows(state: DashboardState, settings: HubSettings, now: datetime) -> list[dict[str, Any]]:
     """The HUB column's fixed nine rows, in order: six dataset ages, then
     the device's own sync age, IP and bound hub URL."""
     return _hub_dataset_rows(state, settings, now) + _hub_device_rows(state, now)
 
 
-def system_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
+def system_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "system")
     reference: datetime = context["reference"]
     context["home_note"] = block_note(state.home.status, "home")
@@ -1724,7 +1719,7 @@ ALERT_BAND_ACCENT: dict[AlertPriority, str] = {
 }
 
 
-def alert_context(state: DashboardState, settings: Settings) -> dict[str, Any]:
+def alert_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "alert")
     alert: Alert | None = state.alert
     context["alert"] = alert
@@ -1754,7 +1749,7 @@ CONTEXT_BUILDERS = {
 }
 
 
-def build_context(page: str, state: DashboardState, settings: Settings) -> dict[str, Any]:
+def build_context(page: str, state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     builder = CONTEXT_BUILDERS.get(page)
     if builder is None:
         raise KeyError(f"unknown page {page!r}")

@@ -24,7 +24,7 @@ from app.adapters.device import (
     downsample,
     load_device_fixture,
 )
-from app.config import Settings
+from app.config import Env
 from app.db import Database, get_database
 from app.main import MAX_OPEN_BODY_BYTES, create_app
 from app.models import (
@@ -36,7 +36,9 @@ from app.models import (
     DeviceStatus,
     DeviceTelemetry,
 )
+from app.modules.device.settings import DeviceSettings
 from app.renderer.chart import build_chart
+from app.settings import HubSettings
 from app.view import device_panel, power_label, system_context
 from app.telemetry import (
     TelemetryStore,
@@ -91,20 +93,23 @@ def store(database: Database) -> TelemetryStore:
 
 
 @pytest.fixture()
-def device_settings(tmp_path: Path) -> Iterator[Settings]:
+def device_env(tmp_path: Path) -> Iterator[Env]:
     """A hub whose database starts out empty. The database is process-wide
     and keyed by path, so the fixture closes it again on the way out rather
     than leaving a handle on a temp directory."""
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
-        DEVICE_SOURCE="store",
     )
-    yield settings
-    get_database(settings.hub_db_file).close()
+    yield env
+    get_database(env.hub_db_file).close()
+
+
+@pytest.fixture()
+def device_hub_settings() -> HubSettings:
+    return HubSettings(device=DeviceSettings(source="store"))
 
 
 # ---------------------------------------------------------------------------
@@ -430,36 +435,42 @@ def test_build_device_state_goes_stale() -> None:
 # adapters
 # ---------------------------------------------------------------------------
 def test_store_adapter_is_unavailable_until_the_device_reports(
-    device_settings: Settings,
+    device_hub_settings: HubSettings, device_env: Env,
 ) -> None:
-    adapter = StoreDeviceAdapter(device_settings)
+    adapter = StoreDeviceAdapter(device_hub_settings.device, device_env)
     with pytest.raises(AdapterUnavailable):
         run(adapter.fetch())
 
 
-def test_store_adapter_reads_what_was_posted(device_settings: Settings) -> None:
-    store = get_telemetry_store(device_settings)
+def test_store_adapter_reads_what_was_posted(
+    device_hub_settings: HubSettings, device_env: Env
+) -> None:
+    store = get_telemetry_store(device_env.hub_db_file, device_hub_settings.device.retention_days)
     store.insert(DeviceTelemetry.model_validate(DEVICE_PAYLOAD))
-    state = run(StoreDeviceAdapter(device_settings).fetch())
+    state = run(StoreDeviceAdapter(device_hub_settings.device, device_env).fetch())
     assert state.status is DeviceStatus.OK
     assert state.temperature == pytest.approx(32.80)
     assert state.sample_count == 1
 
 
-def test_store_adapter_carries_the_telemetry_origin(device_settings: Settings) -> None:
-    store = get_telemetry_store(device_settings)
+def test_store_adapter_carries_the_telemetry_origin(
+    device_hub_settings: HubSettings, device_env: Env
+) -> None:
+    store = get_telemetry_store(device_env.hub_db_file, device_hub_settings.device.retention_days)
     store.insert(
         DeviceTelemetry.model_validate(DEVICE_PAYLOAD),
         remote_addr="192.0.2.10",
         hub_host="https://192.0.2.1:8080",
     )
-    state = run(StoreDeviceAdapter(device_settings).fetch())
+    state = run(StoreDeviceAdapter(device_hub_settings.device, device_env).fetch())
     assert state.remote_addr == "192.0.2.10"
     assert state.hub_host == "https://192.0.2.1:8080"
 
 
-def test_fixture_adapter_fills_an_empty_store(device_settings: Settings) -> None:
-    state = run(FixtureDeviceAdapter(device_settings).fetch())
+def test_fixture_adapter_fills_an_empty_store(
+    device_hub_settings: HubSettings, device_env: Env
+) -> None:
+    state = run(FixtureDeviceAdapter(device_hub_settings.device, device_env).fetch())
     assert state.status is DeviceStatus.OK
     assert state.device == "reterminal-e1002"
     assert state.sample_count == 288
@@ -583,17 +594,17 @@ def _state_with(device: DeviceBlock, timezone_name: str = "Asia/Bangkok") -> Das
     )
 
 
-def test_device_panel_without_a_device(device_settings: Settings) -> None:
+def test_device_panel_without_a_device(device_hub_settings: HubSettings) -> None:
     panel = device_panel(
         _state_with(DeviceBlock(status=AdapterStatus.UNAVAILABLE, source="store")),
-        device_settings,
+        device_hub_settings,
     )
     assert panel["available"] is False
     assert panel["chart"].has_data is False
     assert panel["chart"].note == "NO DEVICE DATA YET"
 
 
-def test_device_panel_separates_no_data_from_no_history(device_settings: Settings) -> None:
+def test_device_panel_separates_no_data_from_no_history(device_hub_settings: HubSettings) -> None:
     """A device that just booted has readings but nothing to plot yet."""
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     fresh = sample(0, 32.8, 54.4)
@@ -611,7 +622,7 @@ def test_device_panel_separates_no_data_from_no_history(device_settings: Setting
             ),
         )
     )
-    panel = device_panel(state, device_settings)
+    panel = device_panel(state, device_hub_settings)
     assert panel["available"] is True
     assert panel["temperature_text"] == "32.8"
     assert panel["humidity_text"] == "54"
@@ -619,7 +630,7 @@ def test_device_panel_separates_no_data_from_no_history(device_settings: Setting
     assert panel["chart"].note == "NOT ENOUGH HISTORY YET"
 
 
-def test_device_panel_formats_battery_and_wifi(device_settings: Settings) -> None:
+def test_device_panel_formats_battery_and_wifi(device_hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     latest = DeviceSample(
         received_at=now,
@@ -641,7 +652,7 @@ def test_device_panel_formats_battery_and_wifi(device_settings: Settings) -> Non
             ),
         )
     )
-    panel = device_panel(state, device_settings)
+    panel = device_panel(state, device_hub_settings)
     assert panel["battery_text"] == "12"
     assert panel["battery_fraction"] == pytest.approx(0.12)
     # 12 is above the 10 percent red floor, so this only warrants yellow.
@@ -682,7 +693,7 @@ def _device_state_with_power(
     )
 
 
-def test_device_panel_shows_the_power_label_on_usb(device_settings: Settings) -> None:
+def test_device_panel_shows_the_power_label_on_usb(device_hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     latest = _device_state_with_power(True, "charging", now=now)
     state = _state_with(
@@ -697,11 +708,11 @@ def test_device_panel_shows_the_power_label_on_usb(device_settings: Settings) ->
             ),
         )
     )
-    panel = device_panel(state, device_settings)
+    panel = device_panel(state, device_hub_settings)
     assert panel["power_word"] == "CHARGING"
 
 
-def test_device_panel_shows_the_power_label_on_battery(device_settings: Settings) -> None:
+def test_device_panel_shows_the_power_label_on_battery(device_hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     latest = _device_state_with_power(False, "not_charging", now=now)
     state = _state_with(
@@ -716,11 +727,11 @@ def test_device_panel_shows_the_power_label_on_battery(device_settings: Settings
             ),
         )
     )
-    panel = device_panel(state, device_settings)
+    panel = device_panel(state, device_hub_settings)
     assert panel["power_word"] == "BATTERY"
 
 
-def test_device_panel_hides_the_power_label_when_unreported(device_settings: Settings) -> None:
+def test_device_panel_hides_the_power_label_when_unreported(device_hub_settings: HubSettings) -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     latest = _device_state_with_power(None, None, now=now)
     state = _state_with(
@@ -735,13 +746,15 @@ def test_device_panel_hides_the_power_label_when_unreported(device_settings: Set
             ),
         )
     )
-    panel = device_panel(state, device_settings)
+    panel = device_panel(state, device_hub_settings)
     assert panel["power_word"] is None
 
 
-def test_system_page_drops_the_home_room_rows(settings: Settings, state: DashboardState) -> None:
+def test_system_page_drops_the_home_room_rows(
+    hub_settings: HubSettings, state: DashboardState
+) -> None:
     """The DESK panel owns temperature and humidity now."""
-    context = system_context(state, settings)
+    context = system_context(state, hub_settings)
     names = {row["name"] for row in context["home_rows"] if row["kind"] == "sensor"}
     assert "ROOM TEMP" not in names
     assert "ROOM HUMIDITY" not in names
@@ -777,13 +790,13 @@ class _DeviceKeyClient:
 
 
 @pytest.fixture()
-def device_client(device_settings: Settings) -> _DeviceKeyClient:
+def device_client(device_hub_settings: HubSettings, device_env: Env) -> _DeviceKeyClient:
     """No lifespan on purpose: none of these endpoints renders, so the test
     does not need to pay for a Chromium start. Claims the hub so the
     endpoints below are reachable at all, then hands back a client that
     sends the device key on every call.
     """
-    client = TestClient(create_app(device_settings))
+    client = TestClient(create_app(device_env, device_hub_settings))
     secrets = asyncio.run(
         client.app.state.hub.identity.claim(
             name="deskmate", base_url="http://dashboard-hub.lan:8080"

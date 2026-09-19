@@ -21,10 +21,11 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from PIL import Image
 from playwright.async_api import Browser, Playwright, async_playwright
 
-from app.config import Settings
+from app.config import Env
 from app.logging_setup import log
 from app.models import DashboardState
 from app.renderer.palette import DISPLAY_SIZE, quantize, to_png_bytes
+from app.settings import HubSettings
 from app.view import build_context
 
 logger = logging.getLogger("app.render")
@@ -95,12 +96,21 @@ def font_css(fonts_dir: str, embed: bool) -> str:
 
 
 class Renderer:
-    """Renders one page at a time; owns the Chromium process."""
+    """Renders one page at a time; owns the Chromium process.
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self._env = Environment(
-            loader=FileSystemLoader(str(settings.templates_dir)),
+    ``hub_settings`` is mutable on purpose: ``Hub.reload()`` (1.2c: also a
+    settings save) assigns a fresh snapshot in place rather than replacing
+    the whole ``Renderer`` (which would mean tearing down Chromium), so
+    ``render_html``/``render_rgb``/``render_png``/``probe`` keep their old
+    ``(page, state, ...)`` shape and always read whatever snapshot is
+    current at call time.
+    """
+
+    def __init__(self, env: Env, hub_settings: HubSettings) -> None:
+        self._env = env
+        self.hub_settings = hub_settings
+        self._jinja_env = Environment(
+            loader=FileSystemLoader(str(env.templates_dir)),
             autoescape=select_autoescape(["html"]),
             trim_blocks=True,
             lstrip_blocks=True,
@@ -112,7 +122,7 @@ class Renderer:
     @property
     def environment(self) -> Environment:
         """The Jinja2 environment, also used for the developer preview page."""
-        return self._env
+        return self._jinja_env
 
     @property
     def connected(self) -> bool:
@@ -150,10 +160,10 @@ class Renderer:
     def render_html(self, page: str, state: DashboardState, *, embed_fonts: bool) -> str:
         if page not in PAGES:
             raise KeyError(f"unknown page {page!r}")
-        context: dict[str, Any] = build_context(page, state, self._settings)
-        context["font_css"] = font_css(str(self._settings.static_dir / "fonts"), embed_fonts)
+        context: dict[str, Any] = build_context(page, state, self.hub_settings)
+        context["font_css"] = font_css(str(self._env.static_dir / "fonts"), embed_fonts)
         context["embed_fonts"] = embed_fonts
-        template = self._env.get_template(f"{page}.html")
+        template = self._jinja_env.get_template(f"{page}.html")
         return template.render(**context)
 
     async def probe(self, page: str, state: DashboardState, expression: str) -> Any:
@@ -218,7 +228,7 @@ class Renderer:
                         "width": DISPLAY_SIZE[0],
                         "height": DISPLAY_SIZE[1],
                     },
-                    timeout=self._settings.render_timeout_ms,
+                    timeout=self._env.render_timeout_ms,
                 )
             finally:
                 await context.close()

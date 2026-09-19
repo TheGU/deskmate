@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from app.adapters.base import AdapterUnavailable
-from app.config import Settings
+from app.config import Env
 from app.logging_setup import log
 from app.models import (
     DEVICE_STALE_AFTER_SECONDS,
@@ -28,6 +28,7 @@ from app.models import (
     DeviceState,
     DeviceStatus,
 )
+from app.modules.device.settings import DeviceSettings
 from app.telemetry import TelemetrySummary, get_telemetry_store, utc_now
 
 logger = logging.getLogger("app.adapters.device")
@@ -248,9 +249,9 @@ def _state_from_samples(samples: Sequence[DeviceSample], *, now: datetime) -> De
 # ---------------------------------------------------------------------------
 # adapters
 # ---------------------------------------------------------------------------
-def _state_from_store(settings: Settings, *, now: datetime) -> DeviceState | None:
+def _state_from_store(device: DeviceSettings, env: Env, *, now: datetime) -> DeviceState | None:
     """Build the state from stored telemetry, or ``None`` when the store is empty."""
-    store = get_telemetry_store(settings)
+    store = get_telemetry_store(env.hub_db_file, device.retention_days)
     summary = store.summary()
     if summary.sample_count == 0:
         return None
@@ -286,11 +287,12 @@ class StoreDeviceAdapter:
     name = "device"
     source = "store"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, device: DeviceSettings, env: Env) -> None:
+        self._device = device
+        self._env = env
 
     async def fetch(self) -> DeviceState:
-        state = _state_from_store(self._settings, now=utc_now())
+        state = _state_from_store(self._device, self._env, now=utc_now())
         if state is None:
             raise AdapterUnavailable("the device has not posted any telemetry yet")
         return _log_state(state, self.source, "store")
@@ -302,19 +304,20 @@ class FixtureDeviceAdapter:
     name = "device"
     source = "fixture"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, device: DeviceSettings, env: Env) -> None:
+        self._device = device
+        self._env = env
 
     async def fetch(self) -> DeviceState:
         now = utc_now()
-        stored = _state_from_store(self._settings, now=now)
+        stored = _state_from_store(self._device, self._env, now=now)
         if stored is not None:
             return _log_state(stored, self.source, "store")
-        samples = load_device_fixture(self._settings.fixtures_dir / "device.json", now=now)
+        samples = load_device_fixture(self._env.fixtures_dir / "device.json", now=now)
         return _log_state(_state_from_samples(samples, now=now), self.source, "fixture")
 
 
-def build_device_adapter(settings: Settings) -> StoreDeviceAdapter | FixtureDeviceAdapter:
-    if settings.device_source == "store":
-        return StoreDeviceAdapter(settings)
-    return FixtureDeviceAdapter(settings)
+def build_device_adapter(device: DeviceSettings, env: Env) -> StoreDeviceAdapter | FixtureDeviceAdapter:
+    if device.source == "store":
+        return StoreDeviceAdapter(device, env)
+    return FixtureDeviceAdapter(device, env)

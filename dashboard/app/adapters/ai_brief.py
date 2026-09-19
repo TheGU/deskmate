@@ -22,8 +22,10 @@ from typing import Any
 
 from app.adapters.base import AdapterUnavailable, received_at_or_mtime
 from app.adapters.fixtures import day_delta, load_fixture, shift_tree
-from app.config import Settings
+from app.config import Env
 from app.models import Brief, BriefMode, BriefSection
+from app.modules.brief.settings import BriefSettings
+from app.modules.general.settings import GeneralSettings
 from app.timeutil import now_local, to_local, today_local
 
 logger = logging.getLogger("app.adapters.ai_brief")
@@ -33,10 +35,10 @@ HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(?P<title>.+?)\s*#*\s*$")
 BULLET = re.compile(r"^\s*[-*+]\s+(?P<item>.+?)\s*$")
 
 
-def current_mode(settings: Settings) -> BriefMode:
-    """Morning before ``BRIEF_EVENING_HOUR``, evening from that hour on."""
-    hour = now_local(settings.timezone).hour
-    return BriefMode.MORNING if hour < settings.brief_evening_hour else BriefMode.EVENING
+def current_mode(brief: BriefSettings, general: GeneralSettings) -> BriefMode:
+    """Morning before ``brief.evening_hour``, evening from that hour on."""
+    hour = now_local(general.timezone).hour
+    return BriefMode.MORNING if hour < brief.evening_hour else BriefMode.EVENING
 
 
 def parse_markdown_brief(text: str, mode: BriefMode) -> Brief:
@@ -90,19 +92,22 @@ class FixtureBriefAdapter:
     name = "brief"
     source = "fixture"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, brief: BriefSettings, general: GeneralSettings, env: Env) -> None:
+        self._brief = brief
+        self._general = general
+        self._env = env
 
     def resolve(self) -> str:
         return self.source
 
     async def fetch(self) -> Brief:
-        settings = self._settings
-        payload = load_fixture(settings.fixtures_dir / "brief.json")
+        env = self._env
+        timezone_name = self._general.timezone
+        payload = load_fixture(env.fixtures_dir / "brief.json")
         delta = day_delta(
-            payload, today_local(settings.timezone), enabled=settings.fixture_relative_dates
+            payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
-        mode = current_mode(settings)
+        mode = current_mode(self._brief, self._general)
         raw: Any = payload.get(mode.value)
         if raw is None:
             raw = payload.get("morning") or payload.get("evening")
@@ -111,20 +116,21 @@ class FixtureBriefAdapter:
         brief = Brief.model_validate(shift_tree(raw, delta, DATE_KEYS))
         brief.source = "fixture"
         if brief.generated_at is not None:
-            brief.generated_at = to_local(brief.generated_at, settings.timezone)
+            brief.generated_at = to_local(brief.generated_at, timezone_name)
         return brief
 
 
 class FileBriefAdapter:
-    """Brief from ``BRIEF_DIR`` (default ``data/brief``): ``current.json``,
-    the shape ``POST /api/brief`` writes, or a hand-authored Markdown
-    fallback."""
+    """Brief from ``DATA_DIR/brief``: ``current.json``, the shape
+    ``POST /api/brief`` writes, or a hand-authored Markdown fallback."""
 
     name = "brief"
     source = "file"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, brief: BriefSettings, general: GeneralSettings, env: Env) -> None:
+        self._brief = brief
+        self._general = general
+        self._env = env
         #: Set on every successful fetch: the file's own ``received_at``, or
         #: its mtime. Read by ``CachedAdapter`` for ``BriefBlock.received_at``.
         self.last_received_at: datetime | None = None
@@ -132,10 +138,13 @@ class FileBriefAdapter:
     def resolve(self) -> str:
         return self.source
 
+    @property
+    def _directory(self) -> Path:
+        return self._env.data_dir / "brief"
+
     async def fetch(self) -> Brief:
-        settings = self._settings
-        directory = settings.brief_directory
-        mode = current_mode(settings)
+        directory = self._directory
+        mode = current_mode(self._brief, self._general)
         current = directory / "current.json"
         if current.is_file():
             return self._from_json(current, mode)
@@ -144,7 +153,7 @@ class FileBriefAdapter:
             brief = parse_markdown_brief(
                 markdown.read_text(encoding="utf-8", errors="replace"), mode
             )
-            brief.generated_at = _mtime(markdown, settings.timezone)
+            brief.generated_at = _mtime(markdown, self._general.timezone)
             self.last_received_at = brief.generated_at
             return brief
         raise AdapterUnavailable(f"no brief in {directory} (looked for current.json, {mode.value}.md)")
@@ -162,10 +171,10 @@ class FileBriefAdapter:
         brief = Brief.model_validate(payload)
         brief.source = "file"
         if brief.generated_at is None:
-            brief.generated_at = _mtime(path, self._settings.timezone)
+            brief.generated_at = _mtime(path, self._general.timezone)
         else:
-            brief.generated_at = to_local(brief.generated_at, self._settings.timezone)
-        self.last_received_at = received_at_or_mtime(received_raw, path, self._settings.timezone)
+            brief.generated_at = to_local(brief.generated_at, self._general.timezone)
+        self.last_received_at = received_at_or_mtime(received_raw, path, self._general.timezone)
         return brief
 
 
@@ -187,10 +196,11 @@ class AutoBriefAdapter:
 
     name = "brief"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self._file = FileBriefAdapter(settings)
-        self._fixture = FixtureBriefAdapter(settings)
+    def __init__(self, brief: BriefSettings, general: GeneralSettings, env: Env) -> None:
+        self._brief = brief
+        self._general = general
+        self._file = FileBriefAdapter(brief, general, env)
+        self._fixture = FixtureBriefAdapter(brief, general, env)
         self.last_received_at: datetime | None = None
         #: The delegate actually used on the last fetch; see
         #: ``AutoAIUsageAdapter._last_source``.
@@ -202,10 +212,10 @@ class AutoBriefAdapter:
         Checking both ``morning.md`` and ``evening.md`` regardless of mode
         would say "file" is available when only the other mode's Markdown
         exists, and ``fetch`` would then raise ``AdapterUnavailable``."""
-        directory = self._settings.brief_directory
+        directory = self._file._directory
         if (directory / "current.json").is_file():
             return True
-        mode = current_mode(self._settings)
+        mode = current_mode(self._brief, self._general)
         return (directory / f"{mode.value}.md").is_file()
 
     @property
@@ -234,10 +244,10 @@ class AutoBriefAdapter:
 
 
 def build_brief_adapter(
-    settings: Settings,
-) -> FixtureBriefAdapter | FileBriefAdapter | AutoBriefAdapter:
-    if settings.brief_source == "file":
-        return FileBriefAdapter(settings)
-    if settings.brief_source == "auto":
-        return AutoBriefAdapter(settings)
-    return FixtureBriefAdapter(settings)
+    brief: BriefSettings, general: GeneralSettings, env: Env
+) -> FixtureBriefAdapter | FileBriefAdapter:
+    """``push`` is today's ``FileBriefAdapter`` (see ``adapters/base.py``'s
+    docstring); 1.2d replaces this with the ``datasets`` row."""
+    if brief.source == "push":
+        return FileBriefAdapter(brief, general, env)
+    return FixtureBriefAdapter(brief, general, env)

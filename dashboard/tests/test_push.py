@@ -4,8 +4,17 @@ adapters/state they feed.
 Uses its own module-scoped app (separate from tests/test_http.py's session
 client) so the sequential claim story here does not interleave with that
 file's. The hub is claimed once for the module; datasets are pushed in a
-fixed order so the "auto resolves to fixture before, file after" assertions
-each see the state they expect.
+fixed order.
+
+1.2b note: ``push`` is now the only "real" tasks/ai_usage/brief selector
+(``obsidian`` and ``fixture`` are the other two); it is today's strict file
+adapter (see ``adapters/base.py``'s docstring), so unlike the old ``auto``
+selector it never falls back to fixture data on its own before the first
+push - a fresh hub on ``push`` shows ``unavailable`` until something is
+posted. The "auto resolves to fixture before, file after" story this file
+used to test belonged to that now-unreachable selector; the tests below
+that depended on it are gone or rewritten (see the render-gate note in
+docs/plan/2026-09-19-settings-modules-provisioning.md).
 """
 
 from __future__ import annotations
@@ -17,8 +26,12 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import REPO_ROOT, Settings
+from app.config import REPO_ROOT, Env
 from app.main import _write_json_atomic, create_app
+from app.modules.ai_usage.settings import AIUsageSettings
+from app.modules.brief.settings import BriefSettings
+from app.modules.tasks.settings import TasksSettings
+from app.settings import HubSettings
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 
@@ -42,20 +55,21 @@ def data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def push_client(data_dir: Path) -> Iterator[TestClient]:
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
-        # This module tests the "auto" selector's own resolution (fixture
-        # before a push, file after), which is no longer the default; pin it
-        # explicitly so that story still holds regardless of the default.
-        AI_USAGE_SOURCE="auto",
-        BRIEF_SOURCE="auto",
-        TASKS_SOURCE="auto",
     )
-    app = create_app(settings)
+    # tasks/ai_usage/brief default to "push" already (test_settings.py's
+    # defaults test); spelled out here so the fixture reads as this
+    # module's own story rather than relying on a default staying put.
+    hub_settings = HubSettings(
+        tasks=TasksSettings(source="push"),
+        ai_usage=AIUsageSettings(source="push"),
+        brief=BriefSettings(source="push"),
+    )
+    app = create_app(env, hub_settings)
     with TestClient(app) as client:
         yield client
 
@@ -78,11 +92,10 @@ def test_write_json_atomic_leaves_no_tmp_when_the_payload_cannot_serialize(
     assert not target.exists()
 
 
-def test_auto_reports_fixture_before_any_push(push_client: TestClient, token: str) -> None:
+def test_hub_sources_report_the_configured_selector(push_client: TestClient, token: str) -> None:
     sources = push_client.get("/api/hub", headers=auth(token)).json()["sources"]
     for dataset in ("ai_usage", "brief", "tasks"):
-        assert sources[dataset]["configured"] == "auto"
-        assert sources[dataset]["effective"] == "fixture"
+        assert sources[dataset]["source"] == "push"
 
 
 # -- ai-usage ----------------------------------------------------------------
@@ -141,7 +154,7 @@ def test_post_ai_usage_preserves_an_aware_collected_at(
     assert response.status_code == 200
     state = push_client.get("/api/state", headers=auth(token)).json()
     provider = next(p for p in state["ai_usage"]["providers"] if p["provider"] == "aware-check")
-    # Same UTC offset as the hub's own Asia/Bangkok TIMEZONE, so re-localizing
+    # Same UTC offset as the hub's own Asia/Bangkok timezone, so re-localizing
     # for display must leave the wall-clock value unchanged, not shifted.
     assert provider["collected_at"].startswith("2026-09-16T10:00:00")
 
@@ -166,9 +179,7 @@ def test_post_ai_usage_valid_writes_atomically_and_reaches_state(
     body = response.json()
     assert body["stored"] == "ai-usage.json"
     assert body["count"] == 1
-    # AI_USAGE_SOURCE is "auto" and this push just wrote the file, so the
-    # panel will serve "file" now, not the raw "auto" selector.
-    assert body["effective_source"] == "file"
+    assert body["effective_source"] == "push"
     assert "warning" not in body
 
     assert list(data_dir.glob("*.tmp")) == []
@@ -233,7 +244,7 @@ def test_post_brief_valid_writes_atomically_and_reaches_state(
     body = response.json()
     assert body["stored"] == "current.json"
     assert body["count"] == 1
-    assert body["effective_source"] == "file"
+    assert body["effective_source"] == "push"
 
     brief_dir = data_dir / "brief"
     assert list(brief_dir.glob("*.tmp")) == []
@@ -272,7 +283,7 @@ def test_post_tasks_valid_writes_atomically_and_reaches_state(
     body = response.json()
     assert body["stored"] == "tasks.json"
     assert body["count"] == 1
-    assert body["effective_source"] == "file"
+    assert body["effective_source"] == "push"
 
     assert list(data_dir.glob("*.tmp")) == []
     assert (data_dir / "tasks.json").is_file()
@@ -283,28 +294,21 @@ def test_post_tasks_valid_writes_atomically_and_reaches_state(
     assert state["tasks"]["received_at"] is not None
 
 
-# -- after all three pushes ----------------------------------------------
-def test_auto_reports_file_after_the_pushes(push_client: TestClient, token: str) -> None:
-    sources = push_client.get("/api/hub", headers=auth(token)).json()["sources"]
-    for dataset in ("ai_usage", "brief", "tasks"):
-        assert sources[dataset]["configured"] == "auto"
-        assert sources[dataset]["effective"] == "file"
-
-
 # -- warning when the selector is explicitly "fixture" -----------------------
 def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPathFactory) -> None:
     data_dir = tmp_path_factory.mktemp("push-fixture-only")
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
-        AI_USAGE_SOURCE="fixture",
-        BRIEF_SOURCE="fixture",
-        TASKS_SOURCE="fixture",
     )
-    app = create_app(settings)
+    hub_settings = HubSettings(
+        ai_usage=AIUsageSettings(source="fixture"),
+        brief=BriefSettings(source="fixture"),
+        tasks=TasksSettings(source="fixture"),
+    )
+    app = create_app(env, hub_settings)
     with TestClient(app) as client:
         fixture_token = _claim(client)
         ai_usage = client.post(
@@ -317,9 +321,9 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
         )
         tasks = client.post("/api/tasks", json={"tasks": []}, headers=auth(fixture_token))
 
-    assert ai_usage.json()["warning"] == "AI_USAGE_SOURCE is fixture; the panel will not show this push"
-    assert brief.json()["warning"] == "BRIEF_SOURCE is fixture; the panel will not show this push"
-    assert tasks.json()["warning"] == "TASKS_SOURCE is fixture; the panel will not show this push"
+    assert ai_usage.json()["warning"] == "ai_usage.source is fixture; the panel will not show this push"
+    assert brief.json()["warning"] == "brief.source is fixture; the panel will not show this push"
+    assert tasks.json()["warning"] == "tasks.source is fixture; the panel will not show this push"
     assert ai_usage.json()["effective_source"] == "fixture"
     assert brief.json()["effective_source"] == "fixture"
     assert tasks.json()["effective_source"] == "fixture"
@@ -328,54 +332,22 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
 def test_push_tasks_warns_and_reports_obsidian_when_that_is_the_selector(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    """Pushing tasks.json while TASKS_SOURCE=obsidian does not change what
-    the panel shows (it still reads the vault): effective_source names the
-    selector verbatim ("obsidian", not "fixture"), and the warning does too."""
+    """Pushing tasks.json while the tasks source is obsidian does not change
+    what the panel shows (it still reads the vault): effective_source names
+    the selector verbatim ("obsidian", not "fixture"), and the warning does
+    too."""
     data_dir = tmp_path_factory.mktemp("push-obsidian")
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
-        TASKS_SOURCE="obsidian",
     )
-    app = create_app(settings)
+    hub_settings = HubSettings(tasks=TasksSettings(source="obsidian"))
+    app = create_app(env, hub_settings)
     with TestClient(app) as client:
         obsidian_token = _claim(client)
         response = client.post("/api/tasks", json={"tasks": []}, headers=auth(obsidian_token))
     body = response.json()
     assert body["effective_source"] == "obsidian"
-    assert body["warning"] == "TASKS_SOURCE is obsidian; the panel will not show this push"
-
-
-def test_hub_info_effective_reflects_a_push_immediately_before_any_fetch(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> None:
-    """GET /api/hub's "effective" is a live check, not the last fetch's
-    delegate: right after a push, before any /api/state or page render has
-    re-fetched tasks, it must already say "file"."""
-    data_dir = tmp_path_factory.mktemp("push-immediate")
-    settings = Settings(
-        _env_file=None,
-        TIMEZONE="Asia/Bangkok",
-        FIXTURES_DIR=FIXTURES_DIR,
-        DATA_DIR=data_dir,
-        LOG_LEVEL="WARNING",
-        # TASKS_SOURCE is no longer "auto" by default; pin it here so this
-        # "auto resolves live" story still holds.
-        TASKS_SOURCE="auto",
-    )
-    app = create_app(settings)
-    with TestClient(app) as client:
-        immediate_token = _claim(client)
-        before = client.get("/api/hub", headers=auth(immediate_token)).json()["sources"]["tasks"][
-            "effective"
-        ]
-        pushed = client.post("/api/tasks", json={"tasks": []}, headers=auth(immediate_token))
-        assert pushed.status_code == 200
-        after = client.get("/api/hub", headers=auth(immediate_token)).json()["sources"]["tasks"][
-            "effective"
-        ]
-    assert before == "fixture"
-    assert after == "file"
+    assert body["warning"] == "tasks.source is obsidian; the panel will not show this push"

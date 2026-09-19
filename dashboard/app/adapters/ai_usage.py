@@ -11,12 +11,15 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from app.adapters.base import AdapterUnavailable, received_at_or_mtime
 from app.adapters.fixtures import day_delta, load_fixture, shift_tree
-from app.config import Settings
+from app.config import Env
 from app.models import AIUsage
+from app.modules.ai_usage.settings import AIUsageSettings
+from app.modules.general.settings import GeneralSettings
 from app.timeutil import to_local, today_local
 
 logger = logging.getLogger("app.adapters.ai_usage")
@@ -39,8 +42,10 @@ class FixtureAIUsageAdapter:
     name = "ai_usage"
     source = "fixture"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, ai_usage: AIUsageSettings, general: GeneralSettings, env: Env) -> None:
+        self._ai_usage = ai_usage
+        self._general = general
+        self._env = env
 
     def resolve(self) -> str:
         """The source a fetch would use right now, without fetching. Fixed
@@ -49,25 +54,28 @@ class FixtureAIUsageAdapter:
         return self.source
 
     async def fetch(self) -> list[AIUsage]:
-        settings = self._settings
-        payload = load_fixture(settings.fixtures_dir / "ai_usage.json")
+        env = self._env
+        timezone_name = self._general.timezone
+        payload = load_fixture(env.fixtures_dir / "ai_usage.json")
         delta = day_delta(
-            payload, today_local(settings.timezone), enabled=settings.fixture_relative_dates
+            payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
         raw: Any = shift_tree(payload.get("providers", []), delta, DATE_KEYS)
         providers = [AIUsage.model_validate(item) for item in raw]
-        return _localize(providers, settings.timezone)
+        return _localize(providers, timezone_name)
 
 
 class FileAIUsageAdapter:
-    """Quota from ``AI_USAGE_PATH`` (default ``data/ai-usage.json``), the
-    shape ``POST /api/ai-usage`` writes."""
+    """Quota from ``DATA_DIR/ai-usage.json``, the shape ``POST /api/ai-usage``
+    writes."""
 
     name = "ai_usage"
     source = "file"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, ai_usage: AIUsageSettings, general: GeneralSettings, env: Env) -> None:
+        self._ai_usage = ai_usage
+        self._general = general
+        self._env = env
         #: Set on every successful fetch: the file's own ``received_at``, or
         #: its mtime. Read by ``CachedAdapter`` for ``AIUsageBlock.received_at``.
         self.last_received_at: datetime | None = None
@@ -75,8 +83,12 @@ class FileAIUsageAdapter:
     def resolve(self) -> str:
         return self.source
 
+    @property
+    def _path(self) -> Path:
+        return self._env.data_dir / "ai-usage.json"
+
     async def fetch(self) -> list[AIUsage]:
-        path = self._settings.ai_usage_file
+        path = self._path
         if not path.is_file():
             raise AdapterUnavailable(f"ai usage file not found: {path}")
         with path.open("r", encoding="utf-8") as handle:
@@ -91,8 +103,8 @@ class FileAIUsageAdapter:
         else:
             raise ValueError(f"{path} must contain an object or a list")
         providers = [AIUsage.model_validate(item) for item in raw]
-        self.last_received_at = received_at_or_mtime(received_raw, path, self._settings.timezone)
-        return _localize(providers, self._settings.timezone)
+        self.last_received_at = received_at_or_mtime(received_raw, path, self._general.timezone)
+        return _localize(providers, self._general.timezone)
 
 
 class AutoAIUsageAdapter:
@@ -109,10 +121,10 @@ class AutoAIUsageAdapter:
 
     name = "ai_usage"
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self._file = FileAIUsageAdapter(settings)
-        self._fixture = FixtureAIUsageAdapter(settings)
+    def __init__(self, ai_usage: AIUsageSettings, general: GeneralSettings, env: Env) -> None:
+        self._env = env
+        self._file = FileAIUsageAdapter(ai_usage, general, env)
+        self._fixture = FixtureAIUsageAdapter(ai_usage, general, env)
         #: Mirrors whichever delegate last ran, for ``CachedAdapter``.
         self.last_received_at: datetime | None = None
         #: The delegate actually used on the last fetch, set only inside
@@ -128,16 +140,15 @@ class AutoAIUsageAdapter:
 
     def resolve(self) -> str:
         """A pure, live check of what the *next* ``fetch()`` would use: does
-        not fetch and does not update ``source``/``last_received_at``. Used
-        by ``GET /api/hub``'s "effective", which must reflect a push
-        immediately, before anything re-renders; ``source`` above instead
-        tracks the last actual fetch, which is what the DEMO mark needs
-        (it must match what is currently drawn, not what is about to be).
+        not fetch and does not update ``source``/``last_received_at``.
+        ``source`` above instead tracks the last actual fetch, which is what
+        the DEMO mark needs (it must match what is currently drawn, not what
+        is about to be).
         """
-        return "file" if self._settings.ai_usage_file.is_file() else "fixture"
+        return "file" if self._file._path.is_file() else "fixture"
 
     async def fetch(self) -> list[AIUsage]:
-        if self._settings.ai_usage_file.is_file():
+        if self._file._path.is_file():
             try:
                 value = await self._file.fetch()
             except (AdapterUnavailable, OSError):
@@ -153,10 +164,10 @@ class AutoAIUsageAdapter:
 
 
 def build_ai_usage_adapter(
-    settings: Settings,
-) -> FixtureAIUsageAdapter | FileAIUsageAdapter | AutoAIUsageAdapter:
-    if settings.ai_usage_source == "file":
-        return FileAIUsageAdapter(settings)
-    if settings.ai_usage_source == "auto":
-        return AutoAIUsageAdapter(settings)
-    return FixtureAIUsageAdapter(settings)
+    ai_usage: AIUsageSettings, general: GeneralSettings, env: Env
+) -> FixtureAIUsageAdapter | FileAIUsageAdapter:
+    """``push`` is today's ``FileAIUsageAdapter`` (see ``adapters/base.py``'s
+    docstring); 1.2d replaces this with the ``datasets`` row."""
+    if ai_usage.source == "push":
+        return FileAIUsageAdapter(ai_usage, general, env)
+    return FixtureAIUsageAdapter(ai_usage, general, env)

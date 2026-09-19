@@ -35,7 +35,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import REPO_ROOT, Settings
+from app.config import REPO_ROOT, Env
 from app.db import Database
 from app.hub_config import ADMIN_SESSION_MAX_AGE_SECONDS, COOKIE_NAME, ClaimedSecrets, session_role
 from app.main import MAX_OPEN_BODY_BYTES, create_app, etag_matches
@@ -107,14 +107,13 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
     unconfigured-state assertions below need a hub of their own.
     """
     data_dir = tmp_path
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )
-    app = create_app(settings)
+    app = create_app(env)
     # An explicit private client address: is_private_client_host now fails
     # closed on TestClient's default, unparseable "testclient" host, and
     # this flow's two POST /setup calls (claim, then the already-configured
@@ -182,14 +181,13 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
 
 
 def test_post_setup_rejects_a_non_private_client(tmp_path: Path) -> None:
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    app = create_app(settings)
+    app = create_app(env)
     # 8.8.8.8 (unlike the RFC 5737 documentation ranges, which Python's
     # ipaddress module - surprisingly - classifies as "private") is squarely
     # public.
@@ -208,14 +206,13 @@ def test_get_setup_prefill_uses_the_first_forwarded_proto(tmp_path: Path) -> Non
     proxy chain lists the original client's scheme first in a comma
     separated value, and the guess must take that first one, not the whole
     raw header."""
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    unconfigured_client = TestClient(create_app(settings))
+    unconfigured_client = TestClient(create_app(env))
     response = unconfigured_client.get(
         "/setup", headers={"X-Forwarded-Proto": "https, http", "Host": "dashboard-hub.lan"}
     )
@@ -224,14 +221,13 @@ def test_get_setup_prefill_uses_the_first_forwarded_proto(tmp_path: Path) -> Non
 
 
 def test_reads_and_device_telemetry_503_while_unconfigured(tmp_path: Path) -> None:
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    unconfigured_client = TestClient(create_app(settings))
+    unconfigured_client = TestClient(create_app(env))
     assert unconfigured_client.get("/api/state").status_code == 503
     assert unconfigured_client.get("/display/today.png").status_code == 503
     assert (
@@ -243,14 +239,13 @@ def test_reads_and_device_telemetry_503_while_unconfigured(tmp_path: Path) -> No
 
 
 def test_preview_and_root_redirect_to_setup_while_unconfigured(tmp_path: Path) -> None:
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    unconfigured_client = TestClient(create_app(settings))
+    unconfigured_client = TestClient(create_app(env))
     preview_redirect = unconfigured_client.get("/preview", follow_redirects=False)
     assert preview_redirect.status_code == 303
     assert preview_redirect.headers["location"] == "/setup"
@@ -267,14 +262,13 @@ def test_login_redirects_to_setup_with_a_get_not_a_repost_while_unconfigured(
     which would turn a POST /login into a POST /setup carrying the login
     form's fields. Both /login handlers must answer 303 instead, so a
     browser's next request to /setup is a GET."""
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    unconfigured_client = TestClient(create_app(settings))
+    unconfigured_client = TestClient(create_app(env))
     get_redirect = unconfigured_client.get("/login", follow_redirects=False)
     assert get_redirect.status_code == 303
     assert get_redirect.headers["location"] == "/setup"
@@ -287,14 +281,13 @@ def test_login_redirects_to_setup_with_a_get_not_a_repost_while_unconfigured(
 
 
 def test_healthz_minimal_body_while_unconfigured(tmp_path: Path) -> None:
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    unconfigured_client = TestClient(create_app(settings))
+    unconfigured_client = TestClient(create_app(env))
     response = unconfigured_client.get("/healthz")
     assert response.status_code == 200
     assert set(response.json()) == {"status", "version", "renderer"}
@@ -303,14 +296,13 @@ def test_healthz_minimal_body_while_unconfigured(tmp_path: Path) -> None:
 def test_post_setup_rejects_a_form_over_the_cap(tmp_path: Path) -> None:
     """A form with Content-Length over MAX_OPEN_BODY_BYTES is rejected before
     request.form() ever reads it."""
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    app = create_app(settings)
+    app = create_app(env)
     # A private client address so the size cap is what rejects this request,
     # not the (now fail-closed) is_private_client_host check on TestClient's
     # default "testclient" host.
@@ -335,14 +327,13 @@ def test_a_corrupt_hub_config_503s_setup_and_writes_but_the_panel_keeps_working(
             ("deskmate", "http://dashboard-hub.lan:8080", "x", "y", "s", "not-a-timestamp"),
         )
     seed.close()
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    app = create_app(settings)
+    app = create_app(env)
     with TestClient(app) as broken_client:
         hub = broken_client.app.state.hub
         assert hub.identity.error is not None
@@ -369,10 +360,9 @@ def test_api_hub_reports_identity_and_sources(reader: _ReaderClient) -> None:
     assert payload["configured"] is True
     assert payload["name"] == "deskmate"
     assert payload["base_url"] == "http://dashboard-hub.lan:8080"
-    # The session settings fixture pins every source to fixture (see conftest.py).
+    # The session hub_settings fixture pins every source to fixture (see conftest.py).
     for dataset in ("ai_usage", "brief", "tasks"):
-        assert payload["sources"][dataset]["configured"] == "fixture"
-        assert payload["sources"][dataset]["effective"] == "fixture"
+        assert payload["sources"][dataset]["source"] == "fixture"
 
 
 def test_api_hub_requires_a_reader_credential(client: TestClient) -> None:
@@ -394,14 +384,14 @@ def test_data_dir_that_is_a_file_fails_fast_at_startup(tmp_path: Path) -> None:
     must fail at startup with one clear line instead of at the first push."""
     blocked = tmp_path / "data"
     blocked.write_text("not a directory", encoding="utf-8")
-    settings = Settings(
+    env = Env(
         _env_file=None,
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=blocked,
         LOG_LEVEL="WARNING",
     )
     with pytest.raises(RuntimeError, match="not writable"):
-        create_app(settings)
+        create_app(env)
 
 
 def test_healthz_reports_every_adapter(reader: _ReaderClient) -> None:
@@ -444,13 +434,13 @@ def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Pa
     Claimed (but with no reader auth on this bare TestClient) so the full
     body - and the adapter statuses this test is about - is visible.
     """
-    settings = Settings(
+    env = Env(
         _env_file=None,
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    app = create_app(settings)
+    app = create_app(env)
     fresh_client = TestClient(app)
     secrets = asyncio.run(
         fresh_client.app.state.hub.identity.claim(
@@ -731,14 +721,13 @@ def test_device_telemetry_post_accepts_the_device_key_bearer_on_a_claimed_hub(
     ``state``/``renderer`` fixtures read, and perturb device-chart
     assertions in other test files that rebuild state fresh from it.
     """
-    settings = Settings(
+    env = Env(
         _env_file=None,
-        TIMEZONE="Asia/Bangkok",
         FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
-    app = create_app(settings)
+    app = create_app(env)
     with TestClient(app) as isolated_client:
         hub = isolated_client.app.state.hub
         secrets = asyncio.run(
