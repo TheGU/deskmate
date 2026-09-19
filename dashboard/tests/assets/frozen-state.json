@@ -1,0 +1,1033 @@
+{
+  "generated_at": "2026-09-19T09:00:00+07:00",
+  "timezone": "Asia/Bangkok",
+  "tasks": {
+    "status": "ok",
+    "source": "fixture",
+    "updated_at": "2026-09-19T09:00:00+07:00",
+    "error": null,
+    "items": [
+      {
+        "id": "fix-task-1",
+        "title": "Finish Q3 OKR review deck for Monday",
+        "due": "2026-09-04",
+        "priority": "high",
+        "completed": false,
+        "source": "fixture",
+        "tags": [
+          "work",
+          "deck"
+        ]
+      },
+      {
+        "id": "fix-task-2",
+        "title": "Send vendor quote answer to K. Somchai",
+        "due": "2026-09-03",
+        "priority": "high",
+        "completed": false,
+        "source": "fixture",
+        "tags": [
+          "work"
+        ]
+      },
+      {
+        "id": "fix-task-3",
+        "title": "Review PR 482 auth refactor",
+        "due": "2026-09-05",
+        "priority": "high",
+        "completed": false,
+        "source": "fixture",
+        "tags": [
+          "code"
+        ]
+      },
+      {
+        "id": "fix-task-4",
+        "title": "Submit August expense claim (BTS and Grab)",
+        "due": "2026-09-07",
+        "priority": "medium",
+        "completed": false,
+        "source": "fixture",
+        "tags": [
+          "admin"
+        ]
+      },
+      {
+        "id": "fix-task-5",
+        "title": "Renew work permit documents at HR",
+        "due": "2026-09-09",
+        "priority": "medium",
+        "completed": false,
+        "source": "fixture",
+        "tags": [
+          "admin"
+        ]
+      },
+      {
+        "id": "fix-task-6",
+        "title": "Back up NAS photo library to cold storage",
+        "due": "2026-09-10",
+        "priority": "low",
+        "completed": false,
+        "source": "fixture",
+        "tags": [
+          "home"
+        ]
+      },
+      {
+        "id": "fix-task-7",
+        "title": "Book dentist appointment near Asok",
+        "due": null,
+        "priority": "low",
+        "completed": false,
+        "source": "fixture",
+        "tags": [
+          "home"
+        ]
+      },
+      {
+        "id": "fix-task-8",
+        "title": "Draft sprint retro notes",
+        "due": "2026-09-03",
+        "priority": "medium",
+        "completed": true,
+        "source": "fixture",
+        "tags": [
+          "work"
+        ]
+      }
+    ],
+    "received_at": null
+  },
+  "calendar": {
+    "status": "ok",
+    "source": "fixture",
+    "updated_at": "2026-09-19T09:00:00+07:00",
+    "error": null,
+    "items": [
+      {
+        "id": "fix-ev-1",
+        "title": "Daily standup",
+        "start": "2026-09-04T09:30:00+07:00",
+        "end": "2026-09-04T09:45:00+07:00",
+        "all_day": false,
+        "location": "Meet",
+        "source": "fixture",
+        "calendar": "work"
+      },
+      {
+        "id": "fix-ev-2",
+        "title": "Design sync - reTerminal kiosk",
+        "start": "2026-09-04T11:00:00+07:00",
+        "end": "2026-09-04T12:00:00+07:00",
+        "all_day": false,
+        "location": "Room 12A",
+        "source": "fixture",
+        "calendar": "work"
+      },
+      {
+        "id": "fix-ev-3",
+        "title": "1:1 with Nan",
+        "start": "2026-09-04T14:00:00+07:00",
+        "end": "2026-09-04T14:30:00+07:00",
+        "all_day": false,
+        "location": "Room 3",
+        "source": "fixture",
+        "calendar": "work"
+      },
+      {
+        "id": "fix-ev-4",
+        "title": "Client demo - Siam Piwat",
+        "start": "2026-09-04T16:30:00+07:00",
+        "end": "2026-09-04T17:30:00+07:00",
+        "all_day": false,
+        "location": "Zoom",
+        "source": "fixture",
+        "calendar": "work"
+      },
+      {
+        "id": "fix-ev-5",
+        "title": "Muay Thai class",
+        "start": "2026-09-04T19:00:00+07:00",
+        "end": "2026-09-04T20:30:00+07:00",
+        "all_day": false,
+        "location": "Phra Khanong",
+        "source": "fixture",
+        "calendar": "personal"
+      },
+      {
+        "id": "fix-ev-12",
+        "title": "Condo fire drill",
+        "start": "2026-09-05T18:00:00+07:00",
+        "end": "2026-09-05T18:45:00+07:00",
+        "all_day": false,
+        "location": "Lobby",
+        "source": "fixture",
+        "calendar": "personal"
+      },
+      {
+        "id": "fix-ev-6",
+        "title": "Sprint planning",
+        "start": "2026-09-07T09:30:00+07:00",
+        "end": "2026-09-07T11:00:00+07:00",
+        "all_day": false,
+        "location": "Room 12A",
+        "source": "fixture",
+        "calendar": "work"
+      },
+      {
+        "id": "fix-ev-7",
+        "title": "Dentist - Sukhumvit 21",
+        "start": "2026-09-08T10:00:00+07:00",
+        "end": "2026-09-08T11:00:00+07:00",
+        "all_day": false,
+        "location": "Asok",
+        "source": "fixture",
+        "calendar": "personal"
+      },
+      {
+        "id": "fix-ev-8",
+        "title": "Team lunch at EmQuartier",
+        "start": "2026-09-08T12:00:00+07:00",
+        "end": "2026-09-08T13:30:00+07:00",
+        "all_day": false,
+        "location": "EmQuartier",
+        "source": "fixture",
+        "calendar": "work"
+      },
+      {
+        "id": "fix-ev-11",
+        "title": "Quarterly business review",
+        "start": "2026-09-09T13:00:00+07:00",
+        "end": "2026-09-09T15:00:00+07:00",
+        "all_day": false,
+        "location": "HQ 21F",
+        "source": "fixture",
+        "calendar": "work"
+      },
+      {
+        "id": "fix-ev-10",
+        "title": "Chiang Mai offsite",
+        "start": "2026-09-10T00:00:00+07:00",
+        "end": "2026-09-11T00:00:00+07:00",
+        "all_day": true,
+        "location": "Chiang Mai",
+        "source": "fixture",
+        "calendar": "personal"
+      },
+      {
+        "id": "fix-ev-9",
+        "title": "Flight BKK to CNX",
+        "start": "2026-09-10T07:05:00+07:00",
+        "end": "2026-09-10T08:30:00+07:00",
+        "all_day": false,
+        "location": "DMK Terminal 1",
+        "source": "fixture",
+        "calendar": "personal"
+      }
+    ]
+  },
+  "weather": {
+    "status": "ok",
+    "source": "fixture",
+    "updated_at": "2026-09-19T09:00:00+07:00",
+    "error": null,
+    "weather": {
+      "location_name": "Bangkok",
+      "observed_at": "2026-09-04T08:40:00+07:00",
+      "temperature_c": 31.4,
+      "feels_like_c": 38.2,
+      "humidity_percent": 76,
+      "uv_index": 8.4,
+      "condition": "Humid, storms later",
+      "rain_probability_percent": 80,
+      "rain_from": "15:00",
+      "rain_until": "20:00",
+      "pm2_5": 21.7,
+      "aqi": 71,
+      "aqi_label": "Moderate",
+      "daily": [
+        {
+          "day": "2026-09-04",
+          "high_c": 33.6,
+          "low_c": 26.1,
+          "rain_probability_percent": 80,
+          "condition": "Thunderstorms"
+        },
+        {
+          "day": "2026-09-05",
+          "high_c": 32.8,
+          "low_c": 25.9,
+          "rain_probability_percent": 65,
+          "condition": "Showers"
+        },
+        {
+          "day": "2026-09-06",
+          "high_c": 33.1,
+          "low_c": 26.4,
+          "rain_probability_percent": 40,
+          "condition": "Cloudy"
+        },
+        {
+          "day": "2026-09-07",
+          "high_c": 34.2,
+          "low_c": 26.8,
+          "rain_probability_percent": 25,
+          "condition": "Hot and hazy"
+        },
+        {
+          "day": "2026-09-08",
+          "high_c": 33.9,
+          "low_c": 26.5,
+          "rain_probability_percent": 55,
+          "condition": "Showers"
+        }
+      ],
+      "hourly_rain": [
+        {
+          "at": "2026-09-04T09:00:00+07:00",
+          "probability_percent": 10,
+          "precipitation_mm": 0.0
+        },
+        {
+          "at": "2026-09-04T10:00:00+07:00",
+          "probability_percent": 12,
+          "precipitation_mm": 0.0
+        },
+        {
+          "at": "2026-09-04T11:00:00+07:00",
+          "probability_percent": 18,
+          "precipitation_mm": 0.0
+        },
+        {
+          "at": "2026-09-04T12:00:00+07:00",
+          "probability_percent": 24,
+          "precipitation_mm": 0.1
+        },
+        {
+          "at": "2026-09-04T13:00:00+07:00",
+          "probability_percent": 33,
+          "precipitation_mm": 0.2
+        },
+        {
+          "at": "2026-09-04T14:00:00+07:00",
+          "probability_percent": 44,
+          "precipitation_mm": 0.4
+        },
+        {
+          "at": "2026-09-04T15:00:00+07:00",
+          "probability_percent": 68,
+          "precipitation_mm": 2.1
+        },
+        {
+          "at": "2026-09-04T16:00:00+07:00",
+          "probability_percent": 80,
+          "precipitation_mm": 4.6
+        },
+        {
+          "at": "2026-09-04T17:00:00+07:00",
+          "probability_percent": 76,
+          "precipitation_mm": 3.8
+        },
+        {
+          "at": "2026-09-04T18:00:00+07:00",
+          "probability_percent": 64,
+          "precipitation_mm": 2.0
+        },
+        {
+          "at": "2026-09-04T19:00:00+07:00",
+          "probability_percent": 58,
+          "precipitation_mm": 1.2
+        },
+        {
+          "at": "2026-09-04T20:00:00+07:00",
+          "probability_percent": 41,
+          "precipitation_mm": 0.5
+        },
+        {
+          "at": "2026-09-04T21:00:00+07:00",
+          "probability_percent": 22,
+          "precipitation_mm": 0.1
+        },
+        {
+          "at": "2026-09-04T22:00:00+07:00",
+          "probability_percent": 14,
+          "precipitation_mm": 0.0
+        }
+      ]
+    }
+  },
+  "ai_usage": {
+    "status": "ok",
+    "source": "fixture",
+    "updated_at": "2026-09-19T09:00:00+07:00",
+    "error": null,
+    "providers": [
+      {
+        "provider": "Claude",
+        "short_window_percent_remaining": 72,
+        "short_window_reset_at": "2026-09-04T13:00:00+07:00",
+        "weekly_percent_remaining": 48,
+        "weekly_reset_at": "2026-09-08T09:00:00+07:00",
+        "collected_at": "2026-09-04T08:35:00+07:00",
+        "collection_status": "ok"
+      },
+      {
+        "provider": "Codex",
+        "short_window_percent_remaining": 91,
+        "short_window_reset_at": "2026-09-04T12:20:00+07:00",
+        "weekly_percent_remaining": null,
+        "weekly_reset_at": null,
+        "collected_at": "2026-09-04T08:35:00+07:00",
+        "collection_status": "ok"
+      }
+    ],
+    "received_at": null
+  },
+  "brief": {
+    "status": "ok",
+    "source": "fixture",
+    "updated_at": "2026-09-19T09:00:00+07:00",
+    "error": null,
+    "brief": {
+      "mode": "evening",
+      "generated_at": "2026-09-04T18:45:00+07:00",
+      "headline": "Deck done, vendor quote still open",
+      "note": "Answer the vendor quote first thing tomorrow; it is now two days late.",
+      "sections": [
+        {
+          "title": "Completed",
+          "items": [
+            "Q3 OKR review deck finished and shared",
+            "Client demo delivered, follow-up notes sent",
+            "PR 482 reviewed and approved"
+          ]
+        },
+        {
+          "title": "Still open",
+          "items": [
+            "Vendor quote answer to K. Somchai",
+            "August expense claim"
+          ]
+        },
+        {
+          "title": "Changed today",
+          "items": [
+            "Sprint planning moved to Monday 09:30",
+            "Offsite flight confirmed, DMK Terminal 1"
+          ]
+        },
+        {
+          "title": "Tomorrow",
+          "items": [
+            "Answer the vendor quote before standup",
+            "Prepare work permit documents for HR",
+            "Condo fire drill at 18:00"
+          ]
+        }
+      ],
+      "source": "fixture"
+    },
+    "received_at": null
+  },
+  "home": {
+    "status": "ok",
+    "source": "fixture",
+    "updated_at": "2026-09-19T09:00:00+07:00",
+    "error": null,
+    "home": {
+      "sensors": [
+        {
+          "key": "front_door",
+          "name": "Front door",
+          "value": "Closed",
+          "unit": null,
+          "severity": "ok"
+        },
+        {
+          "key": "doorbell",
+          "name": "Doorbell",
+          "value": "Idle",
+          "unit": null,
+          "severity": "ok"
+        },
+        {
+          "key": "motion",
+          "name": "Motion",
+          "value": "Clear 41m",
+          "unit": null,
+          "severity": "ok"
+        },
+        {
+          "key": "room_temperature",
+          "name": "Room temp",
+          "value": "27.8",
+          "unit": "C",
+          "severity": "ok"
+        },
+        {
+          "key": "room_humidity",
+          "name": "Room humidity",
+          "value": "64",
+          "unit": "%",
+          "severity": "warn"
+        }
+      ],
+      "services": [
+        {
+          "key": "internet",
+          "name": "Internet",
+          "health": "ok",
+          "detail": "AIS fibre, 18 ms"
+        },
+        {
+          "key": "home_assistant",
+          "name": "Home Assistant",
+          "health": "ok",
+          "detail": "2026.8.3"
+        },
+        {
+          "key": "nas",
+          "name": "NAS",
+          "health": "warn",
+          "detail": "Volume 1 at 88 percent"
+        },
+        {
+          "key": "proxmox",
+          "name": "Proxmox",
+          "health": "ok",
+          "detail": "3 of 3 nodes up"
+        },
+        {
+          "key": "backup",
+          "name": "Backup",
+          "health": "ok",
+          "detail": "Last run 03:12, 0 errors"
+        },
+        {
+          "key": "assistant",
+          "name": "Local assistant",
+          "health": "ok",
+          "detail": "Ollama, 2 models loaded"
+        },
+        {
+          "key": "assistant_last_run",
+          "name": "Last assistant run",
+          "health": "ok",
+          "detail": "06:30, brief written"
+        }
+      ]
+    }
+  },
+  "device": {
+    "status": "ok",
+    "source": "fixture",
+    "updated_at": "2026-09-19T09:00:00+07:00",
+    "error": null,
+    "device": {
+      "status": "ok",
+      "device": "reterminal-e1002",
+      "received_at": "2026-09-19T14:14:46.019861Z",
+      "age_seconds": 0.0,
+      "battery_voltage": 4.056,
+      "battery_level": 92.6,
+      "temperature": 32.28,
+      "humidity": 51.5,
+      "wifi_rssi": -38.0,
+      "uptime_s": 86525.0,
+      "page": "weather",
+      "battery_mode": false,
+      "usb_present": true,
+      "charge_state": "charged",
+      "wake_cause": null,
+      "sample_count": 288,
+      "oldest_at": "2026-09-18T14:19:46.019861Z",
+      "newest_at": "2026-09-19T14:14:46.019861Z",
+      "history_24h": [
+        {
+          "at": "2026-09-18T14:24:46.019861Z",
+          "temperature": 32.18,
+          "humidity": 52.8
+        },
+        {
+          "at": "2026-09-18T14:39:46.019861Z",
+          "temperature": 32.37,
+          "humidity": 52.333
+        },
+        {
+          "at": "2026-09-18T14:54:46.019861Z",
+          "temperature": 32.483,
+          "humidity": 52.767
+        },
+        {
+          "at": "2026-09-18T15:09:46.019861Z",
+          "temperature": 32.643,
+          "humidity": 52.567
+        },
+        {
+          "at": "2026-09-18T15:24:46.019861Z",
+          "temperature": 32.613,
+          "humidity": 52.767
+        },
+        {
+          "at": "2026-09-18T15:39:46.019861Z",
+          "temperature": 32.717,
+          "humidity": 52.533
+        },
+        {
+          "at": "2026-09-18T15:54:46.019861Z",
+          "temperature": 32.687,
+          "humidity": 52.567
+        },
+        {
+          "at": "2026-09-18T16:09:46.019861Z",
+          "temperature": 32.583,
+          "humidity": 51.833
+        },
+        {
+          "at": "2026-09-18T16:24:46.019861Z",
+          "temperature": 32.43,
+          "humidity": 51.667
+        },
+        {
+          "at": "2026-09-18T16:39:46.019861Z",
+          "temperature": 32.24,
+          "humidity": 51.167
+        },
+        {
+          "at": "2026-09-18T16:54:46.019861Z",
+          "temperature": 32.307,
+          "humidity": 50.9
+        },
+        {
+          "at": "2026-09-18T17:09:46.019861Z",
+          "temperature": 32.153,
+          "humidity": 50.767
+        },
+        {
+          "at": "2026-09-18T17:24:46.019861Z",
+          "temperature": 32.1,
+          "humidity": 50.5
+        },
+        {
+          "at": "2026-09-18T17:39:46.019861Z",
+          "temperature": 32.173,
+          "humidity": 50.4
+        },
+        {
+          "at": "2026-09-18T17:54:46.019861Z",
+          "temperature": 32.313,
+          "humidity": 50.133
+        },
+        {
+          "at": "2026-09-18T18:09:46.019861Z",
+          "temperature": 32.317,
+          "humidity": 50.067
+        },
+        {
+          "at": "2026-09-18T18:24:46.019861Z",
+          "temperature": 32.473,
+          "humidity": 50.4
+        },
+        {
+          "at": "2026-09-18T18:39:46.019861Z",
+          "temperature": 32.52,
+          "humidity": 50.733
+        },
+        {
+          "at": "2026-09-18T18:54:46.019861Z",
+          "temperature": 32.547,
+          "humidity": 51.1
+        },
+        {
+          "at": "2026-09-18T19:09:46.019861Z",
+          "temperature": 32.527,
+          "humidity": 51.767
+        },
+        {
+          "at": "2026-09-18T19:24:46.019861Z",
+          "temperature": 32.457,
+          "humidity": 52.333
+        },
+        {
+          "at": "2026-09-18T19:39:46.019861Z",
+          "temperature": 32.303,
+          "humidity": 52.833
+        },
+        {
+          "at": "2026-09-18T19:54:46.019861Z",
+          "temperature": 32.063,
+          "humidity": 53.3
+        },
+        {
+          "at": "2026-09-18T20:09:46.019861Z",
+          "temperature": 31.837,
+          "humidity": 53.967
+        },
+        {
+          "at": "2026-09-18T20:24:46.019861Z",
+          "temperature": 31.673,
+          "humidity": 54.433
+        },
+        {
+          "at": "2026-09-18T20:39:46.019861Z",
+          "temperature": 31.413,
+          "humidity": 54.733
+        },
+        {
+          "at": "2026-09-18T20:54:46.019861Z",
+          "temperature": 31.263,
+          "humidity": 54.833
+        },
+        {
+          "at": "2026-09-18T21:09:46.019861Z",
+          "temperature": 31.057,
+          "humidity": 55.367
+        },
+        {
+          "at": "2026-09-18T21:24:46.019861Z",
+          "temperature": 30.993,
+          "humidity": 55.133
+        },
+        {
+          "at": "2026-09-18T21:39:46.019861Z",
+          "temperature": 30.993,
+          "humidity": 55.033
+        },
+        {
+          "at": "2026-09-18T21:54:46.019861Z",
+          "temperature": 30.933,
+          "humidity": 55.0
+        },
+        {
+          "at": "2026-09-18T22:09:46.019861Z",
+          "temperature": 31.053,
+          "humidity": 55.267
+        },
+        {
+          "at": "2026-09-18T22:24:46.019861Z",
+          "temperature": 30.973,
+          "humidity": 55.133
+        },
+        {
+          "at": "2026-09-18T22:39:46.019861Z",
+          "temperature": 30.993,
+          "humidity": 54.967
+        },
+        {
+          "at": "2026-09-18T22:54:46.019861Z",
+          "temperature": 30.953,
+          "humidity": 55.5
+        },
+        {
+          "at": "2026-09-18T23:09:46.019861Z",
+          "temperature": 30.84,
+          "humidity": 55.733
+        },
+        {
+          "at": "2026-09-18T23:24:46.019861Z",
+          "temperature": 30.633,
+          "humidity": 55.967
+        },
+        {
+          "at": "2026-09-18T23:39:46.019861Z",
+          "temperature": 30.48,
+          "humidity": 56.533
+        },
+        {
+          "at": "2026-09-18T23:54:46.019861Z",
+          "temperature": 30.177,
+          "humidity": 56.967
+        },
+        {
+          "at": "2026-09-19T00:09:46.019861Z",
+          "temperature": 29.94,
+          "humidity": 57.467
+        },
+        {
+          "at": "2026-09-19T00:24:46.019861Z",
+          "temperature": 29.743,
+          "humidity": 58.667
+        },
+        {
+          "at": "2026-09-19T00:39:46.019861Z",
+          "temperature": 29.49,
+          "humidity": 59.333
+        },
+        {
+          "at": "2026-09-19T00:54:46.019861Z",
+          "temperature": 29.237,
+          "humidity": 60.067
+        },
+        {
+          "at": "2026-09-19T01:09:46.019861Z",
+          "temperature": 29.157,
+          "humidity": 60.467
+        },
+        {
+          "at": "2026-09-19T01:24:46.019861Z",
+          "temperature": 29.167,
+          "humidity": 60.933
+        },
+        {
+          "at": "2026-09-19T01:39:46.019861Z",
+          "temperature": 29.103,
+          "humidity": 61.167
+        },
+        {
+          "at": "2026-09-19T01:54:46.019861Z",
+          "temperature": 29.233,
+          "humidity": 61.433
+        },
+        {
+          "at": "2026-09-19T02:09:46.019861Z",
+          "temperature": 29.26,
+          "humidity": 61.533
+        },
+        {
+          "at": "2026-09-19T02:24:46.019861Z",
+          "temperature": 29.307,
+          "humidity": 61.533
+        },
+        {
+          "at": "2026-09-19T02:39:46.019861Z",
+          "temperature": 29.253,
+          "humidity": 61.567
+        },
+        {
+          "at": "2026-09-19T02:54:46.019861Z",
+          "temperature": 29.257,
+          "humidity": 61.133
+        },
+        {
+          "at": "2026-09-19T03:09:46.019861Z",
+          "temperature": 29.213,
+          "humidity": 61.133
+        },
+        {
+          "at": "2026-09-19T03:24:46.019861Z",
+          "temperature": 29.183,
+          "humidity": 61.0
+        },
+        {
+          "at": "2026-09-19T03:39:46.019861Z",
+          "temperature": 28.92,
+          "humidity": 60.533
+        },
+        {
+          "at": "2026-09-19T03:54:46.019861Z",
+          "temperature": 28.857,
+          "humidity": 60.567
+        },
+        {
+          "at": "2026-09-19T04:09:46.019861Z",
+          "temperature": 28.607,
+          "humidity": 60.567
+        },
+        {
+          "at": "2026-09-19T04:24:46.019861Z",
+          "temperature": 28.44,
+          "humidity": 60.7
+        },
+        {
+          "at": "2026-09-19T04:39:46.019861Z",
+          "temperature": 28.46,
+          "humidity": 60.8
+        },
+        {
+          "at": "2026-09-19T04:54:46.019861Z",
+          "temperature": 28.293,
+          "humidity": 61.0
+        },
+        {
+          "at": "2026-09-19T05:09:46.019861Z",
+          "temperature": 28.367,
+          "humidity": 61.367
+        },
+        {
+          "at": "2026-09-19T05:24:46.019861Z",
+          "temperature": 28.473,
+          "humidity": 61.433
+        },
+        {
+          "at": "2026-09-19T05:39:46.019861Z",
+          "temperature": 28.62,
+          "humidity": 62.133
+        },
+        {
+          "at": "2026-09-19T05:54:46.019861Z",
+          "temperature": 28.723,
+          "humidity": 62.367
+        },
+        {
+          "at": "2026-09-19T06:09:46.019861Z",
+          "temperature": 28.917,
+          "humidity": 62.433
+        },
+        {
+          "at": "2026-09-19T06:24:46.019861Z",
+          "temperature": 29.043,
+          "humidity": 62.4
+        },
+        {
+          "at": "2026-09-19T06:39:46.019861Z",
+          "temperature": 29.287,
+          "humidity": 62.7
+        },
+        {
+          "at": "2026-09-19T06:54:46.019861Z",
+          "temperature": 29.317,
+          "humidity": 62.4
+        },
+        {
+          "at": "2026-09-19T07:09:46.019861Z",
+          "temperature": 29.393,
+          "humidity": 61.633
+        },
+        {
+          "at": "2026-09-19T07:24:46.019861Z",
+          "temperature": 29.397,
+          "humidity": 61.867
+        },
+        {
+          "at": "2026-09-19T07:39:46.019861Z",
+          "temperature": 29.36,
+          "humidity": 61.133
+        },
+        {
+          "at": "2026-09-19T07:54:46.019861Z",
+          "temperature": 29.33,
+          "humidity": 60.733
+        },
+        {
+          "at": "2026-09-19T08:09:46.019861Z",
+          "temperature": 29.247,
+          "humidity": 60.3
+        },
+        {
+          "at": "2026-09-19T08:24:46.019861Z",
+          "temperature": 29.233,
+          "humidity": 59.7
+        },
+        {
+          "at": "2026-09-19T08:39:46.019861Z",
+          "temperature": 29.17,
+          "humidity": 58.6
+        },
+        {
+          "at": "2026-09-19T08:54:46.019861Z",
+          "temperature": 29.343,
+          "humidity": 58.133
+        },
+        {
+          "at": "2026-09-19T09:09:46.019861Z",
+          "temperature": 29.48,
+          "humidity": 57.667
+        },
+        {
+          "at": "2026-09-19T09:24:46.019861Z",
+          "temperature": 29.593,
+          "humidity": 57.233
+        },
+        {
+          "at": "2026-09-19T09:39:46.019861Z",
+          "temperature": 29.81,
+          "humidity": 57.367
+        },
+        {
+          "at": "2026-09-19T09:54:46.019861Z",
+          "temperature": 30.163,
+          "humidity": 56.967
+        },
+        {
+          "at": "2026-09-19T10:09:46.019861Z",
+          "temperature": 30.33,
+          "humidity": 56.867
+        },
+        {
+          "at": "2026-09-19T10:24:46.019861Z",
+          "temperature": 30.693,
+          "humidity": 56.6
+        },
+        {
+          "at": "2026-09-19T10:39:46.019861Z",
+          "temperature": 30.753,
+          "humidity": 57.033
+        },
+        {
+          "at": "2026-09-19T10:54:46.019861Z",
+          "temperature": 30.96,
+          "humidity": 56.767
+        },
+        {
+          "at": "2026-09-19T11:09:46.019861Z",
+          "temperature": 31.027,
+          "humidity": 56.933
+        },
+        {
+          "at": "2026-09-19T11:24:46.019861Z",
+          "temperature": 31.107,
+          "humidity": 57.0
+        },
+        {
+          "at": "2026-09-19T11:39:46.019861Z",
+          "temperature": 31.113,
+          "humidity": 56.5
+        },
+        {
+          "at": "2026-09-19T11:54:46.019861Z",
+          "temperature": 31.153,
+          "humidity": 56.2
+        },
+        {
+          "at": "2026-09-19T12:09:46.019861Z",
+          "temperature": 31.08,
+          "humidity": 55.667
+        },
+        {
+          "at": "2026-09-19T12:24:46.019861Z",
+          "temperature": 31.073,
+          "humidity": 55.5
+        },
+        {
+          "at": "2026-09-19T12:39:46.019861Z",
+          "temperature": 31.183,
+          "humidity": 54.7
+        },
+        {
+          "at": "2026-09-19T12:54:46.019861Z",
+          "temperature": 31.213,
+          "humidity": 54.3
+        },
+        {
+          "at": "2026-09-19T13:09:46.019861Z",
+          "temperature": 31.317,
+          "humidity": 53.3
+        },
+        {
+          "at": "2026-09-19T13:24:46.019861Z",
+          "temperature": 31.513,
+          "humidity": 53.067
+        },
+        {
+          "at": "2026-09-19T13:39:46.019861Z",
+          "temperature": 31.747,
+          "humidity": 52.3
+        },
+        {
+          "at": "2026-09-19T13:54:46.019861Z",
+          "temperature": 32.043,
+          "humidity": 51.967
+        },
+        {
+          "at": "2026-09-19T14:09:46.019861Z",
+          "temperature": 32.207,
+          "humidity": 51.433
+        }
+      ],
+      "remote_addr": null,
+      "hub_host": null
+    }
+  },
+  "alert": null
+}
