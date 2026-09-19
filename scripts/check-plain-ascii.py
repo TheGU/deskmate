@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+EM_DASH = chr(0x2014)
+ARROW = chr(0x2192)
 BINARY_SUFFIXES = {".ttf", ".png", ".webp", ".jpg", ".jpeg", ".gif", ".ico", ".sqlite", ".bin"}
 
 
@@ -30,9 +32,9 @@ def problems(path: Path) -> list[str]:
         return []
     found: list[str] = []
     for number, line in enumerate(text.splitlines(), start=1):
-        if "—" in line:
+        if EM_DASH in line:
             found.append(f"{path}:{number}: em dash")
-        if "→" in line:
+        if ARROW in line:
             found.append(f"{path}:{number}: arrow")
         if any(is_emoji(char) for char in line):
             found.append(f"{path}:{number}: emoji")
