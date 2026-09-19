@@ -327,7 +327,10 @@ class AlertRequest(BaseModel):
     title: str = Field(min_length=1, max_length=60)
     message: str = Field(default="", max_length=240)
     priority: AlertPriority = AlertPriority.NORMAL
-    duration_seconds: int = Field(default=90, ge=5, le=600)
+    #: ``None`` means "use the alert section's configured default"
+    #: (app/modules/alert/settings.py's ``default_duration_seconds``),
+    #: resolved by the ``POST /api/alert`` route, not by this model.
+    duration_seconds: int | None = Field(default=None, ge=5, le=600)
     beep: bool = True
     source: str | None = Field(default=None, max_length=48)
 

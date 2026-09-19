@@ -281,14 +281,17 @@ class Hub:
         this reload picks up), the state service and the renderer's own
         snapshot are rebuilt from it, the alert store re-reads its row (never
         resets: whatever the panel is showing has to survive a settings
-        save), and the render cache is dropped under ``_cache_lock`` so a
-        render already in flight finishes on the old service while the next
-        request sees the new one.
+        save) and is pointed at the freshly saved ``general.timezone`` (also
+        never dropping the currently-showing alert, see
+        ``AlertStore.set_timezone``), and the render cache is dropped under
+        ``_cache_lock`` so a render already in flight finishes on the old
+        service while the next request sees the new one.
         """
         identity = await run_in_threadpool(HubIdentity, self.db)
         self.identity = identity
         await run_in_threadpool(self.alerts.load)
         self.hub_settings = await run_in_threadpool(self.settings_store.snapshot)
+        self.alerts.set_timezone(self.hub_settings.general.timezone)
         self.state_service = StateService(self.hub_settings, self.env, self.alerts)
         self.renderer.hub_settings = self.hub_settings
         async with self._cache_lock:
@@ -908,6 +911,10 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     @app.post("/api/alert", dependencies=[Depends(require_token)])
     async def post_alert(payload: AlertRequest) -> JSONResponse:
         hub: Hub = app.state.hub
+        if payload.duration_seconds is None:
+            payload = payload.model_copy(
+                update={"duration_seconds": hub.hub_settings.alert.default_duration_seconds}
+            )
         alert, accepted = hub.alerts.set(payload)
         return JSONResponse(
             status_code=201 if accepted else 409,

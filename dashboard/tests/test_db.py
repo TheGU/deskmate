@@ -24,6 +24,7 @@ from app.db import (
 from app.hub_config import HubIdentity, claim_hub, write_hub_config
 from app.main import create_app
 from app.models import AlertRequest
+from app.modules.general.settings import GeneralSettings
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 
@@ -267,5 +268,39 @@ def test_reload_keeps_the_alert_and_drops_the_render_cache(tmp_path: Path) -> No
         assert hub.alerts.current is not None
         assert hub.alerts.current.title == "Someone is at the door"
         assert hub._cache == {}  # noqa: SLF001
+    finally:
+        close_databases()
+
+
+def test_reload_updates_the_alert_stores_timezone_without_dropping_the_alert(
+    tmp_path: Path,
+) -> None:
+    """1.6 gap 2: after a ``general.timezone`` save, ``Hub.reload()`` must
+    point the alert store at the new zone (so it stops stamping in the old
+    one until a restart) without dropping whatever alert is currently
+    showing."""
+    env = make_env(tmp_path)
+    app = create_app(env)
+    try:
+        hub = app.state.hub
+        hub.alerts.set(AlertRequest(title="Someone is at the door"))
+        showing = hub.alerts.current
+        assert showing is not None
+
+        hub.settings_store.save("general", GeneralSettings(timezone="America/New_York"))
+        asyncio.run(hub.reload())
+
+        # The alert already on screen survives the reload, unchanged.
+        assert hub.alerts.current is not None
+        assert hub.alerts.current.title == "Someone is at the door"
+        assert hub.alerts.current.created_at == showing.created_at
+        assert hub.alerts.is_active(hub.alerts.current)
+
+        # A newly set alert is stamped in the new zone right away, with no
+        # restart needed.
+        new_alert, accepted = hub.alerts.set(AlertRequest(title="Second ring"))
+        assert accepted is True
+        assert new_alert.created_at.tzinfo is not None
+        assert new_alert.created_at.tzinfo.key == "America/New_York"  # type: ignore[union-attr]
     finally:
         close_databases()

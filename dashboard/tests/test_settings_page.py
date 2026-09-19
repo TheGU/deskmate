@@ -151,6 +151,30 @@ def test_saving_a_section_stores_it_reloads_the_hub_and_says_so(admin: AdminHub)
     assert 'value="Europe/Berlin"' in page.text
 
 
+def test_alert_default_duration_is_used_when_a_post_omits_its_own(admin: AdminHub) -> None:
+    """The ``alert`` section's ``default_duration_seconds`` (settings-modules
+    gap 1): a ``POST /api/alert`` body without ``duration_seconds`` must use
+    whatever was last saved there, not the hardcoded 90 the model used to
+    fall back to."""
+    saved = admin.client.post(
+        "/settings/alert",
+        headers=admin.auth,
+        data={"default_duration_seconds": "150", "action": "save"},
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    assert admin.hub.hub_settings.alert.default_duration_seconds == 150
+
+    created = admin.client.post(
+        "/api/alert", headers=admin.auth, json={"title": "Laundry done"}
+    )
+    assert created.status_code == 201
+    assert created.json()["alert"]["duration_seconds"] == 150
+
+    state = admin.client.get("/api/state", headers=admin.auth).json()
+    assert state["alert"]["duration_seconds"] == 150
+
+
 def test_a_bad_timezone_comes_back_on_the_field_and_saves_nothing(admin: AdminHub) -> None:
     response = admin.client.post(
         "/settings/general",

@@ -77,6 +77,19 @@ class AlertStore:
             log(logger, logging.WARNING, "cannot persist alert", error=str(exc))
 
     # -- api -------------------------------------------------------------
+    def set_timezone(self, timezone_name: str) -> None:
+        """Point future ``set``/``is_active`` calls at a new timezone.
+
+        Called by ``Hub.reload()`` after a ``general.timezone`` save so the
+        store stamps new alerts in the new zone right away instead of after
+        a restart. The alert already stored, if any, is untouched: its
+        ``created_at`` stays the aware datetime it was created with, and
+        comparing it against ``now_local(new_timezone)`` in :meth:`is_active`
+        still measures the same absolute instant, so a currently-showing
+        alert never drops out just because the zone changed.
+        """
+        self._timezone = timezone_name
+
     @property
     def current(self) -> Alert | None:
         return self._alert
@@ -87,13 +100,23 @@ class AlertStore:
         return moment < created + timedelta(seconds=alert.duration_seconds)
 
     def set(self, request: AlertRequest) -> tuple[Alert, bool]:
-        """Store ``request``. Returns (effective alert, accepted)."""
+        """Store ``request``. Returns (effective alert, accepted).
+
+        ``request.duration_seconds`` of ``None`` means the caller wants
+        whatever this store's own field default is. The real default coming
+        from settings (``alert.default_duration_seconds``) is resolved by
+        the ``POST /api/alert`` route before it ever reaches here; this
+        fallback only protects a caller that skips that route.
+        """
+        duration_seconds = request.duration_seconds
+        if duration_seconds is None:
+            duration_seconds = Alert.model_fields["duration_seconds"].default
         candidate = Alert(
             title=request.title,
             message=request.message,
             priority=request.priority,
             created_at=now_local(self._timezone),
-            duration_seconds=request.duration_seconds,
+            duration_seconds=duration_seconds,
             beep=request.beep,
             source=request.source,
         )
