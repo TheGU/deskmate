@@ -20,8 +20,9 @@
 substitutions:
   name: reterminal-e1002
   friendly_name: reTerminal E1002
-  hub_base_url: !secret hub_base_url        # e.g. http://192.168.1.50
-  hub_key: !secret hub_key                  # device key from the hub's setup-done page
+  # hub_base_url and hub_key are runtime text components (below), not
+  # substitutions: rotating a key or moving the hub is a browser edit, not
+  # a reflash. secrets.yaml still supplies their first-boot seed value.
   page_count: "5"                           # today agenda weather brief system
   auto_refresh_interval: 30min              # conditional request, 304 means no panel refresh
   alert_default_seconds: "90"
@@ -117,8 +118,13 @@ ota:
       - script.stop: battery_deadline
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  # No ssid/password: ESPHome secrets cannot be left empty per key (tried
+  # empty strings against ESPHome 2026.8.2's `esphome config`: rejected
+  # with "SSID can't be empty"). wifi: may omit both entirely when ap: is
+  # set, confirmed the same way, so Wi-Fi is provisioned only at runtime:
+  # the captive portal AP below or Improv over serial (docs/FLASHING.md,
+  # "Provisioning at runtime"). Credentials entered either way are saved
+  # to NVS by ESPHome's save_wifi_sta and survive OTA.
   power_save_mode: none            # USB powered, we want quick alerts
   fast_connect: true               # skip the scan, matters on every battery wake
   on_connect:
@@ -133,6 +139,47 @@ wifi:
     password: !secret ap_password
 
 captive_portal:
+
+# Shares the logger's UART0 (the CH340 port on this board). Must never
+# move to native USB (USB_SERIAL_JTAG/USB_CDC): those pins are GPIO19/20,
+# which are the I2C bus for the SHT4x and the RTC.
+improv_serial:
+
+# So a home without Home Assistant can still set the hub URL and key from
+# a browser at http://<device-ip>/ (POST /text/<id>/set?value=...). The
+# captive portal above already pulls in the web server base.
+# ota: false keeps firmware updates on the esphome OTA platform above,
+# which is password protected, instead of the web UI's own OTA upload.
+web_server:
+  version: 3
+  auth:
+    type: basic     # explicit: ESPHome 2027.1.0 changes the unset default to digest
+    username: !secret web_username
+    password: !secret web_password
+  ota: false
+
+# hub_base_url and hub_key: runtime text components, restored from NVS
+# after the first boot. initial_value seeds them from secrets.yaml only on
+# that first boot; afterwards edit them at http://<device-ip>/ above or as
+# Home Assistant text entities. mode: password keeps the key masked on the
+# web page. max_length 255 is the text platform's hard cap.
+text:
+  - platform: template
+    id: hub_base_url
+    name: "Hub base URL"
+    mode: text
+    restore_value: true
+    optimistic: true
+    max_length: 255
+    initial_value: !secret hub_base_url
+  - platform: template
+    id: hub_key
+    name: "Hub key"
+    mode: password
+    restore_value: true
+    optimistic: true
+    max_length: 255
+    initial_value: !secret hub_key
 
 # Battery mode only. No run_duration or sleep_duration here: the device sleeps
 # only when the go_to_sleep script says so, and wakes on the timer or on any of
@@ -269,9 +316,13 @@ http_request:
 image:
   - platform: online_image
     id: dashboard_image
-    url: ${hub_base_url}/display/today.png
+    # online_image's url: is evaluated at compile time, not templatable,
+    # so this is a harmless placeholder that is never actually fetched:
+    # load_current_page's set_url() always runs on the very first call,
+    # since current_url (below) starts empty and so always differs.
+    url: "http://localhost/placeholder.png"
     request_headers:
-      Authorization: "Bearer ${hub_key}"
+      Authorization: !lambda 'return std::string("Bearer ") + id(hub_key).state;'
     format: PNG
     type: RGB565
     buffer_size: 65536
@@ -364,10 +415,10 @@ script:
                 timeout: 500ms
             - rtttl.stop
             - http_request.post:
-                url: ${hub_base_url}/api/device/telemetry
+                url: !lambda 'return id(hub_base_url).state + "/api/device/telemetry";'
                 request_headers:
                   Content-Type: application/json
-                  Authorization: "Bearer ${hub_key}"
+                  Authorization: !lambda 'return std::string("Bearer ") + id(hub_key).state;'
                 body: !lambda |-
                   static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
                   auto num = [](float v, int decimals) -> std::string {
@@ -401,7 +452,7 @@ script:
                       then:
                         - logger.log:
                             level: WARN
-                            format: "Telemetry rejected by hub, HTTP %d: check hub_key in secrets.yaml"
+                            format: "Telemetry rejected by hub, HTTP %d: set the Hub key on the device's web page or in Home Assistant"
                             args: [response->status_code]
                 on_error:
                   - logger.log:
@@ -556,10 +607,12 @@ script:
           static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
           int idx = id(page_index);
           if (idx < 0 || idx >= ${page_count}) idx = 0;
-          std::string url = std::string("${hub_base_url}/display/") + PAGES[idx] + ".png";
+          std::string url = id(hub_base_url).state + "/display/" + PAGES[idx] + ".png";
           if (bust_cache) url += "?t=" + std::to_string(millis());
           // set_url() unconditionally clears the ETag, so only call it when the
           // URL really changed. Same URL keeps the ETag and lets the hub answer 304.
+          // current_url starts empty (see globals below), so this always
+          // differs on the very first call and set_url() always runs then.
           if (url != id(current_url)) {
             id(current_url) = url;
             id(dashboard_image)->set_url(url);
@@ -629,7 +682,7 @@ script:
           then:
             - online_image.release: dashboard_image
       - lambda: |-
-          id(current_url) = std::string("${hub_base_url}/display/alert.png?t=") + std::to_string(millis());
+          id(current_url) = id(hub_base_url).state + "/display/alert.png?t=" + std::to_string(millis());
           id(dashboard_image)->set_url(id(current_url));
       # Let the alert tone finish before the blocking connect (see
       # load_current_page); the tone is about 1.6 s long.
