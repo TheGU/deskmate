@@ -418,7 +418,14 @@ script:
                 url: !lambda 'return id(hub_base_url).state + "/api/device/telemetry";'
                 request_headers:
                   Content-Type: application/json
-                  Authorization: !lambda 'return std::string("Bearer ") + id(hub_key).state;'
+                  # http_request.post's request_headers values compile as
+                  # const char* (unlike online_image's, which take
+                  # std::string), so the built value needs storage that
+                  # outlives the lambda: a static buffer, not a temporary.
+                  Authorization: !lambda |-
+                    static std::string auth;
+                    auth = std::string("Bearer ") + id(hub_key).state;
+                    return auth.c_str();
                 body: !lambda |-
                   static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
                   auto num = [](float v, int decimals) -> std::string {
