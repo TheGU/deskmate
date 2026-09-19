@@ -14,9 +14,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.adapters.ai_brief import PushBriefAdapter
+from app.adapters.ai_usage import PushAIUsageAdapter
+from app.adapters.tasks import PushTasksAdapter
 from app.alerts import AlertStore
 from app.config import REPO_ROOT, Env
-from app.db import LEGACY_IMPORTED_KEY, Database, close_databases
+from app.db import LEGACY_IMPORTED_KEY, Database, close_databases, get_database
 from app.hub_config import HubConfigUnreadable, HubIdentity, claim_hub
 from app.legacy import (
     DEFAULT_HA_ENTITIES,
@@ -29,6 +32,10 @@ from app.legacy import (
     section_documents,
 )
 from app.main import create_app
+from app.modules.ai_usage.settings import AIUsageSettings
+from app.modules.brief.settings import BriefSettings
+from app.modules.general.settings import GeneralSettings
+from app.modules.tasks.settings import TasksSettings
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 
@@ -292,6 +299,51 @@ def test_the_import_takes_every_piece_and_leaves_the_files_alone(
     assert telemetry_file.is_file()
     for path in pushed.values():
         assert path.is_file()
+
+
+def test_a_legacy_imported_row_loads_through_the_push_adapters(
+    tmp_path: Path, clean_env: None
+) -> None:
+    """The three pushed files, in the shape ``POST /api/tasks``,
+    ``/api/ai-usage`` and ``/api/brief`` always wrote, survive the one-time
+    import and load back through the matching ``Push*Adapter`` - not just
+    through a raw ``SELECT`` (see
+    ``test_the_import_takes_every_piece_and_leaves_the_files_alone`` above)."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "brief").mkdir()
+    (data_dir / "tasks.json").write_text(
+        json.dumps(
+            {
+                "received_at": "2026-09-18T07:00:00+00:00",
+                "tasks": [{"id": "agent-1", "title": "Ship it"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (data_dir / "ai-usage.json").write_text(
+        json.dumps({"providers": [{"provider": "claude"}]}), encoding="utf-8"
+    )
+    (data_dir / "brief" / "current.json").write_text(
+        json.dumps({"headline": "From before the database"}), encoding="utf-8"
+    )
+
+    env = Env(_env_file=None, DATA_DIR=data_dir, FIXTURES_DIR=FIXTURES_DIR, LOG_LEVEL="WARNING")
+    database = get_database(env.hub_db_file)
+    database.migrate()
+    assert import_legacy(database, empty_env(), data_dir) is True
+
+    general = GeneralSettings()
+    tasks = asyncio.run(PushTasksAdapter(TasksSettings(source="push"), general, env).fetch())
+    assert [task.id for task in tasks] == ["agent-1"]
+
+    providers = asyncio.run(
+        PushAIUsageAdapter(AIUsageSettings(source="push"), general, env).fetch()
+    )
+    assert providers[0].provider == "claude"
+
+    brief = asyncio.run(PushBriefAdapter(BriefSettings(source="push"), general, env).fetch())
+    assert brief.headline == "From before the database"
 
 
 def test_the_import_runs_only_once(

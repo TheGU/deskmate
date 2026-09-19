@@ -1,30 +1,20 @@
-"""Fixture adapters, failure handling and the derived weather helpers."""
+"""Fixture adapters, push adapters, failure handling and the derived weather
+helpers."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 import pytest
 
 from app.adapters import ai_brief
-from app.adapters.ai_brief import (
-    AutoBriefAdapter,
-    FileBriefAdapter,
-    FixtureBriefAdapter,
-    parse_markdown_brief,
-)
-from app.adapters.ai_usage import AutoAIUsageAdapter, FileAIUsageAdapter, FixtureAIUsageAdapter
+from app.adapters.ai_brief import FixtureBriefAdapter, PushBriefAdapter
+from app.adapters.ai_usage import FixtureAIUsageAdapter, PushAIUsageAdapter
 from app.adapters.base import AdapterUnavailable, CachedAdapter
 from app.adapters.calendar import FixtureCalendarAdapter, IcsCalendarAdapter, parse_ics
 from app.adapters.home_assistant import FixtureHomeAdapter, RestHomeAdapter, build_home_state
-from app.adapters.tasks import (
-    AutoTasksAdapter,
-    FileTasksAdapter,
-    FixtureTasksAdapter,
-    ObsidianTasksAdapter,
-)
+from app.adapters.tasks import FixtureTasksAdapter, ObsidianTasksAdapter, PushTasksAdapter
 from app.adapters.weather import (
     FixtureWeatherAdapter,
     OpenMeteoWeatherAdapter,
@@ -33,10 +23,20 @@ from app.adapters.weather import (
     rain_window,
 )
 from app.config import Env
-from app.models import AdapterStatus, BriefMode, HourlyRain, Priority, ServiceHealth, Task
+from app.datasets import write_dataset
+from app.db import get_database
+from app.models import AdapterStatus, BriefMode, HourlyRain, Priority, ServiceHealth
 from app.settings import HubSettings
 from app.timeutil import today_local, zone
 from tests.conftest import run
+
+
+def _push_env(env: Env, tmp_path) -> Env:  # type: ignore[no-untyped-def]
+    """An ``Env`` with its own isolated database, for a push adapter test:
+    ``hub_db_file`` is derived from ``data_dir``, so a fresh ``tmp_path``
+    gives every such test its own ``deskmate.sqlite`` rather than sharing
+    the session-scoped ``env`` fixture's one."""
+    return env.model_copy(update={"data_dir": tmp_path})
 
 
 # -- tasks -----------------------------------------------------------------
@@ -67,160 +67,37 @@ def test_obsidian_adapter_without_a_vault_is_unavailable(hub_settings: HubSettin
         run(adapter.fetch())
 
 
-def test_file_tasks_round_trips_with_no_date_shifting(  # type: ignore[no-untyped-def]
+def test_push_tasks_is_unavailable_before_anything_is_pushed(  # type: ignore[no-untyped-def]
     hub_settings: HubSettings, env: Env, tmp_path
 ) -> None:
-    target = tmp_path / "tasks.json"
-    target.write_text(
-        json.dumps(
-            {
-                "received_at": "2026-09-04T08:00:00+00:00",
-                "tasks": [
-                    {"id": "agent-1", "title": "Ship it", "due": "2026-09-04", "priority": "high"}
-                ],
-            }
-        ),
-        encoding="utf-8",
+    local = _push_env(env, tmp_path)
+    adapter = PushTasksAdapter(hub_settings.tasks, hub_settings.general, local)
+    with pytest.raises(AdapterUnavailable):
+        run(adapter.fetch())
+
+
+def test_push_tasks_round_trips_with_no_date_shifting(  # type: ignore[no-untyped-def]
+    hub_settings: HubSettings, env: Env, tmp_path
+) -> None:
+    local = _push_env(env, tmp_path)
+    database = get_database(local.hub_db_file)
+    database.migrate()
+    received_at = datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc)
+    write_dataset(
+        database,
+        "tasks",
+        {"tasks": [{"id": "agent-1", "title": "Ship it", "due": "2026-09-04", "priority": "high"}]},
+        received_at,
     )
-    local = env.model_copy(update={"data_dir": tmp_path, "fixture_relative_dates": True})
-    adapter = FileTasksAdapter(hub_settings.tasks, hub_settings.general, local)
+    adapter = PushTasksAdapter(hub_settings.tasks, hub_settings.general, local)
     tasks = run(adapter.fetch())
     assert len(tasks) == 1
     assert tasks[0].id == "agent-1"
     # No date shifting: the literal due date survives even though the
     # fixture-relative-dates switch is on.
     assert tasks[0].due == date(2026, 9, 4)
-    assert tasks[0].source == "file"
+    assert tasks[0].source == "push"
     assert adapter.last_received_at is not None
-
-
-def test_file_tasks_falls_back_to_mtime_without_a_received_at_key(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path
-) -> None:
-    target = tmp_path / "tasks.json"
-    target.write_text(json.dumps({"tasks": []}), encoding="utf-8")
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = FileTasksAdapter(hub_settings.tasks, hub_settings.general, local)
-    run(adapter.fetch())
-    assert adapter.last_received_at is not None
-
-
-def test_file_tasks_missing_file_is_unavailable(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path
-) -> None:
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = FileTasksAdapter(hub_settings.tasks, hub_settings.general, local)
-    with pytest.raises(AdapterUnavailable):
-        run(adapter.fetch())
-
-
-def test_auto_tasks_picks_fixture_before_a_push_and_file_after(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path
-) -> None:
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = AutoTasksAdapter(hub_settings.tasks, hub_settings.general, local)
-    assert adapter.source == "fixture"
-    tasks_before = run(adapter.fetch())
-    assert {task.source for task in tasks_before} == {"fixture"}
-    assert adapter.source == "fixture"
-
-    (tmp_path / "tasks.json").write_text(
-        json.dumps({"tasks": [{"id": "a", "title": "Pushed"}]}), encoding="utf-8"
-    )
-    # source reports the delegate used on the *last fetch*, not a live stat:
-    # writing the file alone does not flip it until fetch() runs again.
-    assert adapter.source == "fixture"
-    tasks_after = run(adapter.fetch())
-    assert [task.title for task in tasks_after] == ["Pushed"]
-    assert adapter.source == "file"
-
-
-def test_auto_tasks_source_survives_the_file_being_deleted_until_the_next_fetch(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path
-) -> None:
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = AutoTasksAdapter(hub_settings.tasks, hub_settings.general, local)
-    (tmp_path / "tasks.json").write_text(json.dumps({"tasks": []}), encoding="utf-8")
-    run(adapter.fetch())
-    assert adapter.source == "file"
-
-    (tmp_path / "tasks.json").unlink()
-    # Still "file": nothing has re-fetched yet (that is CachedAdapter's TTL
-    # or invalidate() to trigger, not this adapter's job).
-    assert adapter.source == "file"
-
-
-def test_auto_tasks_falls_back_to_fixture_when_the_file_vanishes_mid_fetch(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """TOCTOU: is_file() says yes, but the file is gone by the time the
-    file adapter actually opens it (deleted between the check and the read).
-    auto must fall back to fixture, not surface an error block."""
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = AutoTasksAdapter(hub_settings.tasks, hub_settings.general, local)
-    (tmp_path / "tasks.json").write_text(json.dumps({"tasks": []}), encoding="utf-8")
-
-    real_fetch = adapter._file.fetch
-
-    async def vanish_then_fetch() -> list[Task]:
-        (tmp_path / "tasks.json").unlink()
-        return await real_fetch()
-
-    monkeypatch.setattr(adapter._file, "fetch", vanish_then_fetch)
-    tasks = run(adapter.fetch())
-    assert tasks  # fixture tasks, not an empty/error result
-    assert adapter.source == "fixture"
-
-
-def test_auto_ai_usage_picks_fixture_before_and_file_after(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path
-) -> None:
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = AutoAIUsageAdapter(hub_settings.ai_usage, hub_settings.general, local)
-    assert adapter.source == "fixture"
-    (tmp_path / "ai-usage.json").write_text(
-        json.dumps({"providers": [{"provider": "Claude"}]}), encoding="utf-8"
-    )
-    assert adapter.source == "fixture"
-    providers = run(adapter.fetch())
-    assert providers[0].provider == "Claude"
-    assert adapter.source == "file"
-
-
-def test_auto_brief_picks_fixture_before_and_file_after(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    freeze_hour(monkeypatch, 8)
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = AutoBriefAdapter(hub_settings.brief, hub_settings.general, local)
-    assert adapter.source == "fixture"
-    brief_dir = tmp_path / "brief"
-    brief_dir.mkdir()
-    (brief_dir / "current.json").write_text(
-        json.dumps({"headline": "Pushed brief", "sections": []}), encoding="utf-8"
-    )
-    assert adapter.source == "fixture"
-    brief = run(adapter.fetch())
-    assert brief.headline == "Pushed brief"
-    assert adapter.source == "file"
-
-
-def test_auto_brief_serves_the_fixture_when_only_the_other_mode_markdown_exists(  # type: ignore[no-untyped-def]
-    hub_settings: HubSettings, env: Env, tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Only morning.md is present but the clock says evening: FileBriefAdapter
-    would raise AdapterUnavailable (it only ever reads the current mode's own
-    file), so auto must serve the fixture, not an error block."""
-    freeze_hour(monkeypatch, 20)
-    local = env.model_copy(update={"data_dir": tmp_path})
-    brief_dir = tmp_path / "brief"
-    brief_dir.mkdir()
-    (brief_dir / "morning.md").write_text("# Morning\n\n## Key tasks\n- Ship it\n", encoding="utf-8")
-    adapter = AutoBriefAdapter(hub_settings.brief, hub_settings.general, local)
-    assert adapter._file_available() is False
-    brief = run(adapter.fetch())
-    assert brief.source == "fixture"
-    assert adapter.source == "fixture"
 
 
 # -- calendar --------------------------------------------------------------
@@ -350,35 +227,36 @@ def test_fixture_ai_usage_has_both_providers(hub_settings: HubSettings, env: Env
     assert providers[1].weekly_percent_remaining is None
 
 
-def test_file_ai_usage_reads_the_data_directory(  # type: ignore[no-untyped-def]
+def test_push_ai_usage_reads_the_dataset_row(  # type: ignore[no-untyped-def]
     hub_settings: HubSettings, env: Env, tmp_path
 ) -> None:
-    target = tmp_path / "ai-usage.json"
-    target.write_text(
-        json.dumps(
-            {
-                "providers": [
-                    {
-                        "provider": "Claude",
-                        "short_window_percent_remaining": 10,
-                        "collection_status": "ok",
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
+    local = _push_env(env, tmp_path)
+    database = get_database(local.hub_db_file)
+    database.migrate()
+    write_dataset(
+        database,
+        "ai_usage",
+        {
+            "providers": [
+                {
+                    "provider": "Claude",
+                    "short_window_percent_remaining": 10,
+                    "collection_status": "ok",
+                }
+            ]
+        },
     )
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = FileAIUsageAdapter(hub_settings.ai_usage, hub_settings.general, local)
+    adapter = PushAIUsageAdapter(hub_settings.ai_usage, hub_settings.general, local)
     providers = run(adapter.fetch())
     assert providers[0].short_window_percent_remaining == 10
+    assert adapter.last_received_at is not None
 
 
-def test_file_ai_usage_missing_file_is_unavailable(  # type: ignore[no-untyped-def]
+def test_push_ai_usage_is_unavailable_before_anything_is_pushed(  # type: ignore[no-untyped-def]
     hub_settings: HubSettings, env: Env, tmp_path
 ) -> None:
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = FileAIUsageAdapter(hub_settings.ai_usage, hub_settings.general, local)
+    local = _push_env(env, tmp_path)
+    adapter = PushAIUsageAdapter(hub_settings.ai_usage, hub_settings.general, local)
     with pytest.raises(AdapterUnavailable):
         run(adapter.fetch())
 
@@ -414,70 +292,50 @@ def test_fixture_brief_has_sections_and_a_note(
     assert brief.sections[0].items
 
 
-def test_markdown_brief_parser() -> None:
-    text = (
-        "# Two deadlines today\n"
-        "Answer the vendor quote before standup.\n"
-        "\n"
-        "## Today's schedule\n"
-        "- 09:30 standup\n"
-        "- 11:00 design sync\n"
-        "\n"
-        "## At risk\n"
-        "- Vendor quote overdue\n"
-    )
-    brief = parse_markdown_brief(text, BriefMode.MORNING)
-    assert brief.headline == "Two deadlines today"
-    assert brief.note == "Answer the vendor quote before standup."
-    assert [section.title for section in brief.sections] == ["Today's schedule", "At risk"]
-    assert brief.sections[0].items == ["09:30 standup", "11:00 design sync"]
-    assert brief.source == "file"
-
-
-def test_file_brief_reads_current_json(  # type: ignore[no-untyped-def]
+def test_push_brief_reads_the_dataset_row(  # type: ignore[no-untyped-def]
     hub_settings: HubSettings, env: Env, tmp_path
 ) -> None:
-    local = env.model_copy(update={"data_dir": tmp_path})
-    brief_dir = tmp_path / "brief"
-    brief_dir.mkdir()
-    (brief_dir / "current.json").write_text(
-        json.dumps(
-            {
-                "mode": "morning",
-                "headline": "From a file",
-                "note": "Written by another agent",
-                "sections": [{"title": "Key tasks", "items": ["Ship it"]}],
-            }
-        ),
-        encoding="utf-8",
+    local = _push_env(env, tmp_path)
+    database = get_database(local.hub_db_file)
+    database.migrate()
+    write_dataset(
+        database,
+        "brief",
+        {
+            "mode": "morning",
+            "headline": "From a push",
+            "note": "Written by another agent",
+            "sections": [{"title": "Key tasks", "items": ["Ship it"]}],
+        },
     )
-    adapter = FileBriefAdapter(hub_settings.brief, hub_settings.general, local)
+    adapter = PushBriefAdapter(hub_settings.brief, hub_settings.general, local)
     brief = run(adapter.fetch())
-    assert brief.headline == "From a file"
-    assert brief.generated_at is not None
+    assert brief.headline == "From a push"
+    assert brief.source == "push"
+    assert adapter.last_received_at is not None
 
 
-def test_file_brief_falls_back_to_markdown(  # type: ignore[no-untyped-def]
+def test_push_brief_is_shown_regardless_of_the_current_mode(  # type: ignore[no-untyped-def]
     hub_settings: HubSettings, env: Env, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze_hour(monkeypatch, 8)
-    local = env.model_copy(update={"data_dir": tmp_path})
-    brief_dir = tmp_path / "brief"
-    brief_dir.mkdir()
-    (brief_dir / "morning.md").write_text(
-        "# Morning\n\n## Key tasks\n- Ship it\n", encoding="utf-8"
-    )
-    adapter = FileBriefAdapter(hub_settings.brief, hub_settings.general, local)
+    """Unlike the fixture, a pushed brief is not mode-selected: whatever was
+    last pushed is shown even after the clock crosses the evening hour."""
+    freeze_hour(monkeypatch, 20)
+    local = _push_env(env, tmp_path)
+    database = get_database(local.hub_db_file)
+    database.migrate()
+    write_dataset(database, "brief", {"mode": "morning", "headline": "Still morning"})
+    adapter = PushBriefAdapter(hub_settings.brief, hub_settings.general, local)
     brief = run(adapter.fetch())
+    assert brief.headline == "Still morning"
     assert brief.mode is BriefMode.MORNING
-    assert brief.sections[0].items == ["Ship it"]
 
 
-def test_file_brief_missing_is_unavailable(  # type: ignore[no-untyped-def]
+def test_push_brief_is_unavailable_before_anything_is_pushed(  # type: ignore[no-untyped-def]
     hub_settings: HubSettings, env: Env, tmp_path
 ) -> None:
-    local = env.model_copy(update={"data_dir": tmp_path})
-    adapter = FileBriefAdapter(hub_settings.brief, hub_settings.general, local)
+    local = _push_env(env, tmp_path)
+    adapter = PushBriefAdapter(hub_settings.brief, hub_settings.general, local)
     with pytest.raises(AdapterUnavailable):
         run(adapter.fetch())
 

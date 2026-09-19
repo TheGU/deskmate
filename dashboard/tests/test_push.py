@@ -1,16 +1,16 @@
-"""The three push endpoints (Part 1B): validation, atomic writes, and the
-adapters/state they feed.
+"""The three push endpoints: validation, the ``datasets`` row each one
+writes, and the adapters/state they feed.
 
 Uses its own module-scoped app (separate from tests/test_http.py's session
 client) so the sequential claim story here does not interleave with that
 file's. The hub is claimed once for the module; datasets are pushed in a
 fixed order.
 
-1.2b note: ``push`` is now the only "real" tasks/ai_usage/brief selector
-(``obsidian`` and ``fixture`` are the other two); it is today's strict file
-adapter (see ``adapters/base.py``'s docstring), so unlike the old ``auto``
-selector it never falls back to fixture data on its own before the first
-push - a fresh hub on ``push`` shows ``unavailable`` until something is
+1.2d note: ``push`` is now the only "real" tasks/ai_usage/brief selector
+(``obsidian`` and ``fixture`` are the other two); it reads the matching row
+of the ``datasets`` table (``app/datasets.py``) directly, so unlike the old
+``auto`` selector it never falls back to fixture data on its own before the
+first push - a fresh hub on ``push`` shows ``unavailable`` until something is
 posted. The "auto resolves to fixture before, file after" story this file
 used to test belonged to that now-unreachable selector; the tests below
 that depended on it are gone or rewritten (see the render-gate note in
@@ -27,7 +27,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import REPO_ROOT, Env
-from app.main import _write_json_atomic, create_app
+from app.datasets import read_dataset
+from app.db import get_database
+from app.main import create_app
 from app.modules.ai_usage.settings import AIUsageSettings
 from app.modules.brief.settings import BriefSettings
 from app.modules.tasks.settings import TasksSettings
@@ -77,19 +79,6 @@ def push_client(data_dir: Path) -> Iterator[TestClient]:
 @pytest.fixture(scope="module")
 def token(push_client: TestClient) -> str:
     return _claim(push_client)
-
-
-def test_write_json_atomic_leaves_no_tmp_when_the_payload_cannot_serialize(
-    tmp_path: Path,
-) -> None:
-    class Unserializable:
-        pass
-
-    target = tmp_path / "out.json"
-    with pytest.raises(TypeError):
-        _write_json_atomic(target, {"bad": Unserializable()})
-    assert list(tmp_path.glob("*.tmp")) == []
-    assert not target.exists()
 
 
 def test_hub_sources_report_the_configured_selector(push_client: TestClient, token: str) -> None:
@@ -159,7 +148,7 @@ def test_post_ai_usage_preserves_an_aware_collected_at(
     assert provider["collected_at"].startswith("2026-09-16T10:00:00")
 
 
-def test_post_ai_usage_valid_writes_atomically_and_reaches_state(
+def test_post_ai_usage_valid_writes_the_dataset_row_and_reaches_state(
     push_client: TestClient, token: str, data_dir: Path
 ) -> None:
     response = push_client.post(
@@ -177,13 +166,17 @@ def test_post_ai_usage_valid_writes_atomically_and_reaches_state(
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["stored"] == "ai-usage.json"
+    assert body["stored"] == "ai_usage"
     assert body["count"] == 1
     assert body["effective_source"] == "push"
     assert "warning" not in body
 
-    assert list(data_dir.glob("*.tmp")) == []
-    assert (data_dir / "ai-usage.json").is_file()
+    database = get_database(data_dir / "deskmate.sqlite")
+    found = read_dataset(database, "ai_usage")
+    assert found is not None
+    payload, received_at = found
+    assert payload["providers"][0]["provider"] == "claude"
+    assert received_at is not None
 
     state = push_client.get("/api/state", headers=auth(token)).json()
     providers = state["ai_usage"]["providers"]
@@ -228,7 +221,7 @@ def test_post_brief_rejects_more_than_six_sections(push_client: TestClient, toke
     assert response.status_code == 422
 
 
-def test_post_brief_valid_writes_atomically_and_reaches_state(
+def test_post_brief_valid_writes_the_dataset_row_and_reaches_state(
     push_client: TestClient, token: str, data_dir: Path
 ) -> None:
     response = push_client.post(
@@ -242,13 +235,16 @@ def test_post_brief_valid_writes_atomically_and_reaches_state(
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["stored"] == "current.json"
+    assert body["stored"] == "brief"
     assert body["count"] == 1
     assert body["effective_source"] == "push"
 
-    brief_dir = data_dir / "brief"
-    assert list(brief_dir.glob("*.tmp")) == []
-    assert (brief_dir / "current.json").is_file()
+    database = get_database(data_dir / "deskmate.sqlite")
+    found = read_dataset(database, "brief")
+    assert found is not None
+    payload, received_at = found
+    assert payload["headline"] == "Two deadlines today"
+    assert received_at is not None
 
     state = push_client.get("/api/state", headers=auth(token)).json()
     assert state["brief"]["brief"]["headline"] == "Two deadlines today"
@@ -271,7 +267,7 @@ def test_post_tasks_rejects_more_than_sixty(push_client: TestClient, token: str)
     assert response.status_code == 422
 
 
-def test_post_tasks_valid_writes_atomically_and_reaches_state(
+def test_post_tasks_valid_writes_the_dataset_row_and_reaches_state(
     push_client: TestClient, token: str, data_dir: Path
 ) -> None:
     response = push_client.post(
@@ -281,12 +277,16 @@ def test_post_tasks_valid_writes_atomically_and_reaches_state(
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["stored"] == "tasks.json"
+    assert body["stored"] == "tasks"
     assert body["count"] == 1
     assert body["effective_source"] == "push"
 
-    assert list(data_dir.glob("*.tmp")) == []
-    assert (data_dir / "tasks.json").is_file()
+    database = get_database(data_dir / "deskmate.sqlite")
+    found = read_dataset(database, "tasks")
+    assert found is not None
+    payload, received_at = found
+    assert payload["tasks"][0]["id"] == "agent-1"
+    assert received_at is not None
 
     state = push_client.get("/api/state", headers=auth(token)).json()
     items = state["tasks"]["items"]
