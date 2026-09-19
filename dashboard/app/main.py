@@ -67,6 +67,7 @@ from app.hub_config import (
     require_reader,
     require_reader_html,
     require_token,
+    validate_base_url,
 )
 from app.logging_setup import configure_logging, log
 from app.models import (
@@ -99,6 +100,12 @@ DEFAULT_PORT = 8080
 #: until then. Cap what either open POST route will buffer in memory before
 #: validation ever runs.
 MAX_OPEN_BODY_BYTES = 64 * 1024
+
+#: Cap on the two telemetry-origin strings (main.py:post_device_telemetry,
+#: telemetry.py's remote_addr/hub_host columns): plenty for an IPv6 address
+#: or a "https://host:port" base URL, short enough that a hostile Host
+#: header cannot grow the row without bound.
+TELEMETRY_ORIGIN_MAX_LEN = 200
 
 
 @dataclass(slots=True)
@@ -300,6 +307,26 @@ def _sample_json(sample: DeviceSample, timezone_name: str) -> dict[str, Any]:
 def _read_latest(hub: "Hub") -> tuple[DeviceSample | None, TelemetrySummary]:
     """One thread-pool hop for the two store reads the latest endpoint needs."""
     return hub.telemetry.latest(), hub.telemetry.summary()
+
+
+def _telemetry_origin(request: Request) -> tuple[str | None, str | None]:
+    """``(remote_addr, hub_host)`` for a telemetry POST: who sent it, and the
+    hub URL they used to reach it. Both capped and both best-effort - neither
+    is trusted input, and a caller behind a reverse proxy is free to omit or
+    spoof ``X-Forwarded-Proto``/``Host``, so this is a display convenience
+    (System page HUB column) never a security control.
+    """
+    remote_addr = None if request.client is None else request.client.host
+    if remote_addr is not None:
+        remote_addr = remote_addr[:TELEMETRY_ORIGIN_MAX_LEN]
+
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or ""
+    try:
+        hub_host = validate_base_url(f"{scheme}://{host}")[:TELEMETRY_ORIGIN_MAX_LEN]
+    except InvalidBaseURL:
+        hub_host = None
+    return remote_addr, hub_host
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -570,7 +597,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=400,
             )
 
-        received_at = await run_in_threadpool(hub.telemetry.insert, telemetry)
+        remote_addr, hub_host = _telemetry_origin(request)
+        received_at = await run_in_threadpool(
+            hub.telemetry.insert,
+            telemetry,
+            remote_addr=remote_addr,
+            hub_host=hub_host,
+        )
         # The next page render must see this sample, not the cached one.
         hub.state_service.device.invalidate()
         return JSONResponse(

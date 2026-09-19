@@ -142,8 +142,16 @@ def build_device_state(
     history: Sequence[DeviceSample],
     summary: TelemetrySummary,
     now: datetime,
+    remote_addr: str | None = None,
+    hub_host: str | None = None,
 ) -> DeviceState:
-    """Fold the newest sample plus the 24 h window into the rendered model."""
+    """Fold the newest sample plus the 24 h window into the rendered model.
+
+    ``remote_addr``/``hub_host`` come from :meth:`TelemetryStore.latest_origin`
+    (store-backed callers only); the fixture path never passes them, so the
+    demo device always shows a hatch for DEVICE IP / HUB URL on the System
+    page rather than a made up origin.
+    """
     if latest is None:
         return DeviceState(status=DeviceStatus.UNAVAILABLE, sample_count=summary.sample_count)
     age = (now - latest.received_at).total_seconds()
@@ -167,6 +175,8 @@ def build_device_state(
         oldest_at=summary.oldest,
         newest_at=summary.newest,
         history_24h=bucket_points(history),
+        remote_addr=remote_addr,
+        hub_host=hub_host,
     )
 
 
@@ -244,11 +254,15 @@ def _state_from_store(settings: Settings, *, now: datetime) -> DeviceState | Non
     summary = store.summary()
     if summary.sample_count == 0:
         return None
+    origin = store.latest_origin()
+    remote_addr, hub_host = (None, None) if origin is None else (origin[0], origin[1])
     return build_device_state(
         latest=store.latest(),
         history=store.history(HISTORY_HOURS, now=now),
         summary=summary,
         now=now,
+        remote_addr=remote_addr,
+        hub_host=hub_host,
     )
 
 

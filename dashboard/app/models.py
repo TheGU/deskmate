@@ -288,6 +288,13 @@ class DeviceState(BaseModel):
     #: 24 hours of history, meaned into 15 minute buckets (at most 96 points).
     history_24h: list[DevicePoint] = Field(default_factory=list)
 
+    #: Origin of the newest POST (telemetry.py's ``latest_origin``): who sent
+    #: it and which hub URL they used. ``None`` for the fixture device (it
+    #: never posted) and for a fresh store. Distinct from every other field
+    #: above, which describes the device's own reading.
+    remote_addr: str | None = None
+    hub_host: str | None = None
+
     @property
     def has_reading(self) -> bool:
         return self.status is not DeviceStatus.UNAVAILABLE

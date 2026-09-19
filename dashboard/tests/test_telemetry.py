@@ -125,6 +125,33 @@ def test_insert_stores_the_power_fields(store: TelemetryStore) -> None:
     assert latest.charge_state == "charging"
 
 
+def test_insert_stores_remote_addr_and_hub_host(store: TelemetryStore) -> None:
+    telemetry = DeviceTelemetry.model_validate(DEVICE_PAYLOAD)
+    store.insert(telemetry, remote_addr="192.0.2.10", hub_host="https://192.0.2.1:8080")
+    origin = store.latest_origin()
+    assert origin is not None
+    remote_addr, hub_host, received_at = origin
+    assert remote_addr == "192.0.2.10"
+    assert hub_host == "https://192.0.2.1:8080"
+    assert isinstance(received_at, datetime)
+
+
+def test_latest_origin_is_none_on_an_empty_store(store: TelemetryStore) -> None:
+    assert store.latest_origin() is None
+
+
+def test_latest_origin_never_reaches_a_device_sample(store: TelemetryStore) -> None:
+    """remote_addr/hub_host live outside ``_COLUMNS``: ``latest()`` (which
+    feeds :class:`DeviceSample`) must never carry them, only
+    ``latest_origin()`` does."""
+    telemetry = DeviceTelemetry.model_validate(DEVICE_PAYLOAD)
+    store.insert(telemetry, remote_addr="192.0.2.10", hub_host="https://192.0.2.1:8080")
+    latest = store.latest()
+    assert latest is not None
+    assert not hasattr(latest, "remote_addr")
+    assert not hasattr(latest, "hub_host")
+
+
 def test_insert_accepts_missing_power_fields(store: TelemetryStore) -> None:
     """Older firmware that never sends the three power fields still stores fine."""
     telemetry = DeviceTelemetry.model_validate(DEVICE_PAYLOAD)
@@ -343,6 +370,35 @@ def test_build_device_state_reports_age_and_history() -> None:
     assert 1 < len(state.history_24h) <= 96
 
 
+def test_build_device_state_carries_the_origin_when_given_one() -> None:
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    latest = sample(0, 30.0, 55.0)
+    state = build_device_state(
+        latest=latest,
+        history=[latest],
+        summary=TelemetrySummary(sample_count=1, oldest=latest.received_at, newest=latest.received_at),
+        now=now,
+        remote_addr="192.0.2.10",
+        hub_host="https://192.0.2.1:8080",
+    )
+    assert state.remote_addr == "192.0.2.10"
+    assert state.hub_host == "https://192.0.2.1:8080"
+
+
+def test_build_device_state_origin_defaults_to_none() -> None:
+    """The fixture demo device never posted, so it never has an origin."""
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
+    latest = sample(0, 30.0, 55.0)
+    state = build_device_state(
+        latest=latest,
+        history=[latest],
+        summary=TelemetrySummary(sample_count=1, oldest=latest.received_at, newest=latest.received_at),
+        now=now,
+    )
+    assert state.remote_addr is None
+    assert state.hub_host is None
+
+
 def test_build_device_state_goes_stale() -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
     old = sample(60, 30.0, 55.0)
@@ -377,6 +433,19 @@ def test_store_adapter_reads_what_was_posted(device_settings: Settings) -> None:
     store.close()
 
 
+def test_store_adapter_carries_the_telemetry_origin(device_settings: Settings) -> None:
+    store = get_telemetry_store(device_settings)
+    store.insert(
+        DeviceTelemetry.model_validate(DEVICE_PAYLOAD),
+        remote_addr="192.0.2.10",
+        hub_host="https://192.0.2.1:8080",
+    )
+    state = run(StoreDeviceAdapter(device_settings).fetch())
+    assert state.remote_addr == "192.0.2.10"
+    assert state.hub_host == "https://192.0.2.1:8080"
+    store.close()
+
+
 def test_fixture_adapter_fills_an_empty_store(device_settings: Settings) -> None:
     state = run(FixtureDeviceAdapter(device_settings).fetch())
     assert state.status is DeviceStatus.OK
@@ -384,6 +453,9 @@ def test_fixture_adapter_fills_an_empty_store(device_settings: Settings) -> None
     assert state.sample_count == 288
     assert len(state.history_24h) == HISTORY_POINTS
     assert state.temperature is not None
+    # The demo device never actually posted: no origin to show.
+    assert state.remote_addr is None
+    assert state.hub_host is None
 
 
 def test_fixture_file_holds_a_day_of_five_minute_samples() -> None:
@@ -658,7 +730,7 @@ def test_device_panel_hides_the_power_label_when_unreported(device_settings: Set
 def test_system_page_drops_the_home_room_rows(settings: Settings, state: DashboardState) -> None:
     """The DESK panel owns temperature and humidity now."""
     context = system_context(state, settings)
-    names = {row["name"] for row in context["sensors"]}
+    names = {row["name"] for row in context["home_rows"] if row["kind"] == "sensor"}
     assert "ROOM TEMP" not in names
     assert "ROOM HUMIDITY" not in names
     assert "FRONT DOOR" in names
@@ -761,6 +833,60 @@ def test_post_telemetry_without_wake_cause_is_still_accepted(device_client: _Dev
 
     latest = device_client.get("/api/device/telemetry").json()["latest"]
     assert latest["wake_cause"] is None
+
+
+def test_post_telemetry_stores_the_remote_addr_and_hub_host(device_client: _DeviceKeyClient) -> None:
+    response = device_client.post(
+        "/api/device/telemetry",
+        json=DEVICE_PAYLOAD,
+        headers={"Host": "192.0.2.1:8080"},
+    )
+    assert response.status_code == 202
+
+    hub = device_client.app.state.hub
+    origin = hub.telemetry.latest_origin()
+    assert origin is not None
+    remote_addr, hub_host, _ = origin
+    assert remote_addr  # TestClient's synthetic client address
+    assert hub_host == "http://192.0.2.1:8080"
+
+
+def test_post_telemetry_stores_no_hub_host_for_an_invalid_host_header(
+    device_client: _DeviceKeyClient,
+) -> None:
+    """A Host header hub_config.validate_base_url rejects (here: one that
+    carries a path) stores ``None`` rather than a garbage URL."""
+    response = device_client.post(
+        "/api/device/telemetry",
+        json=DEVICE_PAYLOAD,
+        headers={"Host": "evil.example.com/path"},
+    )
+    assert response.status_code == 202
+
+    hub = device_client.app.state.hub
+    origin = hub.telemetry.latest_origin()
+    assert origin is not None
+    assert origin[1] is None
+
+
+def test_telemetry_api_json_never_carries_the_origin_columns(device_client: _DeviceKeyClient) -> None:
+    """remote_addr/hub_host are stored (previous tests) but must never reach
+    GET /api/device/telemetry or /api/device/history: they are not on
+    DeviceTelemetry/DeviceSample, only in the store's own table."""
+    device_client.post(
+        "/api/device/telemetry",
+        json=DEVICE_PAYLOAD,
+        headers={"Host": "192.0.2.1:8080"},
+    )
+    latest_body = device_client.get("/api/device/telemetry").json()
+    assert "remote_addr" not in latest_body["latest"]
+    assert "hub_host" not in latest_body["latest"]
+    assert "remote_addr" not in json.dumps(latest_body)
+    assert "hub_host" not in json.dumps(latest_body)
+
+    history_body = device_client.get("/api/device/history").json()
+    assert "remote_addr" not in json.dumps(history_body)
+    assert "hub_host" not in json.dumps(history_body)
 
 
 def test_post_telemetry_rejects_an_unrecognized_charge_state(device_client: _DeviceKeyClient) -> None:

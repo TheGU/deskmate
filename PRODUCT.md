@@ -89,6 +89,11 @@ Confirmed:
   telemetry endpoints stay open because the device fetches without one.
   Telemetry (battery, temperature, humidity, Wi-Fi, power state, wake cause)
   is stored in SQLite with 30-day retention and charted on the System page.
+  Each POST also records who sent it and which hub URL they used (remote
+  address, Host header); the System page's HUB column shows those as DEVICE
+  IP and HUB URL, next to an age for every pushed or fetched dataset and
+  the device's own last sync. Neither ever appears in the telemetry API
+  responses, only on the page.
 - Text: Thai and English mixed content is a requirement. Google Sans (SIL
   OFL) carries Latin and Thai in one file, weights 400 to 700; Google Sans
   Flex and Noto Sans Thai were replaced on 2026-09-05 after the owner asked
@@ -96,7 +101,8 @@ Confirmed:
   the panel yet.
 - Terminology: hub (server), device or paper (E1002), page, adapter, source
   (fixture or live), fixture, battery mode, always-on, DESK panel (the device
-  section of the System page), alert.
+  section of the System page), HUB column (the System page's dataset ages and
+  device origin), alert.
 
 Decided: the PC-side feed reaches the hub over three bearer-token HTTP push
 endpoints (`/api/ai-usage`, `/api/brief`, `/api/tasks`), with a file dropped

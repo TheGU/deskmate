@@ -272,19 +272,26 @@ Today, Agenda and Weather share one shape: a fixed 456 px left column
 its own rule side). Brief fixes both sides instead (456 px left, 296 px
 right), because its right column is a packed task list rather than
 overflow-absorbing prose. System breaks from the shared shape entirely: a
-fixed 200 px top row (the device instrument cluster) over a bottom row of
-three columns (296 px chart, 250 px home sensors, the remaining width for
-services). Inside a column, stacked fields are themselves split by 2 px
-horizontal rules; nothing between two fields is ever a boxed tile.
+fixed 150 px top row (the device instrument cluster) over a bottom row of
+three columns (296 px chart, then HUB and HOME splitting whatever width is
+left evenly). HUB is a fixed nine-row list (one age per pushed/fetched
+dataset, then the device's own sync age, IP and bound hub URL); HOME is one
+merged, budgeted list of home sensors then services (the two used to be
+separate boxes with separate caps; a busy home now shares one list and one
+cap, sensors first). The top row was cut from 200 to 150 px to make room for
+HUB's nine rows; see `HOME_ROW_BUDGET` in `dashboard/app/view.py` for the
+exact arithmetic both columns' row caps are derived from. Inside a column,
+stacked fields are themselves split by 2 px horizontal rules; nothing
+between two fields is ever a boxed tile.
 
-Rows are fixed height and quantized to a small set of steps: 22 to 28 px for
-dense list rows (agenda, sensor, service, all-day), 32 to 36 px for a
-one-line task or event row, 40 px for a priority row, 52 to 56 px for a
-two-line wrapped title or the device battery block. Gaps run 2, 4, 8, 12, 16,
-24 px; nothing falls between those steps. Because the frame cannot grow,
-every list is truncated at the view layer to what its own field can hold,
-and every flexible text field is either ellipsis-clipped on one line or
-clamped to two.
+Rows are fixed height and quantized to a small set of steps: 20 to 28 px for
+dense list rows (agenda, sensor, service, all-day, and the System page's own
+denser HUB rows at 20 px), 32 to 36 px for a one-line task or event row,
+40 px for a priority row, 52 to 56 px for a two-line wrapped title or the
+device battery block. Gaps run 2, 4, 8, 12, 16, 24 px; nothing falls between
+those steps. Because the frame cannot grow, every list is truncated at the
+view layer to what its own field can hold, and every flexible text field is
+either ellipsis-clipped on one line or clamped to two.
 
 ### Named Rules
 

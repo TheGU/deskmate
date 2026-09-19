@@ -701,6 +701,27 @@ def test_no_pane_overflows_its_own_box(
     assert overflow == [], f"{page}: {overflow}"
 
 
+def test_system_row_lists_do_not_overflow_their_box(
+    renderer: Renderer, state: DashboardState
+) -> None:
+    """``.sys-row-list`` is not ``.pane-body``: the System page's HUB and
+    merged HOME columns get their own probe, so a HUB or HOME list that no
+    longer fits its box (a merged HOME+SERVICES list that clips, a HUB list
+    taller than the shrunk sys-top leaves room for) fails loudly instead of
+    silently scrolling under ``overflow: hidden``.
+    """
+    overflow = run(
+        renderer.probe(
+            "system",
+            state,
+            """Array.from(document.querySelectorAll('.sys-row-list')).filter(
+                 e => e.scrollHeight > e.clientHeight + 1
+               ).map(e => [e.parentElement.className, e.scrollHeight, e.clientHeight])""",
+        )
+    )
+    assert overflow == [], f"system: {overflow}"
+
+
 def test_pages_cover_the_documented_set() -> None:
     assert PAGES == ("today", "agenda", "weather", "brief", "system", "alert")
 

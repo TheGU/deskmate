@@ -57,6 +57,8 @@ _MIGRATION_COLUMNS: Final[tuple[tuple[str, str], ...]] = (
     ("usb_present", "INTEGER"),
     ("charge_state", "TEXT"),
     ("wake_cause", "TEXT"),
+    ("remote_addr", "TEXT"),
+    ("hub_host", "TEXT"),
 )
 
 _COLUMNS: Final[tuple[str, ...]] = (
@@ -75,8 +77,21 @@ _COLUMNS: Final[tuple[str, ...]] = (
     "wake_cause",
 )
 
+#: Origin of the POST itself: who sent it, and what hub URL they used to
+#: reach it. Never part of :class:`DeviceSample` / :class:`DeviceTelemetry`
+#: (the device's own reading), so they never appear in ``_SELECT_SQL`` and
+#: never round-trip through GET /api/device/telemetry or /history. Stored
+#: only so :func:`TelemetryStore.latest_origin` can answer the System page's
+#: DEVICE IP / HUB URL rows.
+_ORIGIN_COLUMNS: Final[tuple[str, ...]] = ("remote_addr", "hub_host")
+
+_INSERT_COLUMNS: Final[tuple[str, ...]] = _COLUMNS + _ORIGIN_COLUMNS
 _INSERT_SQL: Final[str] = (
-    "INSERT INTO telemetry (" + ", ".join(_COLUMNS) + ") VALUES (" + ", ".join("?" * len(_COLUMNS)) + ")"
+    "INSERT INTO telemetry ("
+    + ", ".join(_INSERT_COLUMNS)
+    + ") VALUES ("
+    + ", ".join("?" * len(_INSERT_COLUMNS))
+    + ")"
 )
 _SELECT_SQL: Final[str] = "SELECT " + ", ".join(_COLUMNS) + " FROM telemetry"
 
@@ -161,9 +176,20 @@ class TelemetryStore:
 
     # -- writing ---------------------------------------------------------
     def insert(
-        self, telemetry: DeviceTelemetry, *, received_at: datetime | None = None
+        self,
+        telemetry: DeviceTelemetry,
+        *,
+        received_at: datetime | None = None,
+        remote_addr: str | None = None,
+        hub_host: str | None = None,
     ) -> datetime:
-        """Store one sample, prune what fell out of the window, return the stamp."""
+        """Store one sample, prune what fell out of the window, return the stamp.
+
+        ``remote_addr``/``hub_host`` describe the POST itself (who sent it,
+        which hub URL they used), not the device's own reading; the caller
+        (main.py) derives and caps them from the request. Never part of
+        :class:`DeviceTelemetry`, so never validated or shaped by that model.
+        """
         stamp = (received_at or utc_now()).astimezone(dt_timezone.utc)
         # Storage keeps milliseconds; return exactly what a later read gives back.
         stamp = stamp.replace(microsecond=(stamp.microsecond // 1000) * 1000)
@@ -182,6 +208,8 @@ class TelemetryStore:
             telemetry.usb_present,
             telemetry.charge_state,
             telemetry.wake_cause,
+            remote_addr,
+            hub_host,
         )
         with self._lock:
             self._connection.execute(_INSERT_SQL, row)
@@ -210,6 +238,21 @@ class TelemetryStore:
                 _SELECT_SQL + " ORDER BY received_at DESC LIMIT 1"
             ).fetchone()
         return None if row is None else _to_sample(row)
+
+    def latest_origin(self) -> tuple[str | None, str | None, datetime] | None:
+        """``(remote_addr, hub_host, received_at)`` of the newest row, or
+        ``None`` when the table is empty. Its own query, never folded into
+        :func:`_SELECT_SQL` / :func:`_to_sample`: those feed
+        :class:`DeviceSample`, and these two columns must never reach it.
+        """
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT remote_addr, hub_host, received_at FROM telemetry"
+                " ORDER BY received_at DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return row["remote_addr"], row["hub_host"], parse_utc(str(row["received_at"]))
 
     def summary(self) -> TelemetrySummary:
         with self._lock:
