@@ -37,14 +37,22 @@
   <h1>deskmate is set up</h1>
   <p class="sub">Hub <strong>{{ name }}</strong> at <strong>{{ base_url }}</strong>.</p>
   <div class="warning">
-    This token is shown once. Copy it now: it cannot be recovered, only
-    replaced by stopping the container, deleting <code style="display:inline;border:none;padding:0">data/hub.json</code>
+    These two secrets are shown once. Copy them now: neither can be
+    recovered, only replaced by stopping the container, deleting
+    <code style="display:inline;border:none;padding:0">data/hub.json</code>
     and running <code style="display:inline;border:none;padding:0">/setup</code> again.
   </div>
-  <label for="token-value">Bearer token</label>
+  <label for="token-value">Bearer token (agents)</label>
   <code id="token-value">{{ token }}</code>
+  <label for="device-key-value">Device key</label>
+  <code id="device-key-value">{{ device_key }}</code>
   <label>firmware/secrets.yaml</label>
   <code>hub_base_url: "{{ base_url }}"</code>
+  <code>hub_key: "{{ device_key }}"</code>
+  <p class="hint">
+    That same device key is what you type at <a href="/login">/login</a> to
+    view the pages in a browser.
+  </p>
   <p class="hint">
     See <a href="/docs">/docs</a> for the API and
     <code style="display:inline;border:none;padding:0">{{ skill_path }}</code>

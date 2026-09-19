@@ -42,28 +42,33 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| GET | `/healthz` | open | Liveness only: each adapter's last known status, never fetches (`unknown` before the first render) |
+| GET | `/healthz` | open | Liveness only: each adapter's last known status, never fetches (`unknown` before the first render); always `200`; full body while unclaimed or for an authenticated caller once claimed, a minimal `{status, version, renderer.connected}` body for an unauthenticated caller once claimed |
 | GET, POST | `/setup` | open | Claim an unconfigured hub; see Auth below |
-| GET | `/api/hub` | open | Hub name, base URL, configured, sources |
-| GET | `/api/state` | open | Normalized state JSON that pages render from |
-| GET | `/display/{page}.png` | open | `page` is one of the current pages (see README.md's Pages line) |
-| GET | `/preview` | open | Browser page: switch between pages, shows PNG and HTML |
-| GET | `/preview/{page}.html` | open | Raw HTML at 800x480, for CSS work in a browser |
-| GET | `/preview/{page}-rgb.png` | open | RGB stage before quantization, no cache, dev only |
+| GET | `/login` | open | Browser sign-in form; see Auth below |
+| GET | `/api/hub` | reader | Hub name, base URL, configured, sources |
+| GET | `/api/state` | reader | Normalized state JSON that pages render from |
+| GET | `/display/{page}.png` | reader | `page` is one of the current pages (see README.md's Pages line) |
+| GET | `/preview` | reader | Browser page: switch between pages, shows PNG and HTML; an unauthenticated browser is redirected to `/login` |
+| GET | `/preview/{page}.html` | reader | Raw HTML at 800x480, for CSS work in a browser; same redirect |
+| GET | `/preview/{page}-rgb.png` | reader | RGB stage before quantization, no cache, dev only |
 | POST | `/api/ai-usage` | token | Push AI quota; see docs/DATA-SOURCES.md |
 | POST | `/api/brief` | token | Push the AI-written brief |
 | POST | `/api/tasks` | token | Push the open task list (replaces it) |
 | POST | `/api/alert` | token | Set the current alert `{title, message, priority}` |
 | DELETE | `/api/alert` | token | Clear the current alert |
-| POST | `/api/device/telemetry` | open | The device posts one sample every 5 min |
-| GET | `/api/device/telemetry` | open | Latest sample plus sample count, oldest, newest |
-| GET | `/api/device/history` | open | `?hours=` window of stored samples, downsampled |
+| POST | `/api/device/telemetry` | device | The device posts one sample every 5 min |
+| GET | `/api/device/telemetry` | reader | Latest sample plus sample count, oldest, newest |
+| GET | `/api/device/history` | reader | `?hours=` window of stored samples, downsampled |
 
-`open` endpoints exist because the device fetches pages with no token; that
-also means panel content (including anything pushed), and up to 30 days of
-room climate and device battery history, are readable by anyone who can
-reach the hub. Deploy on a LAN or behind a reverse proxy with its own
-access control; see docs/DEPLOY.md.
+Before the hub is claimed, every `reader` route stays open (fixture data
+only) so the README quick start (run uvicorn, open `/preview`) keeps
+working, while nothing can be pushed yet: every `token` and `device` route
+still answers `503`. Claim the hub right after the first start so it stops
+serving demo pages to the LAN; see docs/DEPLOY.md. Once claimed, `reader`
+routes accept the bearer token, the device key, or a `/login` session
+cookie; the `device` route accepts only the bearer token or device key
+(never the cookie); `token` routes accept only the bearer token. See Auth
+below for the full rule and the two secrets.
 
 `/display/{page}.png`:
 
@@ -81,32 +86,71 @@ access control; see docs/DEPLOY.md.
 (`http` or `https`, a host, a port 1 to 65535, no path, query or
 credentials), and the claim code the process logged at startup. A hub with
 no `data/hub.json` yet generates an 8-character code
-(`XXXX-XXXX`), logs it once, and keeps it only in memory until claimed;
-`hub.json` holds `{schema, name, base_url, token_sha256, created_at}`, never
-the plaintext token. `GET /setup` shows the claim form when unconfigured, a
-short status page once claimed; `POST /setup` on an already-claimed hub is
-`409`. There is no edit or regenerate mode: recovery is stopping the
-container, deleting `data/hub.json`, and starting again (a new claim code is
-logged).
+(`XXXX-XXXX`), logs it once, and keeps it only in memory until claimed.
+Claiming generates two secrets, each shown once on the setup-done page and
+never displayable again:
 
-Every token-protected route requires `Authorization: Bearer <token>`
-(`Bearer` is case-insensitive), checked by hashing and
-`hmac.compare_digest` against `token_sha256`. One error shape for the whole
-API: a JSON body with `detail` (a string, or a list of validation problems
-for a `422`).
+- **The bearer token**, for agents. Read and write: accepted by every
+  `token` route and every `reader` route.
+- **The device key**, for the E1002 firmware. Read only: accepted by
+  every `reader` route and by the `device` route
+  (`POST /api/device/telemetry`), never by a `token` route. The device key
+  sits in unencrypted ESP32 flash, so it is treated as a read credential of
+  the same power as a browser login, which is why it is never accepted for
+  a write.
+
+`hub.json` is schema 2: `{schema, name, base_url, token_sha256,
+device_key_sha256, session_secret, created_at}`, never a plaintext secret.
+A schema-1 `hub.json` from before this change makes the hub answer `503`
+on every route until it is deleted and the hub is claimed again. `GET
+/setup` shows the claim form when unconfigured, a short status page once
+claimed; `POST /setup` on an already-claimed hub is `409`. There is no
+edit or regenerate mode: recovery is stopping the container, deleting
+`data/hub.json`, and starting again (a new claim code is logged).
+
+**Before the hub is claimed**, every `reader` route stays open (fixture
+data only), and every `token` and `device` route answers `503`.
+
+**Once the hub is claimed:**
+
+- **`reader` routes** (`/display/{page}.png`, `/preview`,
+  `/preview/{page}.html`, `/preview/{page}-rgb.png`, `/api/state`,
+  `/api/hub`, `GET /api/device/telemetry`, `/api/device/history`) require
+  `Authorization: Bearer <token or device key>`, or a browser session
+  cookie obtained at `/login`.
+- **The `device` route** (`POST /api/device/telemetry`) requires
+  `Authorization: Bearer <token or device key>`. The cookie is never
+  accepted there.
+- **`token` routes** (`POST /api/ai-usage`, `/api/brief`, `/api/tasks`,
+  `POST`/`DELETE /api/alert`) require `Authorization: Bearer <token>`. The
+  device key and the cookie are never accepted for a write.
+- **`GET /login`** shows a form; entering the device key (the token also
+  works) sets a `deskmate_session` cookie (`HttpOnly`, `SameSite=Lax`,
+  30 days, signed with an expiry, `Secure` when the hub's base URL is
+  `https`) and redirects to the page that was asked for. An
+  unauthenticated browser opening `/preview` or `/preview/{page}.html` is
+  redirected to `/login` (`303`) instead of getting a `401`.
+- Still open by design, claimed or not: `GET`/`POST /setup` (guarded by
+  the claim code), `GET /login`, `/docs` and `/openapi.json` (the schema is
+  public in the repository anyway), and `/static` (fonts).
+- **Reset** (delete `data/hub.json`) rotates the session secret, so every
+  cookie stops working, and rotates the device key, so the device needs
+  `firmware/secrets.yaml`'s `hub_key` updated and a reflash (OTA is fine)
+  before it can fetch again.
+
+`Bearer` is case-insensitive, checked by hashing and
+`hmac.compare_digest` against the stored hash. One error shape for the
+whole API: a JSON body with `detail` (a string, or a list of validation
+problems for a `422`).
 
 | Status | Meaning |
 | --- | --- |
-| 401 | Missing or wrong bearer token |
+| 401 | A `reader`, `device` or `token` route was called with no credential or the wrong one, once the hub is claimed |
+| 303 | An unauthenticated browser opened `/preview` or `/preview/{page}.html`; redirected to `/login` |
 | 403 | Wrong claim code on `POST /setup` |
 | 409 | `POST /setup` on an already-claimed hub |
 | 422 | Body rejected: unknown field, bad `schema_version`, a length or count cap, a duplicate task id, a naive datetime, or an invalid base URL |
-| 503 | Hub not set up yet, or `data/hub.json` exists but is unreadable (the detail names the path) |
-
-`POST /api/device/telemetry` stays open: the E1002 firmware does not send a
-token today, though it already sends `request_headers` on that request
-(`firmware/e1002.yaml`), so adding one is a small, tracked firmware
-follow-up, not shipped here.
+| 503 | `data/hub.json` does not exist yet (a `token` or `device` route only; `reader` routes stay open), or `data/hub.json` exists but is unreadable or is schema 1 (the detail names the path or the schema problem) |
 
 ### Rendering pipeline
 

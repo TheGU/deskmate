@@ -22,10 +22,11 @@ Two environment variables, set by whoever runs you; never put either in a repo:
 Every write below sends `Authorization: Bearer <token>`. The scheme is case-insensitive but the
 header is required on every push and on the alert endpoints.
 
-Confirm the hub before posting anything:
+Confirm the hub before posting anything. Once the hub is claimed, reads need the token too; a
+`401` here means the token is wrong.
 
 ```sh
-curl -s "$DESKMATE_URL/api/hub"
+curl -s -H "Authorization: Bearer $DESKMATE_TOKEN" "$DESKMATE_URL/api/hub"
 ```
 
 Returns `{name, base_url, configured, version, timezone, sources}`, where `sources` is
@@ -103,11 +104,11 @@ The Brief page has room for 9 lines total: each section title and each item coun
 and whatever does not fit past that budget is cut, so put the sections that matter most first. A
 headline over about 30 characters drops to a smaller size on the panel. `note` doubles as the
 Today page's AI NOTE bar (falling back to `headline` when empty), so leaving it blank degrades
-Today too. Write the brief from `GET /api/state` (public, no token): it returns the calendar,
-weather, home and task state the panel is already rendering, so build the brief from that rather
-than guessing. Suggested sections - morning: today's schedule, key tasks, suggested focus, things
-at risk, unfinished work from yesterday. Evening: work completed, open tasks, things that changed,
-what should happen tomorrow.
+Today too. Write the brief from `GET /api/state` (send the same `Authorization` header once the
+hub is claimed): it returns the calendar, weather, home and task state the panel is already
+rendering, so build the brief from that rather than guessing. Suggested sections - morning:
+today's schedule, key tasks, suggested focus, things at risk, unfinished work from yesterday.
+Evening: work completed, open tasks, things that changed, what should happen tomorrow.
 
 ### Tasks
 

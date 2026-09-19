@@ -71,23 +71,38 @@ Setup needed: open http://0.0.0.0:8080/setup and enter claim code XXXX-XXXX
 server's own LAN address or hostname instead, on the port `.env` set.
 Follow that log line to `http://<server>:<port>/setup`, enter the hub name,
 the public base URL (what the device and any pushing agent will use to
-reach this hub), and the claim code. The result page shows the bearer token
-**once**; copy it immediately, there is no way to display it again. It also
-shows the exact line to put in `firmware/secrets.yaml`
-(`hub_base_url: "http://<server>:<port>"`).
+reach this hub), and the claim code. The result page shows **two secrets**,
+each **once**; copy both immediately, there is no way to display either
+again:
 
-Only the token's SHA-256 hash is written to `data/hub.json`; the plaintext
-token exists only in that one response and wherever you paste it.
+- The **bearer token**, for agents: read and write. Follow
+  `docs/LOCAL-AGENT.md` to get it onto an agent machine.
+- The **device key**, for the E1002 firmware: read only. It goes into
+  `firmware/secrets.yaml` as `hub_key`, and is also what you type at
+  `/login` to view the panel in a browser.
+
+The result page also shows the exact lines to put in
+`firmware/secrets.yaml` (`hub_base_url: "http://<server>:<port>"` and
+`hub_key: "<device key>"`).
+
+Only each secret's hash is written to `data/hub.json`; the plaintext
+secrets exist only in that one response and wherever you paste them.
+
+Claim the hub right after this first start: until it is claimed, every
+`GET /display/{page}.png`, `/preview*`, `/api/state` and `/api/hub` request
+stays open with no credential, so the hub shows demo pages (fixture data)
+to anyone on the LAN who reaches it.
 
 Once you have the token, `docs/LOCAL-AGENT.md` covers getting it onto an
 agent machine and setting up the pushes.
 
 ## Firmware secret and one reflash
 
-Put the base URL the setup page showed into `firmware/secrets.yaml`
-(`hub_base_url`), then flash the device once (see `docs/FLASHING.md`). The
-device has no other configuration to change; it always builds its request
-URLs from that one value.
+Put the base URL and the device key the setup page showed into
+`firmware/secrets.yaml` (`hub_base_url` and `hub_key`), then flash the
+device once (see `docs/FLASHING.md`). It always builds its request URLs
+from `hub_base_url` and sends `hub_key` as a bearer header on every image
+fetch and telemetry post.
 
 ## Reverse proxy
 
@@ -99,29 +114,43 @@ are intentionally open (see below). Never expose the hub directly to the
 public internet as-is; deploy it on a LAN, or behind a reverse proxy that
 you also control access to.
 
+If the hub was claimed with an `https` base URL, its login cookie is
+marked `Secure` and a browser will silently drop it if you then open the
+hub over plain `http` on the LAN; `/login` will appear to do nothing.
+Either claim the hub with the same scheme you actually browse it with, or
+always reach it through the `https` hostname the reverse proxy terminates.
+
 ## What is unauthenticated, on purpose
 
-`/healthz`, `GET /setup`, `/api/hub`, `/api/state`, `/display/*.png`,
-`/preview*`, `POST /api/device/telemetry`, `GET /api/device/telemetry` and
-`GET /api/device/history` are all readable by anyone who can reach the hub,
-with no token: the e-paper device fetches pages and posts telemetry without
-sending one, so those routes have to stay open for it. That means panel
-content, including whatever an agent has pushed into the brief or task
-list, and up to 30 days of room climate and device battery history (`GET
-/api/device/history`), are readable by anyone on the same network segment
-or allowed through the reverse proxy. The telemetry endpoints are open for
-the same reason as `POST /api/device/telemetry` itself (the firmware does
-not send a token yet; a device token is a tracked firmware follow-up, not
-shipped here). Keep the hub on a trusted LAN or behind access control you
-control, not on the open internet.
+Before the hub is claimed, every read route (`/healthz`, `/api/hub`,
+`/api/state`, `/display/*.png`, `/preview*`, `GET /api/device/telemetry`
+and `/api/device/history`) stays open, so a fresh hub shows fixture data to
+anyone on the LAN who reaches it; nothing can be pushed before a claim.
+Claim the hub right after the first start (see above) to close that
+window.
+
+Once claimed, still open by design: `GET`/`POST /setup` (guarded by the
+claim code), `GET /login`, `/docs` and `/openapi.json` (the schema is
+public in the repository anyway), and `/static` (fonts). Every other read
+route then requires the bearer token, the device key, or a `/login` session
+cookie, and `POST /api/device/telemetry` requires the token or the device
+key (never the cookie); see "Auth" in `docs/ARCHITECTURE.md` for the full
+rule. Keep the hub on a trusted LAN or behind access control you control,
+not on the open internet.
 
 ## Reset
+
+A reset rotates the device key and the session secret along with the
+token, so every browser's login cookie stops working immediately and the
+device can no longer fetch pages or post telemetry until you update
+`firmware/secrets.yaml`'s `hub_key` with the new device key and reflash it
+(OTA is fine). Do the reflash before you rely on the panel again.
 
 Losing the token, or wanting to reclaim the hub under a new name, has one
 path: stop the container, delete `data/hub.json`, and start it again. A new
 claim code is generated and logged on that next start, exactly as on first
-run. There is no edit or regenerate mode; this is deliberate, so the token
-in `data/hub.json` is always the one currently in use.
+run. There is no edit or regenerate mode; this is deliberate, so the
+secrets in `data/hub.json` are always the ones currently in use.
 
 ```sh
 docker compose down

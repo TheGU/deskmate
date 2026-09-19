@@ -1,18 +1,23 @@
-"""Hub identity: ``hub.json``, the claim code, the bearer token, and the
-``require_token`` dependency built on top of them.
+"""Hub identity: ``hub.json``, the claim code, the bearer token, the device
+key, the browser session cookie, and the auth dependencies built on top of
+them.
 
-``hub.json`` lives in ``DATA_DIR`` (gitignored) and holds ``{"schema": 1,
-"name", "base_url", "token_sha256", "created_at"}``. Only the token's
-SHA-256 hex digest is ever written to disk; the plaintext token is shown
-once, on the setup-done page, and is not recoverable. Losing it means
-stopping the container, deleting ``data/hub.json``, and running ``/setup``
-again: there is no edit or regenerate mode.
+``hub.json`` lives in ``DATA_DIR`` (gitignored) and holds ``{"schema": 2,
+"name", "base_url", "token_sha256", "device_key_sha256", "session_secret",
+"created_at"}``. Only the token's and the device key's SHA-256 hex digests
+are ever written to disk; the plaintext values are shown once, on the
+setup-done page, and are not recoverable. ``session_secret`` is stored in
+plaintext (it never leaves the server; it only signs the browser session
+cookie). Losing any of this means stopping the container, deleting
+``data/hub.json``, and running ``/setup`` again: there is no edit or
+regenerate mode.
 
 The functions below are pure (claim code and token generation, hashing,
-base URL validation, the claim decision) or plain synchronous file I/O
-(``load_hub_config`` / ``write_hub_config``), so a test can drive every rule
-with nothing more than a temp path. :class:`HubIdentity` is the thin,
-stateful wrapper ``main.py`` holds for the life of the process.
+base URL validation, the claim decision, the session cookie mint/verify) or
+plain synchronous file I/O (``load_hub_config`` / ``write_hub_config``), so
+a test can drive every rule with nothing more than a temp path.
+:class:`HubIdentity` is the thin, stateful wrapper ``main.py`` holds for the
+life of the process.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import logging
 import os
 import secrets
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
@@ -40,15 +46,23 @@ from app.logging_setup import log
 logger = logging.getLogger("app.hub_config")
 
 #: auto_error=False: a missing or wrong-scheme header returns None instead
-#: of FastAPI's own 403, so require_token keeps the one 401/503 error shape
-#: for the whole API. Declaring it this way (rather than a bare Header
+#: of FastAPI's own 403, so every dependency below keeps one 401/503 error
+#: shape for the whole API. Declaring it this way (rather than a bare Header
 #: check) is what makes /openapi.json carry a bearer security scheme, so
-#: Swagger UI gets an Authorize button (docs/DATA-SOURCES.md, item 12).
+#: Swagger UI gets an Authorize button (docs/DATA-SOURCES.md, item 12). One
+#: instance shared by every dependency in this module, so Swagger sees one
+#: bearer scheme, not four.
 _bearer_scheme = HTTPBearer(
-    auto_error=False, description="Hub bearer token, shown once on /setup."
+    auto_error=False, description="Hub bearer token or device key, shown once on /setup."
 )
 
-HUB_CONFIG_SCHEMA = 1
+#: The browser session cookie set by POST /login (see mint_session_cookie /
+#: session_cookie_valid below). Stateless: no server-side session table, just
+#: an expiry and an HMAC over it keyed by the hub's session_secret.
+COOKIE_NAME = "deskmate_session"
+SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+
+HUB_CONFIG_SCHEMA = 2
 
 #: Uppercase letters and digits with the ambiguous ones (0/O, 1/I) removed,
 #: so a code read off a log line is never misheard.
@@ -72,11 +86,12 @@ class InvalidBaseURL(HubConfigError):
 
 
 class HubConfigUnreadable(HubConfigError):
-    """``hub.json`` exists but cannot be trusted: bad JSON, a missing key, or
-    a schema other than 1. Distinct from "absent" (which means unconfigured):
-    a present-but-broken file must never be treated as a fresh install, or
-    the hub would generate a new claim code next to a config file nobody can
-    read.
+    """``hub.json`` exists but cannot be trusted: bad JSON, a missing key, a
+    schema other than the current one, or (the schema-1 case) a file written
+    before the read key existed. Distinct from "absent" (which means
+    unconfigured): a present-but-broken file must never be treated as a
+    fresh install, or the hub would generate a new claim code next to a
+    config file nobody can read.
     """
 
 
@@ -87,6 +102,8 @@ class HubConfig:
     name: str
     base_url: str
     token_sha256: str
+    device_key_sha256: str
+    session_secret: str
     created_at: datetime
 
     def to_json(self) -> dict[str, Any]:
@@ -95,6 +112,8 @@ class HubConfig:
             "name": self.name,
             "base_url": self.base_url,
             "token_sha256": self.token_sha256,
+            "device_key_sha256": self.device_key_sha256,
+            "session_secret": self.session_secret,
             "created_at": self.created_at.isoformat(),
         }
 
@@ -104,6 +123,8 @@ class HubConfig:
             name=str(payload["name"]),
             base_url=str(payload["base_url"]),
             token_sha256=str(payload["token_sha256"]),
+            device_key_sha256=str(payload["device_key_sha256"]),
+            session_secret=str(payload["session_secret"]),
             created_at=datetime.fromisoformat(str(payload["created_at"])),
         )
 
@@ -164,8 +185,13 @@ def claim_hub(
     submitted_code: str,
     name: str,
     base_url: str,
-) -> tuple[HubConfig, str]:
+) -> tuple[HubConfig, str, str]:
     """Validate one ``POST /setup`` submission and build the new config.
+
+    Returns ``(config, token, device_key)``: two independent plaintext
+    secrets, only their hashes kept in ``config``. The token is for agents
+    (write routes); the device key is for the firmware and doubles as a
+    reader credential (bearer or /login) once the hub is claimed.
 
     Raises :class:`AlreadyConfigured`, :class:`WrongClaimCode` or
     :class:`InvalidBaseURL`. Touches no filesystem; the caller persists the
@@ -179,13 +205,50 @@ def claim_hub(
     clean_name = name.strip() or "deskmate"
     clean_url = validate_base_url(base_url)
     token = generate_token()
+    device_key = generate_token()
     config = HubConfig(
         name=clean_name,
         base_url=clean_url,
         token_sha256=hash_token(token),
+        device_key_sha256=hash_token(device_key),
+        # Plaintext, server-side only: it signs the session cookie, it is
+        # never shown or sent to a client itself.
+        session_secret=secrets.token_urlsafe(32),
         created_at=datetime.now(tz=dt_timezone.utc),
     )
-    return config, token
+    return config, token, device_key
+
+
+def mint_session_cookie(session_secret: str, now: float) -> str:
+    """A stateless browser session cookie: ``"<exp>.<mac>"``.
+
+    No server-side session table - ``exp`` is the expiry (unix seconds) and
+    ``mac`` is an HMAC over it keyed by the hub's ``session_secret``, so
+    :func:`session_cookie_valid` can check a cookie against nothing but that
+    one secret and the clock.
+    """
+    exp = int(now + SESSION_MAX_AGE_SECONDS)
+    mac = hmac.new(
+        session_secret.encode("utf-8"), f"browser|{exp}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{exp}.{mac}"
+
+
+def session_cookie_valid(session_secret: str, value: str, now: float) -> bool:
+    """Reject a malformed value, an expired one, or a tampered MAC."""
+    exp_text, sep, mac = value.partition(".")
+    if not sep:
+        return False
+    try:
+        exp = int(exp_text)
+    except ValueError:
+        return False
+    if exp <= now:
+        return False
+    expected = hmac.new(
+        session_secret.encode("utf-8"), f"browser|{exp}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(mac, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +259,13 @@ def load_hub_config(path: Path) -> HubConfig | None:
 
     Returns ``None`` only when the file is absent: that means unconfigured,
     and the caller should generate a claim code. When the file exists but is
-    corrupt JSON, not an object, missing a key, or ``schema`` is not 1, this
-    raises :class:`HubConfigUnreadable` instead of returning ``None`` -
-    silently treating a broken file as "unconfigured" would hand out a fresh
-    claim code next to a config nobody can read.
+    corrupt JSON, not an object, missing a key, or ``schema`` does not match
+    :data:`HUB_CONFIG_SCHEMA`, this raises :class:`HubConfigUnreadable`
+    instead of returning ``None`` - silently treating a broken file as
+    "unconfigured" would hand out a fresh claim code next to a config nobody
+    can read. A file at schema 1 (from before the read key existed, so it
+    has no device key or session secret to serve reads with) gets its own
+    detail: there is nothing to migrate, only to redo.
     """
     if not path.is_file():
         return None
@@ -210,7 +276,13 @@ def load_hub_config(path: Path) -> HubConfig | None:
         raise HubConfigUnreadable(message) from exc
     if not isinstance(payload, dict):
         raise HubConfigUnreadable(message)
-    if payload.get("schema") != HUB_CONFIG_SCHEMA:
+    schema = payload.get("schema")
+    if schema == 1:
+        raise HubConfigUnreadable(
+            "hub.json is schema 1, from before the read key; stop the container, "
+            "delete data/hub.json and run /setup again"
+        )
+    if schema != HUB_CONFIG_SCHEMA:
         raise HubConfigUnreadable(message)
     try:
         return HubConfig.from_json(payload)
@@ -269,8 +341,18 @@ class HubIdentity:
     def verify_token(self, token: str) -> bool:
         return self.config is not None and token_matches(token, self.config.token_sha256)
 
-    async def claim(self, *, submitted_code: str, name: str, base_url: str) -> str:
-        """Validate and persist a setup submission. Returns the plaintext token.
+    def verify_device_key(self, value: str) -> bool:
+        return self.config is not None and token_matches(value, self.config.device_key_sha256)
+
+    def verify_reader(self, value: str) -> bool:
+        """True for either credential a reader may present: the bearer
+        token (an agent) or the device key (the firmware, or a human typing
+        it at /login)."""
+        return self.verify_token(value) or self.verify_device_key(value)
+
+    async def claim(self, *, submitted_code: str, name: str, base_url: str) -> "ClaimedSecrets":
+        """Validate and persist a setup submission. Returns both plaintext
+        secrets (the caller shows each once; only their hashes are stored).
 
         Guarded by an ``asyncio.Lock``: the "not yet configured" check and
         the write both happen while holding it, so two ``POST /setup``
@@ -279,7 +361,7 @@ class HubIdentity:
         valid tokens.
         """
         async with self._claim_lock:
-            config, token = claim_hub(
+            config, token, device_key = claim_hub(
                 existing=self.config,
                 expected_code=self.claim_code or "",
                 submitted_code=submitted_code,
@@ -289,18 +371,40 @@ class HubIdentity:
             await run_in_threadpool(write_hub_config, self._path, config)
             self.config = config
             self.claim_code = None
-            return token
+            return ClaimedSecrets(token=token, device_key=device_key)
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedSecrets:
+    """The two plaintext secrets :meth:`HubIdentity.claim` hands back, each
+    shown exactly once on the setup-done page."""
+
+    token: str
+    device_key: str
+
+
+class LoginRedirect(Exception):
+    """Raised by :func:`require_reader_html` instead of an HTTPException: a
+    browser hitting an unauthenticated preview route should land on
+    ``/login``, not a bare 401 page. ``main.py`` registers the exception
+    handler that turns this into the actual redirect.
+    """
+
+    def __init__(self, next_path: str) -> None:
+        self.next_path = next_path
+        super().__init__(next_path)
 
 
 # ---------------------------------------------------------------------------
-# Auth dependency
+# Auth dependencies
 # ---------------------------------------------------------------------------
 async def require_token(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> None:
     """``Authorization: Bearer <token>``, case-insensitive scheme (HTTPBearer's
-    own comparison). One error shape: HTTPException.detail.
+    own comparison). One error shape: HTTPException.detail. Write routes
+    only: never accepts the device key or the session cookie.
     """
     identity: HubIdentity = request.app.state.hub.identity
     if identity.error is not None:
@@ -312,3 +416,80 @@ async def require_token(
     token = credentials.credentials.strip()
     if not token or not identity.verify_token(token):
         raise HTTPException(status_code=401, detail="invalid bearer token")
+
+
+def reader_authenticated(
+    request: Request, credentials: HTTPAuthorizationCredentials | None
+) -> bool:
+    """True when this request already carries a valid reader credential:
+    the bearer token, the device key, or a valid session cookie. Shared by
+    :func:`require_reader`, :func:`require_reader_html` and ``/healthz``
+    (which decides its own response shape rather than raising).
+
+    Callers check ``identity.configured`` themselves first: this only knows
+    how to check a credential against a config that exists.
+    """
+    identity: HubIdentity = request.app.state.hub.identity
+    if credentials is not None:
+        value = credentials.credentials.strip()
+        if value and identity.verify_reader(value):
+            return True
+    config = identity.config
+    if config is None:
+        return False
+    cookie = request.cookies.get(COOKIE_NAME)
+    return cookie is not None and session_cookie_valid(config.session_secret, cookie, time.time())
+
+
+async def require_device(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> None:
+    """``POST /api/device/telemetry``: open (no credential at all) until the
+    hub is claimed, matching today's firmware; token or device key bearer
+    required afterward. The session cookie is never accepted here - a
+    browser tab must not be able to inject a reading just by being signed
+    in to /preview.
+    """
+    identity: HubIdentity = request.app.state.hub.identity
+    if identity.error is not None:
+        raise HTTPException(status_code=503, detail=identity.error)
+    if not identity.configured:
+        return
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    value = credentials.credentials.strip()
+    if not value or not identity.verify_reader(value):
+        raise HTTPException(status_code=401, detail="invalid bearer token")
+
+
+async def require_reader(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> None:
+    """Read routes (JSON and images): open until the hub is claimed, then
+    the bearer token, the device key, or a signed-in browser session.
+    """
+    identity: HubIdentity = request.app.state.hub.identity
+    if identity.error is not None:
+        raise HTTPException(status_code=503, detail=identity.error)
+    if not identity.configured:
+        return
+    if not reader_authenticated(request, credentials):
+        raise HTTPException(status_code=401, detail="sign in at /login or send a bearer token")
+
+
+async def require_reader_html(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> None:
+    """Same rule as :func:`require_reader`, for the two HTML preview routes:
+    a browser without a credential is sent to /login instead of a bare 401.
+    """
+    identity: HubIdentity = request.app.state.hub.identity
+    if identity.error is not None:
+        raise HTTPException(status_code=503, detail=identity.error)
+    if not identity.configured:
+        return
+    if not reader_authenticated(request, credentials):
+        raise LoginRedirect(request.url.path)

@@ -21,6 +21,7 @@ substitutions:
   name: reterminal-e1002
   friendly_name: reTerminal E1002
   hub_base_url: !secret hub_base_url        # e.g. http://192.168.1.50:8080
+  hub_key: !secret hub_key                  # device key from the hub's setup-done page
   page_count: "5"                           # today agenda weather brief system
   auto_refresh_interval: 30min              # conditional request, 304 means no panel refresh
   alert_default_seconds: "90"
@@ -269,6 +270,8 @@ image:
   - platform: online_image
     id: dashboard_image
     url: ${hub_base_url}/display/today.png
+    request_headers:
+      Authorization: "Bearer ${hub_key}"
     format: PNG
     type: RGB565
     buffer_size: 65536
@@ -364,6 +367,7 @@ script:
                 url: ${hub_base_url}/api/device/telemetry
                 request_headers:
                   Content-Type: application/json
+                  Authorization: "Bearer ${hub_key}"
                 body: !lambda |-
                   static const char *const PAGES[] = {"today", "agenda", "weather", "brief", "system"};
                   auto num = [](float v, int decimals) -> std::string {
@@ -390,6 +394,15 @@ script:
                   body += "}";
                   return body;
                 capture_response: false
+                on_response:
+                  - if:
+                      condition:
+                        lambda: "return !http_request::is_success(response->status_code);"
+                      then:
+                        - logger.log:
+                            level: WARN
+                            format: "Telemetry rejected by hub, HTTP %d: check hub_key in secrets.yaml"
+                            args: [response->status_code]
                 on_error:
                   - logger.log:
                       level: WARN

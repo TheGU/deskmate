@@ -31,12 +31,12 @@ def _claim(client: TestClient) -> str:
     hub = client.app.state.hub
     code = hub.identity.claim_code
     assert code is not None
-    token = asyncio.run(
+    secrets = asyncio.run(
         hub.identity.claim(
             submitted_code=code, name="deskmate", base_url="http://dashboard-hub.lan:8080"
         )
     )
-    return token
+    return secrets.token
 
 
 @pytest.fixture(scope="module")
@@ -77,7 +77,7 @@ def test_write_json_atomic_leaves_no_tmp_when_the_payload_cannot_serialize(
 
 
 def test_auto_reports_fixture_before_any_push(push_client: TestClient, token: str) -> None:
-    sources = push_client.get("/api/hub").json()["sources"]
+    sources = push_client.get("/api/hub", headers=auth(token)).json()["sources"]
     for dataset in ("ai_usage", "brief", "tasks"):
         assert sources[dataset]["configured"] == "auto"
         assert sources[dataset]["effective"] == "fixture"
@@ -137,7 +137,7 @@ def test_post_ai_usage_preserves_an_aware_collected_at(
         headers=auth(token),
     )
     assert response.status_code == 200
-    state = push_client.get("/api/state").json()
+    state = push_client.get("/api/state", headers=auth(token)).json()
     provider = next(p for p in state["ai_usage"]["providers"] if p["provider"] == "aware-check")
     # Same UTC offset as the hub's own Asia/Bangkok TIMEZONE, so re-localizing
     # for display must leave the wall-clock value unchanged, not shifted.
@@ -172,7 +172,7 @@ def test_post_ai_usage_valid_writes_atomically_and_reaches_state(
     assert list(data_dir.glob("*.tmp")) == []
     assert (data_dir / "ai-usage.json").is_file()
 
-    state = push_client.get("/api/state").json()
+    state = push_client.get("/api/state", headers=auth(token)).json()
     providers = state["ai_usage"]["providers"]
     assert providers[0]["provider"] == "claude"
     assert providers[0]["short_window_percent_remaining"] == 62
@@ -237,7 +237,7 @@ def test_post_brief_valid_writes_atomically_and_reaches_state(
     assert list(brief_dir.glob("*.tmp")) == []
     assert (brief_dir / "current.json").is_file()
 
-    state = push_client.get("/api/state").json()
+    state = push_client.get("/api/state", headers=auth(token)).json()
     assert state["brief"]["brief"]["headline"] == "Two deadlines today"
     assert state["brief"]["received_at"] is not None
 
@@ -275,7 +275,7 @@ def test_post_tasks_valid_writes_atomically_and_reaches_state(
     assert list(data_dir.glob("*.tmp")) == []
     assert (data_dir / "tasks.json").is_file()
 
-    state = push_client.get("/api/state").json()
+    state = push_client.get("/api/state", headers=auth(token)).json()
     items = state["tasks"]["items"]
     assert [item["id"] for item in items] == ["agent-1"]
     assert state["tasks"]["received_at"] is not None
@@ -283,7 +283,7 @@ def test_post_tasks_valid_writes_atomically_and_reaches_state(
 
 # -- after all three pushes ----------------------------------------------
 def test_auto_reports_file_after_the_pushes(push_client: TestClient, token: str) -> None:
-    sources = push_client.get("/api/hub").json()["sources"]
+    sources = push_client.get("/api/hub", headers=auth(token)).json()["sources"]
     for dataset in ("ai_usage", "brief", "tasks"):
         assert sources[dataset]["configured"] == "auto"
         assert sources[dataset]["effective"] == "file"
@@ -364,9 +364,13 @@ def test_hub_info_effective_reflects_a_push_immediately_before_any_fetch(
     app = create_app(settings)
     with TestClient(app) as client:
         immediate_token = _claim(client)
-        before = client.get("/api/hub").json()["sources"]["tasks"]["effective"]
+        before = client.get("/api/hub", headers=auth(immediate_token)).json()["sources"]["tasks"][
+            "effective"
+        ]
         pushed = client.post("/api/tasks", json={"tasks": []}, headers=auth(immediate_token))
         assert pushed.status_code == 200
-        after = client.get("/api/hub").json()["sources"]["tasks"]["effective"]
+        after = client.get("/api/hub", headers=auth(immediate_token)).json()["sources"]["tasks"][
+            "effective"
+        ]
     assert before == "fixture"
     assert after == "file"

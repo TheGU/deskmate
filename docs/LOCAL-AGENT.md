@@ -54,6 +54,9 @@ whatever the last push said.
 - An HTTP client on the agent machine that can send an `Authorization:
   Bearer <token>` header and a JSON body: `curl`, or the agent's own HTTP
   library.
+- `GET /api/hub` and `GET /api/state` also need that same header once the
+  hub is claimed: reads are open only before a claim, per "Auth" in
+  `docs/ARCHITECTURE.md`.
 
 ## 4. Credentials on the agent machine
 
@@ -92,17 +95,12 @@ not read your shell profile, so set them in the crontab itself or in an
 
 Smoke test in two steps once the variables are set:
 
-1. `curl -s "$DESKMATE_URL/api/hub"` - unauthenticated, so a good response
-   only proves the hub is reachable, not that the token works.
-2. One authenticated request. Do not use an ai-usage push for this: it
-   would invent numbers you do not actually have, which is exactly what
-   this whole setup is meant to avoid. The cleanest options are an empty
-   tasks push, `{"tasks": []}`, if you are fine with the demo tasks
-   disappearing from the panel right away, or a request with the
-   `Authorization` header left off to confirm you get a `401` (proving the
-   token is being checked at all, without changing anything). Pick
-   whichever you are comfortable with; either confirms the token is wired
-   up correctly.
+1. `curl -s -o /dev/null -w "%{http_code}" "$DESKMATE_URL/api/hub"` - no
+   header. `401` proves the hub is reachable and already claimed (a `200`
+   here means it is not claimed yet; claim it first, see `docs/DEPLOY.md`).
+2. The same request with the header: `curl -s -o /dev/null -w "%{http_code}"
+   -H "Authorization: Bearer $DESKMATE_TOKEN" "$DESKMATE_URL/api/hub"` -
+   `200` proves the token is correct.
 
 ## 5. Installing the skill
 
@@ -222,7 +220,8 @@ policy it follows.
 
 A push response with `effective_source == "file"` and no `warning` is the
 confirmation that it worked; `GET /api/hub`'s `effective` field for that
-dataset updates instantly too. The panel itself lags behind that: the
+dataset updates instantly too (send the same `Authorization` header there;
+see section 3). The panel itself lags behind that: the
 Today page's own cache and the device's refresh timer are each about 30
 minutes, so DEMO or old content can still be showing for a few minutes
 after a good push. That is expected, not a sign anything failed - there is
@@ -244,5 +243,7 @@ no need to poll the hub or fetch `/display/*.png` to watch for the change.
 
 There is no way to rotate the token in place. Follow "Reset" in
 `docs/DEPLOY.md` to reclaim the hub and get a new token, then update
-`DESKMATE_TOKEN` on every agent machine and hook that pushes to it - the
-device itself never uses the token, so a reflash is not needed.
+`DESKMATE_TOKEN` on every agent machine and hook that pushes to it. A reset
+also rotates the device key, so the device needs `firmware/secrets.yaml`'s
+`hub_key` updated and a reflash (OTA is fine) before it can fetch pages or
+post telemetry again.

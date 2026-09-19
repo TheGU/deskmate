@@ -2,12 +2,24 @@
 
 The hub identity/auth flow (Part 1A) is inherently a one-shot state machine:
 a fresh hub starts unconfigured, and claiming it is a single irreversible
-transition (no edit or regenerate mode). ``hub_token`` below is an autouse,
+transition (no edit or regenerate mode). ``hub_claim`` below is an autouse,
 module-scoped fixture: it claims the shared session ``client``'s hub once,
 before any test in this module runs, regardless of which test pytest picks
 first, so nothing here depends on test execution order. The full
 unconfigured-to-claimed story (which needs a hub that is *not* claimed yet)
 gets its own isolated app instead, in ``test_setup_flow_end_to_end``.
+
+Reads are now gated once the hub is claimed (require_reader / require_device
+/ require_reader_html in app/hub_config.py), so most GET calls in this file
+go through ``reader`` - a thin wrapper (see ``_ReaderClient``) that replays
+every call through the shared session ``client`` with a bearer token added,
+rather than the bare ``client``. It deliberately is not a second TestClient:
+that would open a second anyio portal thread, and the renderer's Chromium is
+a Playwright browser bound to the first portal's event loop, so a
+render-touching call routed through a different portal hangs forever.
+``client`` stays unauthenticated for the auth-negative tests and the setup
+flow, and keeps its explicit ``auth(token)`` headers for the write routes
+(POST/DELETE /api/alert), which require_token still gates unchanged.
 """
 
 from __future__ import annotations
@@ -16,11 +28,13 @@ import asyncio
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import REPO_ROOT, Settings
+from app.hub_config import COOKIE_NAME, ClaimedSecrets
 from app.main import MAX_OPEN_BODY_BYTES, create_app, etag_matches
 from app.renderer.palette import DISPLAY_SIZE
 from app.renderer.render import PAGES
@@ -34,7 +48,7 @@ def auth(token: str) -> dict[str, str]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def hub_token(client: TestClient) -> str:
+def hub_claim(client: TestClient) -> ClaimedSecrets:
     """Claim the shared session hub once for this module, before any test
     body runs. Bypasses the HTTP form (that flow is exercised on its own,
     isolated app in ``test_setup_flow_end_to_end``) so this has no ordering
@@ -50,10 +64,47 @@ def hub_token(client: TestClient) -> str:
     )
 
 
+@pytest.fixture(scope="module")
+def hub_token(hub_claim: ClaimedSecrets) -> str:
+    return hub_claim.token
+
+
+@pytest.fixture(scope="module")
+def device_key(hub_claim: ClaimedSecrets) -> str:
+    return hub_claim.device_key
+
+
+class _ReaderClient:
+    """A thin wrapper around the shared session ``client``, injecting a
+    bearer token on every ``get()`` rather than being a second TestClient.
+
+    A second TestClient over the same app opens its own anyio portal thread
+    (its own event loop); the renderer's Chromium is a Playwright browser
+    bound to the *first* TestClient's portal loop (see conftest.py), so any
+    render-touching call routed through a different portal hangs forever.
+    Routing every call back through the one ``client`` object keeps
+    everything on that one portal, while still letting each test read with
+    a credential without threading auth() through every call site.
+    """
+
+    def __init__(self, client: TestClient, token: str) -> None:
+        self._client = client
+        self._token = token
+
+    def get(self, url: str, **kwargs: Any) -> Any:
+        headers = {**auth(self._token), **kwargs.pop("headers", {})}
+        return self._client.get(url, headers=headers, **kwargs)
+
+
+@pytest.fixture(scope="module")
+def reader(client: TestClient, hub_token: str) -> _ReaderClient:
+    return _ReaderClient(client, hub_token)
+
+
 def test_setup_flow_end_to_end(tmp_path: Path) -> None:
     """The whole unconfigured -> claimed story in one function, on its own
     isolated app: the shared session ``client``'s hub is always already
-    claimed (see the ``hub_token`` autouse fixture above), so the
+    claimed (see the ``hub_claim`` autouse fixture above), so the
     unconfigured-state assertions below need a hub of their own.
     """
     data_dir = tmp_path
@@ -162,14 +213,17 @@ def test_a_corrupt_hub_config_503s_setup_and_writes_but_the_panel_keeps_working(
         assert alert.status_code == 503
         assert "hub config unreadable" in alert.json()["detail"]
 
-        # The panel routes do not depend on hub identity at all.
+        # /healthz never consults identity.error, so it alone stays 200. The
+        # read routes now go through require_reader, which - like every
+        # other identity-backed dependency - 503s on a config it cannot
+        # trust; they are no longer identity-independent.
         assert broken_client.get("/healthz").status_code == 200
-        assert broken_client.get("/api/state").status_code == 200
-        assert broken_client.get("/display/today.png").status_code == 200
+        assert broken_client.get("/api/state").status_code == 503
+        assert broken_client.get("/display/today.png").status_code == 503
 
 
-def test_api_hub_reports_identity_and_sources(client: TestClient, hub_token: str) -> None:
-    payload = client.get("/api/hub").json()
+def test_api_hub_reports_identity_and_sources(reader: _ReaderClient) -> None:
+    payload = reader.get("/api/hub").json()
     assert payload["configured"] is True
     assert payload["name"] == "deskmate"
     assert payload["base_url"] == "http://dashboard-hub.lan:8080"
@@ -177,6 +231,10 @@ def test_api_hub_reports_identity_and_sources(client: TestClient, hub_token: str
     for dataset in ("ai_usage", "brief", "tasks"):
         assert payload["sources"][dataset]["configured"] == "auto"
         assert payload["sources"][dataset]["effective"] == "fixture"
+
+
+def test_api_hub_requires_a_reader_credential(client: TestClient) -> None:
+    assert client.get("/api/hub").status_code == 401
 
 
 def test_alert_requires_the_token(client: TestClient, hub_token: str) -> None:
@@ -204,10 +262,10 @@ def test_data_dir_that_is_a_file_fails_fast_at_startup(tmp_path: Path) -> None:
         create_app(settings)
 
 
-def test_healthz_reports_every_adapter(client: TestClient) -> None:
+def test_healthz_reports_every_adapter(reader: _ReaderClient) -> None:
     # /healthz only replays each adapter's last outcome; force one first.
-    client.get("/api/state")
-    response = client.get("/healthz")
+    reader.get("/api/state")
+    response = reader.get("/healthz")
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
@@ -224,6 +282,18 @@ def test_healthz_reports_every_adapter(client: TestClient) -> None:
     }
     for name, block in payload["adapters"].items():
         assert block["status"] == "ok", f"{name} is {block['status']}: {block['error']}"
+
+
+def test_healthz_on_a_claimed_hub_hides_adapters_until_authenticated(
+    client: TestClient, reader: _ReaderClient
+) -> None:
+    unauthenticated = client.get("/healthz")
+    assert unauthenticated.status_code == 200
+    assert "adapters" not in unauthenticated.json()
+
+    authenticated = reader.get("/healthz")
+    assert authenticated.status_code == 200
+    assert "adapters" in authenticated.json()
 
 
 def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Path) -> None:
@@ -247,17 +317,21 @@ def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Pa
         assert block["error"] is None
 
 
-def test_api_state_returns_normalized_state(client: TestClient) -> None:
-    payload = client.get("/api/state").json()
+def test_api_state_returns_normalized_state(reader: _ReaderClient) -> None:
+    payload = reader.get("/api/state").json()
     assert payload["timezone"] == "Asia/Bangkok"
     assert payload["tasks"]["status"] == "ok"
     assert payload["tasks"]["items"], "fixture tasks should not be empty"
     assert payload["weather"]["weather"]["location_name"] == "Bangkok"
 
 
+def test_api_state_requires_a_reader_credential(client: TestClient) -> None:
+    assert client.get("/api/state").status_code == 401
+
+
 @pytest.mark.parametrize("page", PAGES)
-def test_display_returns_a_png_of_the_right_size(client: TestClient, page: str) -> None:
-    response = client.get(f"/display/{page}.png")
+def test_display_returns_a_png_of_the_right_size(reader: _ReaderClient, page: str) -> None:
+    response = reader.get(f"/display/{page}.png")
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.headers["cache-control"] == "no-cache"
@@ -265,37 +339,51 @@ def test_display_returns_a_png_of_the_right_size(client: TestClient, page: str) 
     assert open_png(response.content).size == DISPLAY_SIZE
 
 
-def test_display_rejects_an_unknown_page(client: TestClient) -> None:
-    assert client.get("/display/nope.png").status_code == 404
+def test_display_rejects_an_unknown_page(reader: _ReaderClient) -> None:
+    assert reader.get("/display/nope.png").status_code == 404
 
 
-def test_if_none_match_gives_304(client: TestClient) -> None:
-    first = client.get("/display/today.png")
+def test_display_requires_a_reader_credential(client: TestClient) -> None:
+    assert client.get("/display/today.png").status_code == 401
+
+
+def test_display_accepts_the_device_key(client: TestClient, device_key: str) -> None:
+    response = client.get("/display/today.png", headers=auth(device_key))
+    assert response.status_code == 200
+
+
+def test_display_accepts_the_token(client: TestClient, hub_token: str) -> None:
+    response = client.get("/display/today.png", headers=auth(hub_token))
+    assert response.status_code == 200
+
+
+def test_if_none_match_gives_304(reader: _ReaderClient) -> None:
+    first = reader.get("/display/today.png")
     etag = first.headers["etag"]
-    second = client.get("/display/today.png", headers={"If-None-Match": etag})
+    second = reader.get("/display/today.png", headers={"If-None-Match": etag})
     assert second.status_code == 304
     assert second.headers["etag"] == etag
     assert second.content == b""
 
 
-def test_if_none_match_tolerates_weak_and_list_forms(client: TestClient) -> None:
-    etag = client.get("/display/today.png").headers["etag"]
-    weak = client.get("/display/today.png", headers={"If-None-Match": f"W/{etag}"})
+def test_if_none_match_tolerates_weak_and_list_forms(reader: _ReaderClient) -> None:
+    etag = reader.get("/display/today.png").headers["etag"]
+    weak = reader.get("/display/today.png", headers={"If-None-Match": f"W/{etag}"})
     assert weak.status_code == 304
-    listed = client.get(
+    listed = reader.get(
         "/display/today.png", headers={"If-None-Match": f'"deadbeef", {etag}'}
     )
     assert listed.status_code == 304
 
 
-def test_stale_etag_returns_the_image(client: TestClient) -> None:
-    response = client.get("/display/today.png", headers={"If-None-Match": '"stale"'})
+def test_stale_etag_returns_the_image(reader: _ReaderClient) -> None:
+    response = reader.get("/display/today.png", headers={"If-None-Match": '"stale"'})
     assert response.status_code == 200
     assert response.content
 
 
-def test_cache_bust_query_still_serves_the_image(client: TestClient) -> None:
-    response = client.get("/display/today.png", params={"t": "12345"})
+def test_cache_bust_query_still_serves_the_image(reader: _ReaderClient) -> None:
+    response = reader.get("/display/today.png", params={"t": "12345"})
     assert response.status_code == 200
     assert open_png(response.content).size == DISPLAY_SIZE
 
@@ -310,45 +398,118 @@ def test_etag_matches_helper() -> None:
     assert not etag_matches("", '"abc"')
 
 
-def test_preview_lists_every_page(client: TestClient) -> None:
-    response = client.get("/preview")
+def test_preview_lists_every_page(reader: _ReaderClient) -> None:
+    response = reader.get("/preview")
     assert response.status_code == 200
     for page in PAGES:
         assert f"/preview?page={page}" in response.text
 
 
+def test_preview_without_a_credential_redirects_to_login(client: TestClient) -> None:
+    response = client.get("/preview", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?next=/preview"
+
+
 @pytest.mark.parametrize("page", PAGES)
-def test_preview_html_renders(client: TestClient, page: str) -> None:
-    response = client.get(f"/preview/{page}.html")
+def test_preview_html_renders(reader: _ReaderClient, page: str) -> None:
+    response = reader.get(f"/preview/{page}.html")
     assert response.status_code == 200
     assert "<html" in response.text
     assert "Google Sans" in response.text
 
 
-def test_preview_html_rejects_an_unknown_page(client: TestClient) -> None:
-    assert client.get("/preview/nope.html").status_code == 404
+def test_preview_html_rejects_an_unknown_page(reader: _ReaderClient) -> None:
+    assert reader.get("/preview/nope.html").status_code == 404
 
 
-def test_preview_rgb_returns_a_png_of_the_right_size(client: TestClient) -> None:
-    response = client.get("/preview/today-rgb.png")
+def test_preview_rgb_returns_a_png_of_the_right_size(reader: _ReaderClient) -> None:
+    response = reader.get("/preview/today-rgb.png")
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.headers["cache-control"] == "no-store"
     assert open_png(response.content).size == DISPLAY_SIZE
 
 
-def test_preview_rgb_rejects_an_unknown_page(client: TestClient) -> None:
-    assert client.get("/preview/nope-rgb.png").status_code == 404
+def test_preview_rgb_rejects_an_unknown_page(reader: _ReaderClient) -> None:
+    assert reader.get("/preview/nope-rgb.png").status_code == 404
 
 
-def test_root_redirects_to_preview(client: TestClient) -> None:
-    response = client.get("/", follow_redirects=False)
+def test_root_redirects_to_preview(reader: _ReaderClient) -> None:
+    response = reader.get("/", follow_redirects=False)
     assert response.status_code in (307, 308)
     assert response.headers["location"] == "/preview"
 
 
-def test_alert_round_trip_changes_the_alert_page(client: TestClient, hub_token: str) -> None:
-    before = client.get("/display/alert.png")
+def test_login_with_the_wrong_key_is_rejected(client: TestClient) -> None:
+    response = client.post("/login", data={"key": "not-a-real-key", "next": "/preview"})
+    assert response.status_code == 401
+
+
+def test_login_rejects_an_oversized_body(client: TestClient) -> None:
+    oversized = {"key": "x" * (MAX_OPEN_BODY_BYTES + 1)}
+    assert client.post("/login", data=oversized).status_code == 413
+
+
+def test_login_with_the_device_key_sets_a_cookie_good_for_preview_and_state(
+    client: TestClient, device_key: str
+) -> None:
+    response = client.post(
+        "/login", data={"key": device_key, "next": "/preview"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/preview"
+    cookie = response.cookies.get(COOKIE_NAME)
+    assert cookie
+
+    cookie_only = TestClient(client.app, cookies={COOKIE_NAME: cookie})
+    assert cookie_only.get("/preview").status_code == 200
+    assert cookie_only.get("/api/state").status_code == 200
+
+    # The cookie is a reader credential only: never accepted on a write
+    # route, nor on the device-telemetry route (a browser tab signed in to
+    # /preview must not be able to inject a reading or fire an alert).
+    assert cookie_only.post("/api/alert", json={"title": "x"}).status_code == 401
+    assert cookie_only.post("/api/device/telemetry", json={"device": "x"}).status_code == 401
+
+
+def test_device_telemetry_post_accepts_the_device_key_bearer_on_a_claimed_hub(
+    tmp_path: Path,
+) -> None:
+    """Its own isolated app and DATA_DIR, not the shared session ``client``:
+    a real insert here would land in the same telemetry.sqlite the session
+    ``state``/``renderer`` fixtures read, and perturb device-chart
+    assertions in other test files that rebuild state fresh from it.
+    """
+    settings = Settings(
+        _env_file=None,
+        TIMEZONE="Asia/Bangkok",
+        FIXTURES_DIR=FIXTURES_DIR,
+        DATA_DIR=tmp_path,
+        LOG_LEVEL="WARNING",
+    )
+    app = create_app(settings)
+    with TestClient(app) as isolated_client:
+        hub = isolated_client.app.state.hub
+        code = hub.identity.claim_code
+        assert code is not None
+        secrets = asyncio.run(
+            hub.identity.claim(
+                submitted_code=code, name="deskmate", base_url="http://dashboard-hub.lan:8080"
+            )
+        )
+        response = isolated_client.post(
+            "/api/device/telemetry",
+            json={"device": "reterminal-e1002", "temperature": 30.0},
+            headers=auth(secrets.device_key),
+        )
+        assert response.status_code == 202
+
+
+def test_alert_round_trip_changes_the_alert_page(
+    client: TestClient, reader: _ReaderClient, hub_token: str
+) -> None:
+    before = reader.get("/display/alert.png")
     assert before.status_code == 200
 
     created = client.post(
@@ -364,23 +525,23 @@ def test_alert_round_trip_changes_the_alert_page(client: TestClient, hub_token: 
     assert created.status_code == 201
     assert created.json()["accepted"] is True
 
-    after = client.get("/display/alert.png")
+    after = reader.get("/display/alert.png")
     assert after.status_code == 200
     assert after.content != before.content
     assert after.headers["etag"] != before.headers["etag"]
 
-    state = client.get("/api/state").json()
+    state = reader.get("/api/state").json()
     assert state["alert"]["title"] == "Doorbell"
     assert state["alert"]["priority"] == "doorbell"
 
     cleared = client.delete("/api/alert", headers=auth(hub_token))
     assert cleared.status_code == 200
     assert cleared.json()["cleared"] is True
-    assert client.get("/api/state").json()["alert"] is None
+    assert reader.get("/api/state").json()["alert"] is None
 
 
 def test_alert_source_round_trips_and_reaches_the_page(
-    client: TestClient, hub_token: str
+    client: TestClient, reader: _ReaderClient, hub_token: str
 ) -> None:
     """The optional source names what raised the alert, in the sender's words."""
     client.delete("/api/alert", headers=auth(hub_token))
@@ -396,17 +557,17 @@ def test_alert_source_round_trips_and_reaches_the_page(
     )
     assert created.status_code == 201
     assert created.json()["alert"]["source"] == "Front door"
-    assert client.get("/api/state").json()["alert"]["source"] == "Front door"
+    assert reader.get("/api/state").json()["alert"]["source"] == "Front door"
 
-    html = client.get("/preview/alert.html").text
+    html = reader.get("/preview/alert.html").text
     assert "FRONT DOOR" in html
 
-    assert client.get("/display/alert.png").status_code == 200
+    assert reader.get("/display/alert.png").status_code == 200
     client.delete("/api/alert", headers=auth(hub_token))
 
 
 def test_alert_without_a_source_falls_back_to_the_priority(
-    client: TestClient, hub_token: str
+    client: TestClient, reader: _ReaderClient, hub_token: str
 ) -> None:
     client.delete("/api/alert", headers=auth(hub_token))
     created = client.post(
@@ -417,7 +578,7 @@ def test_alert_without_a_source_falls_back_to_the_priority(
     assert created.status_code == 201
     assert created.json()["alert"]["source"] is None
 
-    html = client.get("/preview/alert.html").text
+    html = reader.get("/preview/alert.html").text
     assert "NORMAL" in html
     client.delete("/api/alert", headers=auth(hub_token))
 

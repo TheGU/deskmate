@@ -5,6 +5,8 @@ Endpoints follow docs/ARCHITECTURE.md::
     GET    /healthz
     GET    /setup
     POST   /setup
+    GET    /login
+    POST   /login
     GET    /api/hub
     GET    /api/state
     POST   /api/ai-usage
@@ -35,9 +37,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
@@ -49,9 +53,18 @@ from app.alerts import AlertStore
 from app.config import Settings, get_settings
 from app.hub_config import (
     AlreadyConfigured,
+    COOKIE_NAME,
     HubIdentity,
     InvalidBaseURL,
+    LoginRedirect,
+    SESSION_MAX_AGE_SECONDS,
     WrongClaimCode,
+    _bearer_scheme,
+    mint_session_cookie,
+    reader_authenticated,
+    require_device,
+    require_reader,
+    require_reader_html,
     require_token,
 )
 from app.logging_setup import configure_logging, log
@@ -77,10 +90,13 @@ logger = logging.getLogger("app.main")
 #: always names 0.0.0.0 with a note to use the LAN address instead.
 DEFAULT_PORT = 8080
 
-#: /api/device/telemetry and /setup are the only POST routes with no token
-#: (see the trade-off note on the telemetry route below), so anyone on the
-#: LAN can point either one at this single-worker container. Cap what either
-#: route will buffer in memory before validation ever runs.
+#: /setup and /login are the only POST routes with no bearer token (they are
+#: how a credential is obtained or exchanged for a session in the first
+#: place); /api/device/telemetry is open too, but only until the hub is
+#: claimed (see the trade-off note on the telemetry route below). Until then
+#: anyone on the LAN can point any of the three at this single-worker
+#: container. Cap what any of them will buffer in memory before validation
+#: ever runs.
 MAX_OPEN_BODY_BYTES = 64 * 1024
 
 
@@ -227,6 +243,27 @@ async def _read_capped_body(request: Request) -> bytes:
     return body
 
 
+async def _cap_form_body(request: Request) -> None:
+    """The Content-Length guard shared by POST /setup and POST /login:
+    ``request.form()`` reads ``request.stream()`` itself, so it cannot be
+    handed ``_read_capped_body``'s bytes directly. When Content-Length is
+    present, reject an oversized body before ``form()`` ever touches the
+    stream; when it is absent (e.g. chunked), read the capped body first so
+    it is cached on ``request._body``, which ``stream()`` (and so ``form()``)
+    reuses.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > MAX_OPEN_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="body too large")
+    else:
+        await _read_capped_body(request)
+
+
 def _effective_source_after_push(configured: str) -> str:
     """What the panel will actually serve right after a successful push:
     values are "file", "fixture" or "obsidian" (tasks only). The push just
@@ -310,13 +347,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     HEALTH_STATUS_UNKNOWN = "unknown"
 
     @app.get("/healthz")
-    async def healthz() -> JSONResponse:
+    async def healthz(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    ) -> JSONResponse:
         """Liveness check: answers from each adapter's last known outcome
         and never fetches, so an outage cannot make this route slow (see the
         CachedAdapter failure backoff in adapters/base.py). GET /api/state
         is what forces every adapter to fetch and reports live status.
+
+        Unconfigured: the full body, same as always - there is no secret yet
+        to protect. Configured: a caller without a reader credential (token,
+        device key, or session cookie) gets only status/version/renderer, so
+        an unauthenticated probe from the LAN cannot enumerate adapter names
+        or alert state; a reader gets the full body.
         """
         hub: Hub = app.state.hub
+        minimal: dict[str, Any] = {
+            "status": "ok",
+            "version": __version__,
+            "renderer": {"connected": hub.renderer.connected},
+        }
+        if hub.identity.configured and not reader_authenticated(request, credentials):
+            return JSONResponse(minimal)
         adapters: dict[str, dict[str, Any]] = {}
         for name, cached in hub.state_service.adapters.items():
             outcome = cached.last_outcome
@@ -336,18 +389,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
         return JSONResponse(
             {
-                "status": "ok",
-                "version": __version__,
+                **minimal,
                 "timezone": settings.timezone,
                 "pages": list(PAGES),
-                "renderer": {"connected": hub.renderer.connected},
                 "adapters": adapters,
                 "alert": hub.alerts.current.priority.value if hub.alerts.current else None,
             }
         )
 
     # -- state -----------------------------------------------------------
-    @app.get("/api/state")
+    @app.get("/api/state", dependencies=[Depends(require_reader)])
     async def api_state(request: Request) -> Response:
         hub: Hub = app.state.hub
         state = await hub.state(force="t" in request.query_params)
@@ -358,7 +409,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     # -- hub identity ------------------------------------------------------
-    @app.get("/api/hub")
+    @app.get("/api/hub", dependencies=[Depends(require_reader)])
     async def api_hub() -> JSONResponse:
         hub: Hub = app.state.hub
         config = hub.identity.config
@@ -492,13 +543,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"cleared": cleared})
 
     # -- device telemetry ------------------------------------------------
-    # Trade-off, stated in docs/DATA-SOURCES.md: this endpoint stays open
-    # (no require_token) because the E1002 firmware does not send a bearer
-    # token today. firmware/e1002.yaml:363-365 already sends request_headers
-    # on this POST, so adding the token is a two-line firmware change and a
-    # reflash; it is deferred by choice, tracked as a follow-up, not shipped
-    # here.
-    @app.post("/api/device/telemetry")
+    # firmware/e1002.yaml sends "Authorization: Bearer ${hub_key}" on this
+    # POST, ${hub_key} being the device key /setup hands out. require_device
+    # checks it once the hub is claimed; open (no credential at all) only
+    # before that, so a fresh install still works out of the box and older
+    # firmware without the header gets 401 here rather than a silent accept.
+    @app.post("/api/device/telemetry", dependencies=[Depends(require_device)])
     async def post_device_telemetry(request: Request) -> JSONResponse:
         hub: Hub = app.state.hub
         body = await _read_capped_body(request)
@@ -531,7 +581,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status_code=202,
         )
 
-    @app.get("/api/device/telemetry")
+    @app.get("/api/device/telemetry", dependencies=[Depends(require_reader)])
     async def get_device_telemetry() -> JSONResponse:
         hub: Hub = app.state.hub
         latest, summary = await run_in_threadpool(_read_latest, hub)
@@ -552,7 +602,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Cache-Control": "no-cache"},
         )
 
-    @app.get("/api/device/history")
+    @app.get("/api/device/history", dependencies=[Depends(require_reader)])
     async def get_device_history(
         hours: float = Query(default=24.0, gt=0.0, le=8760.0),
     ) -> JSONResponse:
@@ -572,7 +622,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     # -- display ---------------------------------------------------------
-    @app.get("/display/{page}.png")
+    @app.get("/display/{page}.png", dependencies=[Depends(require_reader)])
     async def display(page: str, request: Request) -> Response:
         hub: Hub = app.state.hub
         if page not in PAGES:
@@ -617,21 +667,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hub: Hub = app.state.hub
         if hub.identity.error is not None:
             raise HTTPException(status_code=503, detail=hub.identity.error)
-        # request.form() reads request.stream() itself, so it cannot be handed
-        # the capped helper's bytes directly. When Content-Length is present,
-        # reject an oversized body before form() ever touches the stream; when
-        # it is absent (e.g. chunked), read the capped body first so it is
-        # cached on request._body, which stream() (and so form()) reuses.
-        content_length = request.headers.get("content-length")
-        if content_length is not None:
-            try:
-                declared_length = int(content_length)
-            except ValueError:
-                declared_length = None
-            if declared_length is not None and declared_length > MAX_OPEN_BODY_BYTES:
-                raise HTTPException(status_code=413, detail="body too large")
-        else:
-            await _read_capped_body(request)
+        await _cap_form_body(request)
         form = await request.form()
         name = str(form.get("name", "")).strip()
         base_url = str(form.get("base_url", ""))
@@ -644,7 +680,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if len(base_url) > 200:
             raise HTTPException(status_code=422, detail="base_url must be 200 characters or fewer")
         try:
-            token = await hub.identity.claim(
+            secrets = await hub.identity.claim(
                 submitted_code=claim_code, name=name, base_url=base_url
             )
         except AlreadyConfigured as exc:
@@ -659,13 +695,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         html = template.render(
             name=config.name,
             base_url=config.base_url,
-            token=token,
+            token=secrets.token,
+            device_key=secrets.device_key,
             skill_path="skills/deskmate/SKILL.md",
         )
-        # This page carries the token, shown once: never cache or store it.
+        # This page carries both secrets, shown once: never cache or store it.
         return HTMLResponse(
             html, headers={"Cache-Control": "no-store", "Pragma": "no-cache"}
         )
+
+    # -- login -------------------------------------------------------------
+    @app.get("/login", response_class=HTMLResponse)
+    async def get_login(request: Request) -> Response:
+        hub: Hub = app.state.hub
+        if hub.identity.error is not None:
+            raise HTTPException(status_code=503, detail=hub.identity.error)
+        if not hub.identity.configured:
+            return RedirectResponse("/setup")
+        next_path = request.query_params.get("next", "/preview")
+        template = hub.renderer.environment.get_template("login.html")
+        html = template.render(next=next_path, error=None)
+        return HTMLResponse(html)
+
+    @app.post("/login", response_class=HTMLResponse)
+    async def post_login(request: Request) -> Response:
+        hub: Hub = app.state.hub
+        if hub.identity.error is not None:
+            raise HTTPException(status_code=503, detail=hub.identity.error)
+        if not hub.identity.configured:
+            return RedirectResponse("/setup")
+        await _cap_form_body(request)
+        form = await request.form()
+        key = str(form.get("key", "")).strip()
+        submitted_next = str(form.get("next", ""))
+        # An open redirect target ("//evil.example" parses as scheme-relative
+        # by every browser) must never come back out of this form unchecked.
+        next_path = (
+            submitted_next
+            if submitted_next.startswith("/") and not submitted_next.startswith("//")
+            else "/preview"
+        )
+        config = hub.identity.config
+        assert config is not None
+        if not key or not hub.identity.verify_reader(key):
+            template = hub.renderer.environment.get_template("login.html")
+            html = template.render(next=next_path, error="wrong key")
+            return HTMLResponse(html, status_code=401)
+        response = RedirectResponse(next_path, status_code=303)
+        response.set_cookie(
+            COOKIE_NAME,
+            mint_session_cookie(config.session_secret, time.time()),
+            max_age=SESSION_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+            path="/",
+            secure=config.base_url.startswith("https"),
+        )
+        return response
 
     # -- preview ---------------------------------------------------------
     @app.get("/")
@@ -675,7 +761,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return RedirectResponse("/setup")
         return RedirectResponse("/preview")
 
-    @app.get("/preview", response_class=HTMLResponse)
+    @app.get("/preview", response_class=HTMLResponse, dependencies=[Depends(require_reader_html)])
     async def preview(request: Request) -> HTMLResponse:
         hub: Hub = app.state.hub
         page = request.query_params.get("page", "today")
@@ -693,7 +779,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
-    @app.get("/preview/{page}.html", response_class=HTMLResponse)
+    @app.get(
+        "/preview/{page}.html",
+        response_class=HTMLResponse,
+        dependencies=[Depends(require_reader_html)],
+    )
     async def preview_page(page: str, request: Request) -> Response:
         hub: Hub = app.state.hub
         if page not in PAGES:
@@ -702,7 +792,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         html = hub.renderer.render_html(page, state, embed_fonts=False)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
-    @app.get("/preview/{page}-rgb.png")
+    @app.get("/preview/{page}-rgb.png", dependencies=[Depends(require_reader)])
     async def preview_rgb(page: str, request: Request) -> Response:
         """The RGB stage before quantization, for the developer preview.
 
@@ -720,6 +810,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="image/png",
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.exception_handler(LoginRedirect)
+    async def login_redirect_handler(request: Request, exc: LoginRedirect) -> RedirectResponse:
+        # safe="/": the path's own slashes must survive quoting unescaped,
+        # or "/login?next=/preview" would come out as "...next=%2Fpreview".
+        return RedirectResponse(f"/login?next={quote(exc.next_path, safe='/')}", status_code=303)
 
     return app
 

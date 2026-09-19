@@ -26,9 +26,10 @@ Copy-Item firmware\secrets.yaml.example firmware\secrets.yaml
 ```
 
 Edit `firmware/secrets.yaml`: Wi-Fi, `hub_base_url` (LAN address of
-dashboard-hub, for example `http://192.168.1.50:8080`), and fresh random
-values for `api_encryption_key` (32 bytes base64), `ota_password`,
-`ap_password`. `secrets.yaml` is gitignored.
+dashboard-hub, for example `http://192.168.1.50:8080`), `hub_key` (the
+device key from the hub's setup-done page), and fresh random values for
+`api_encryption_key` (32 bytes base64), `ota_password`, `ap_password`.
+`secrets.yaml` is gitignored.
 
 ## Validate (non-destructive)
 

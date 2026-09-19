@@ -20,8 +20,12 @@ curl -s http://127.0.0.1:8080/api/state
 curl -s http://127.0.0.1:8080/api/hub
 ```
 
-`/healthz` only replays each adapter's last outcome and never fetches;
-`/api/state` is the one that forces every adapter to fetch.
+`/healthz` always answers `200` with no credential; once the hub is claimed
+an unauthenticated call gets a minimal body instead of the full one, and
+`/api/state` and `/api/hub` need the bearer token, the device key, or a
+`/login` session cookie (see "Auth" in `docs/ARCHITECTURE.md`). `/healthz`
+only replays each adapter's last outcome and never fetches; `/api/state` is
+the one that forces every adapter to fetch.
 
 For AI usage, the brief and tasks, `POST`ing to the hub over HTTP is the
 primary way to get real data onto the panel; a hand-written file under
@@ -423,13 +427,14 @@ DEVICE_SOURCE=store
 TELEMETRY_RETENTION_DAYS=30
 ```
 
-**Trade-off:** unlike the push endpoints above, `POST /api/device/telemetry`
-does not require the bearer token. The E1002 firmware does not send one
-today, though it already sends `request_headers` on this request
-(`firmware/e1002.yaml`), so adding a device token is a small, tracked
-firmware follow-up (and a reflash), not shipped here. This is one reason the
-hub should stay on a LAN or behind a reverse proxy with its own access
-control rather than facing the public internet; see `docs/DEPLOY.md`.
+Once the hub is claimed, `POST /api/device/telemetry` requires
+`Authorization: Bearer <token or device key>` (`firmware/e1002.yaml` sends
+the device key); a `/login` session cookie is never accepted here, only a
+bearer credential. Before the hub is claimed the endpoint stays open, like
+every other read and the device's own image fetches; see "Auth" in
+`docs/ARCHITECTURE.md`. Keep the hub on a LAN or behind a reverse proxy with
+its own access control rather than facing the public internet; see
+`docs/DEPLOY.md`.
 
 ### Payload
 
@@ -489,6 +494,9 @@ not JSON or fails validation.
 curl -s http://127.0.0.1:8080/api/device/telemetry
 curl -s "http://127.0.0.1:8080/api/device/history?hours=6"
 ```
+
+Both need the bearer token, the device key, or a `/login` session cookie
+once the hub is claimed.
 
 `GET /api/device/telemetry` returns the newest sample, its `age_seconds` and a
 summary (`sample_count`, `oldest`, `newest`, `retention_days`).

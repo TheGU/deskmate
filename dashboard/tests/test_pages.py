@@ -360,11 +360,26 @@ def test_today_page_fresh_has_no_stale_mark_and_stays_clean(
     """Today, file-sourced but freshly received: no tell-tale, no age text,
     no DEMO (none of Today's three datasets, ai_usage/brief/tasks, is a
     fixture), palette clean, nothing overflowing."""
+    # Every age source pinned to now (ai_usage: each provider's collected_at,
+    # brief: generated_at, tasks: received_at, see view.py's *_stale). The
+    # fixture's own timestamps sit in the morning, so without this the test
+    # turned stale, and failed, every afternoon once the 6 h threshold passed.
+    now = state.generated_at
+    assert state.brief.brief is not None
     fresh = state.model_copy(
         update={
-            "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
-            "brief": state.brief.model_copy(update={"source": "file"}),
-            "tasks": state.tasks.model_copy(update={"source": "file", "received_at": state.generated_at}),
+            "ai_usage": state.ai_usage.model_copy(
+                update={
+                    "source": "file",
+                    "providers": [
+                        p.model_copy(update={"collected_at": now}) for p in state.ai_usage.providers
+                    ],
+                }
+            ),
+            "brief": state.brief.model_copy(
+                update={"source": "file", "brief": state.brief.brief.model_copy(update={"generated_at": now})}
+            ),
+            "tasks": state.tasks.model_copy(update={"source": "file", "received_at": now}),
         }
     )
     html = renderer.render_html("today", fresh, embed_fonts=False)
