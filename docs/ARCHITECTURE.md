@@ -150,9 +150,10 @@ stay open, and the redirects on `GET /` and the two HTML preview routes).
   (fonts). `GET /login` also stays open once configured; while unconfigured
   it simply redirects to `/setup`.
 - **Reset** (delete `data/hub.json`) rotates the session secret, so every
-  cookie stops working, and rotates the device key, so the device needs
-  `firmware/secrets.yaml`'s `hub_key` updated and a reflash (OTA is fine)
-  before it can fetch again.
+  cookie stops working, and rotates the device key, so the device's Hub
+  key field must be updated (its own web page, or the Home Assistant text
+  entity) before it can fetch again; a reflash is only needed for
+  firmware built before these runtime fields existed.
 
 `Bearer` is case-insensitive, checked by hashing and
 `hmac.compare_digest` against the stored hash. One error shape for the

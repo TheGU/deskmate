@@ -95,6 +95,10 @@ install whose device was already flashed with `hub_base_url` pointing at
 working, or reflash the device (`docs/FLASHING.md`) with `hub_base_url` set
 to the new, port-less address.
 
+If you are also upgrading the device's own firmware and its old
+`secrets.yaml` had a Wi-Fi network in it, see `docs/FLASHING.md`,
+"Upgrading a device that had Wi-Fi in secrets.yaml", before you OTA it.
+
 ## First run and setting up the hub
 
 On first start, with no `data/hub.json` yet, the container log prints a line
@@ -120,12 +124,17 @@ immediately, there is no way to display either again:
 
 - The **bearer token**, for agents: read and write. Follow
   `docs/LOCAL-AGENT.md` to get it onto an agent machine.
-- The **device key**, for the E1002 firmware: read only. It goes into
-  `firmware/secrets.yaml` as `hub_key`, and is also what you type at
-  `/login` to view the panel in a browser.
+- The **device key**, for the E1002 firmware: read only. It is also what
+  you type at `/login` to view the panel in a browser.
 
-The result page also shows the exact lines to put in
-`firmware/secrets.yaml` (`hub_base_url: "http://<server>:<port>"` and
+For a device already flashed with this firmware, set the device key on
+the device itself: its own web page (the "Hub key" field at
+`http://<device-ip>/`), or the "Hub key" text entity if the device is
+added to Home Assistant. Either way takes effect immediately, no
+reflash. `firmware/secrets.yaml`'s `hub_key` only seeds that field on a
+device's very first flash; see `docs/FLASHING.md`, "Provisioning at
+runtime". The result page also shows the exact lines for that first
+flash (`hub_base_url: "http://<server>:<port>"` and
 `hub_key: "<device key>"`).
 
 Only each secret's hash is written to `data/hub.json`; the plaintext

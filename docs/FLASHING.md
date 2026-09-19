@@ -98,6 +98,26 @@ USB serial connection while the device is plugged in. Either path stores
 the chosen network in NVS and it survives OTA updates; the setup AP does
 not come back once a saved network works again.
 
+**Upgrading a device that had Wi-Fi in secrets.yaml.** Older firmware for
+this device compiled `wifi_ssid`/`wifi_password` straight into the YAML
+from `secrets.yaml`. Checked against ESPHome 2026.8.2's own Wi-Fi
+component source: credentials compiled into the YAML that way are never
+written to the saved-credentials area of flash; only the captive portal,
+Improv, or the `wifi.configure` action ever save a network for real, and
+the ESP-IDF Wi-Fi driver here runs in RAM-only storage mode, so nothing
+compiled-in is ever remembered across a reboot either way. That means a
+device already running one of those older builds has no saved Wi-Fi
+network at all. After you OTA it to this firmware, it will not be able to
+join your network on its own, and it will bring up its own setup access
+point, `reTerminal-E1002 Setup` (password: `ap_password` from
+`secrets.yaml`), the same as a brand new device. Join that access point
+once and enter your Wi-Fi network in the captive portal that opens; from
+then on the network is saved to flash for good and the setup AP will not
+come back. Improv over the USB serial port works the same way, if you
+would rather do it that way. Do this upgrade with the device on USB
+power: in battery mode the device can go back to sleep before you finish
+the one-time setup step.
+
 **Hub base URL and Hub key.** These seed from `secrets.yaml` on the first
 boot only. To change them afterwards:
 
