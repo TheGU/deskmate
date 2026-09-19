@@ -51,7 +51,7 @@ from app import __version__
 from app.adapters.ai_brief import current_mode
 from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
-from app.config import Settings, get_settings
+from app.config import Env, Settings
 from app.db import get_database
 from app.hub_config import (
     ADMIN_SESSION_MAX_AGE_SECONDS,
@@ -87,6 +87,7 @@ from app.models import (
     TasksPush,
 )
 from app.renderer.render import PAGE_TTL_SECONDS, PAGES, Renderer
+from app.settings import HubSettings
 from app.state import StateService, state_fingerprint
 from app.telemetry import TelemetryStore, TelemetrySummary, utc_now
 from app.timeutil import to_local
@@ -146,20 +147,21 @@ def _require_writable_data_dir(path: Path) -> None:
 class Hub:
     """Everything the request handlers need, built once at startup."""
 
-    def __init__(self, settings: Settings) -> None:
-        _require_writable_data_dir(settings.data_dir)
-        self.settings = settings
+    def __init__(self, env: Env, hub_settings: HubSettings) -> None:
+        _require_writable_data_dir(env.data_dir)
+        self.env = env
+        self.hub_settings = hub_settings
         # The database is process-wide and keyed by path (app/db.py), so two
         # create_app() calls over one DATA_DIR share one connection instead of
         # racing through two. Hub holds the reference; it does not own the
         # lifetime, which is what makes a restore able to swap the file.
-        self.db = get_database(settings.hub_db_file)
+        self.db = get_database(env.hub_db_file)
         self.db.migrate()
-        import_legacy(self.db, LegacyEnv(), settings.data_dir)
-        self.alerts = AlertStore(self.db, settings.timezone)
-        self.telemetry = TelemetryStore(self.db, settings.telemetry_retention_days)
-        self.state_service = StateService(settings, self.alerts)
-        self.renderer = Renderer(settings)
+        import_legacy(self.db, LegacyEnv(), env.data_dir)
+        self.alerts = AlertStore(self.db, hub_settings.general.timezone)
+        self.telemetry = TelemetryStore(self.db, hub_settings.device.retention_days)
+        self.state_service = StateService(hub_settings, env, self.alerts)
+        self.renderer = Renderer(env, hub_settings)
         self.identity = HubIdentity(self.db)
         self._cache: dict[str, RenderCacheEntry] = {}
         self._cache_lock = asyncio.Lock()
@@ -176,16 +178,21 @@ class Hub:
 
         Used by the flows that rewrite the hub's own rows (rotate, restore,
         and in phase 1.4 a settings save). The identity comes back from the
-        ``hub`` row, the state service is rebuilt so its adapters start from
-        nothing, the alert store re-reads its row (never resets: whatever the
-        panel is showing has to survive a settings save), and the render cache
-        is dropped under ``_cache_lock`` so a render already in flight
-        finishes on the old service while the next request sees the new one.
+        ``hub`` row, the settings snapshot is re-read (1.2c makes
+        ``SettingsStore`` the source; for now, like at startup, it is
+        ``HubSettings.from_env(Settings())``), the state service and the
+        renderer's own snapshot are rebuilt from it, the alert store re-reads
+        its row (never resets: whatever the panel is showing has to survive a
+        settings save), and the render cache is dropped under ``_cache_lock``
+        so a render already in flight finishes on the old service while the
+        next request sees the new one.
         """
         identity = await run_in_threadpool(HubIdentity, self.db)
         self.identity = identity
         await run_in_threadpool(self.alerts.load)
-        self.state_service = StateService(self.settings, self.alerts)
+        self.hub_settings = HubSettings.from_env(Settings())
+        self.state_service = StateService(self.hub_settings, self.env, self.alerts)
+        self.renderer.hub_settings = self.hub_settings
         async with self._cache_lock:
             self._cache.clear()
         log(logger, logging.INFO, "hub reloaded", configured=self.identity.configured)
@@ -303,15 +310,17 @@ async def _cap_form_body(request: Request) -> None:
         await _read_capped_body(request)
 
 
-def _effective_source_after_push(configured: str) -> str:
-    """What the panel will actually serve right after a successful push:
-    values are "file", "fixture" or "obsidian" (tasks only). The push just
-    wrote the file, so "file" and "auto" (which now sees the file) both
-    become "file"; a selector pinned to "fixture" or "obsidian" is reported
-    verbatim, since the push did not change what the panel shows (obsidian
-    reads the vault regardless of any tasks.json).
+def _push_warning(section: str, configured: str) -> str | None:
+    """The response's "warning" field when the just-written push is not what
+    the panel actually draws: the source is pinned to ``fixture`` (a fresh
+    hub still shows demo data for this dataset) or, for tasks only,
+    ``obsidian`` (the push landed but the panel keeps reading the vault).
+    ``None`` when the source is ``push``, since that is exactly the file this
+    route just wrote.
     """
-    return "file" if configured in ("file", "auto") else configured
+    if configured == "push":
+        return None
+    return f"{section}.source is {configured}; the panel will not show this push"
 
 
 def _validation_problems(error: ValidationError) -> list[dict[str, str]]:
@@ -375,9 +384,10 @@ def _telemetry_origin(request: Request) -> tuple[str | None, str | None]:
     return remote_addr, hub_host
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings or get_settings()
-    configure_logging(settings.log_level)
+def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) -> FastAPI:
+    env = env or Env()
+    hub_settings = hub_settings or HubSettings.from_env(Settings())
+    configure_logging(env.log_level)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -387,16 +397,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.INFO,
             "dashboard-hub starting",
             version=__version__,
-            timezone=settings.timezone,
-            fixtures=str(settings.fixtures_dir),
-            tasks=settings.tasks_source,
-            calendar=settings.calendar_source,
-            weather=settings.weather_source,
-            ai_usage=settings.ai_usage_source,
-            brief=settings.brief_source,
-            home=settings.ha_source,
-            device=settings.device_source,
-            database=str(settings.hub_db_file),
+            timezone=hub.hub_settings.general.timezone,
+            fixtures=str(hub.env.fixtures_dir),
+            tasks=hub.hub_settings.tasks.source,
+            calendar=hub.hub_settings.calendar.source,
+            weather=hub.hub_settings.weather.source,
+            ai_usage=hub.hub_settings.ai_usage.source,
+            brief=hub.hub_settings.brief.source,
+            home=hub.hub_settings.home.source,
+            device=hub.hub_settings.device.source,
+            database=str(hub.env.hub_db_file),
         )
         await hub.renderer.start()
         try:
@@ -409,9 +419,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log(logger, logging.INFO, "dashboard-hub stopped")
 
     app = FastAPI(title="dashboard-hub", version=__version__, lifespan=lifespan)
-    app.state.hub = Hub(settings)
-    if settings.static_dir.is_dir():
-        app.mount("/static", StaticFiles(directory=str(settings.static_dir)), name="static")
+    app.state.hub = Hub(env, hub_settings)
+    if env.static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(env.static_dir)), name="static")
 
     # -- health ----------------------------------------------------------
     #: A healthz-only word for an adapter that has never fetched yet.
@@ -463,7 +473,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {
                 **minimal,
-                "timezone": settings.timezone,
+                "timezone": hub.hub_settings.general.timezone,
                 "pages": list(PAGES),
                 "adapters": adapters,
                 "alert": hub.alerts.current.priority.value if hub.alerts.current else None,
@@ -492,26 +502,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "base_url": config.base_url if config else None,
                 "configured": hub.identity.configured,
                 "version": __version__,
-                "timezone": settings.timezone,
-                # "configured" is the settings value (may be "auto"); "effective"
-                # is what the *next* render will use ("fixture", "file", or
-                # "obsidian" for tasks) - a live check, not the last fetch, so
-                # a push shows up here immediately. The footer's DEMO mark
-                # instead tracks the last actual fetch (what is currently
-                # drawn), which can lag until the next render.
+                "timezone": hub.hub_settings.general.timezone,
+                # Straight from the section models: with "push" always the
+                # strict file adapter in this package (see
+                # adapters/base.py's docstring), there is no live/last-fetch
+                # split left to report (that was the "auto" selector's own
+                # story, dropped per the plan's Non-goals).
                 "sources": {
-                    "ai_usage": {
-                        "configured": settings.ai_usage_source,
-                        "effective": hub.state_service.ai_usage.resolve(),
-                    },
-                    "brief": {
-                        "configured": settings.brief_source,
-                        "effective": hub.state_service.brief.resolve(),
-                    },
-                    "tasks": {
-                        "configured": settings.tasks_source,
-                        "effective": hub.state_service.tasks.resolve(),
-                    },
+                    "ai_usage": {"source": hub.hub_settings.ai_usage.source},
+                    "brief": {"source": hub.hub_settings.brief.source},
+                    "tasks": {"source": hub.hub_settings.tasks.source},
                 },
             }
         )
@@ -528,26 +528,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "received_at": received_at.isoformat(),
             "providers": [item.model_dump(mode="json") for item in payload.providers],
         }
-        await run_in_threadpool(_write_json_atomic, settings.ai_usage_file, document)
+        target = hub.env.data_dir / "ai-usage.json"
+        await run_in_threadpool(_write_json_atomic, target, document)
         hub.state_service.ai_usage.invalidate()
-        effective = _effective_source_after_push(settings.ai_usage_source)
+        configured = hub.hub_settings.ai_usage.source
         body: dict[str, Any] = {
-            "stored": settings.ai_usage_file.name,
-            "received_at": to_local(received_at, settings.timezone).isoformat(),
+            "stored": target.name,
+            "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             "count": len(payload.providers),
-            "effective_source": effective,
+            "effective_source": configured,
         }
-        if effective != "file":
-            body["warning"] = (
-                f"AI_USAGE_SOURCE is {settings.ai_usage_source}; the panel will not show this push"
-            )
+        warning = _push_warning("ai_usage", configured)
+        if warning is not None:
+            body["warning"] = warning
         return JSONResponse(body)
 
     @app.post("/api/brief", dependencies=[Depends(require_token)])
     async def post_brief(payload: BriefPush) -> JSONResponse:
         hub: Hub = app.state.hub
         received_at = datetime.now(dt_timezone.utc)
-        mode = payload.mode or current_mode(settings)
+        mode = payload.mode or current_mode(hub.hub_settings.brief, hub.hub_settings.general)
         document = {
             "received_at": received_at.isoformat(),
             "mode": mode.value,
@@ -556,20 +556,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "sections": [section.model_dump(mode="json") for section in payload.sections],
             "generated_at": payload.generated_at.isoformat(),
         }
-        target = settings.brief_directory / "current.json"
+        target = hub.env.data_dir / "brief" / "current.json"
         await run_in_threadpool(_write_json_atomic, target, document)
         hub.state_service.brief.invalidate()
-        effective = _effective_source_after_push(settings.brief_source)
+        configured = hub.hub_settings.brief.source
         body: dict[str, Any] = {
             "stored": target.name,
-            "received_at": to_local(received_at, settings.timezone).isoformat(),
+            "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             "count": len(payload.sections),
-            "effective_source": effective,
+            "effective_source": configured,
         }
-        if effective != "file":
-            body["warning"] = (
-                f"BRIEF_SOURCE is {settings.brief_source}; the panel will not show this push"
-            )
+        warning = _push_warning("brief", configured)
+        if warning is not None:
+            body["warning"] = warning
         return JSONResponse(body)
 
     @app.post("/api/tasks", dependencies=[Depends(require_token)])
@@ -580,19 +579,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "received_at": received_at.isoformat(),
             "tasks": [item.model_dump(mode="json") for item in payload.tasks],
         }
-        await run_in_threadpool(_write_json_atomic, settings.tasks_file, document)
+        target = hub.env.data_dir / "tasks.json"
+        await run_in_threadpool(_write_json_atomic, target, document)
         hub.state_service.tasks.invalidate()
-        effective = _effective_source_after_push(settings.tasks_source)
+        configured = hub.hub_settings.tasks.source
         body: dict[str, Any] = {
-            "stored": settings.tasks_file.name,
-            "received_at": to_local(received_at, settings.timezone).isoformat(),
+            "stored": target.name,
+            "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             "count": len(payload.tasks),
-            "effective_source": effective,
+            "effective_source": configured,
         }
-        if effective != "file":
-            body["warning"] = (
-                f"TASKS_SOURCE is {settings.tasks_source}; the panel will not show this push"
-            )
+        warning = _push_warning("tasks", configured)
+        if warning is not None:
+            body["warning"] = warning
         return JSONResponse(body)
 
     # -- alerts ------------------------------------------------------------
@@ -655,7 +654,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {
                 "accepted": True,
-                "received_at": to_local(received_at, settings.timezone).isoformat(),
+                "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             },
             status_code=202,
         )
@@ -665,16 +664,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hub: Hub = app.state.hub
         latest, summary = await run_in_threadpool(_read_latest, hub)
         age = None if latest is None else round((utc_now() - latest.received_at).total_seconds(), 1)
+        timezone_name = hub.hub_settings.general.timezone
         return JSONResponse(
             {
                 "status": device_status(age).value,
-                "source": settings.device_source,
+                "source": hub.hub_settings.device.source,
                 "age_seconds": age,
-                "latest": None if latest is None else _sample_json(latest, settings.timezone),
+                "latest": None if latest is None else _sample_json(latest, timezone_name),
                 "summary": {
                     "sample_count": summary.sample_count,
-                    "oldest": _stamp(summary.oldest, settings.timezone),
-                    "newest": _stamp(summary.newest, settings.timezone),
+                    "oldest": _stamp(summary.oldest, timezone_name),
+                    "newest": _stamp(summary.newest, timezone_name),
                     "retention_days": hub.telemetry.retention_days,
                 },
             },
@@ -688,6 +688,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hub: Hub = app.state.hub
         samples = await run_in_threadpool(hub.telemetry.history, hours)
         points = downsample(samples, HISTORY_MAX_POINTS)
+        timezone_name = hub.hub_settings.general.timezone
         return JSONResponse(
             {
                 "hours": hours,
@@ -695,7 +696,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "point_count": len(points),
                 "max_points": HISTORY_MAX_POINTS,
                 "downsampled": len(points) < len(samples),
-                "samples": [_sample_json(sample, settings.timezone) for sample in points],
+                "samples": [_sample_json(sample, timezone_name) for sample in points],
             },
             headers={"Cache-Control": "no-cache"},
         )
@@ -895,7 +896,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         html = template.render(
             page=page,
             pages=list(PAGES),
-            timezone=settings.timezone,
+            timezone=hub.hub_settings.general.timezone,
             updated_label=state.updated_at.strftime("%H:%M"),
             adapters={name: block.status.value for name, block in state.blocks.items()},
             cache_bust=request.query_params.get("t", int(time.time())),
@@ -934,11 +935,11 @@ app = create_app()
 def main() -> None:  # pragma: no cover - convenience entry point
     import uvicorn
 
-    settings = get_settings()
+    env = Env()
     # workers=1 (the default here): HubIdentity.claim()'s asyncio.Lock only
     # serializes concurrent POST /setup within one process (see Dockerfile).
     uvicorn.run(
-        "app.main:app", host="0.0.0.0", port=DEFAULT_PORT, log_level=settings.log_level.lower()
+        "app.main:app", host="0.0.0.0", port=DEFAULT_PORT, log_level=env.log_level.lower()
     )
 
 
