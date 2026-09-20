@@ -503,6 +503,12 @@ Responses: `201` with `{"accepted": true, "alert": {...}}`, or `409` with
 (`critical > doorbell > important > normal`; equal priority replaces).
 `DELETE /api/alert` clears it and returns `{"cleared": true|false}`.
 
+An alert only reaches the device while it is awake and on USB power: in
+battery mode the firmware ignores `show_alert` rather than waking the
+device early, so posting one to a device you know is unplugged renders the
+alert page on the hub but the panel never shows it (see the Home Assistant
+example below for how to skip the call in that case).
+
 ### Home Assistant example
 
 `configuration.yaml`:

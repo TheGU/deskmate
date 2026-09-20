@@ -147,7 +147,7 @@ or redirects to `/setup` (`/preview` and `/`). See "Auth" in
 | GET | `/preview` | Developer page for switching between pages |
 | GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work |
 | POST | `/api/ai-usage`, `/api/brief`, `/api/tasks` | Agent pushes, token required |
-| POST | `/api/alert` | Set the current alert, token required |
+| POST | `/api/alert` | Set the current alert, token required; only reaches the device while it is awake and on USB power, see docs/DATA-SOURCES.md |
 | DELETE | `/api/alert` | Clear it, token required |
 | POST | `/api/device/telemetry` | Device pushes one sample every 5 min, `202` with `page_count` and `pages` (enabled page ids, in order), token or device key required |
 | GET | `/api/device/telemetry` | Latest sample plus sample count, oldest, newest |
