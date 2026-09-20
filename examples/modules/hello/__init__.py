@@ -1,8 +1,9 @@
 """A complete, minimal third-party page module: copy this directory.
 
 This is the running example for docs/MODULES.md. It shows the smallest
-module that draws a real page: no dataset, no push route, no settings
-section, just a page whose context comes straight off ``DashboardState``.
+module that draws a real page: no dataset, no push route, one settings
+field (its greeting, ``settings.py:HelloSettings``), a page whose context
+comes straight off ``DashboardState`` plus that one section.
 
 To install it on a real hub without packaging anything, copy this whole
 ``hello/`` directory to ``DATA_DIR/modules/hello/`` (see
@@ -22,6 +23,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.modules import Module, PageSpec
+
+from .settings import HelloSettings
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.models import DashboardState
@@ -48,10 +51,20 @@ def hello_context(state: DashboardState, settings: HubSettings) -> dict[str, Any
     or another module's blocks through ``state.block(name, Model)``; see
     ``app/modules/today/__init__.py`` (``app/view.py:today_context``) for
     that pattern with a dataset that might be missing.
+
+    ``settings.section("hello", HelloSettings)`` is the accessor a
+    third-party module uses to read its own settings section whether or
+    not core's ``HubSettings`` has ever heard of it
+    (``app/settings.py:HubSettings.section``): the value lands in
+    ``HubSettings.extra["hello"]`` once it is saved, and a hub that has
+    never saved this section gets ``HelloSettings()``'s own default,
+    never ``None``.
     """
+    own = settings.section("hello", HelloSettings)
     return {
         "timezone": state.timezone,
         "block_count": len(state.blocks),
+        "greeting": own.greeting,
     }
 
 
@@ -65,18 +78,15 @@ def hello_flag(state: DashboardState, settings: HubSettings) -> bool:
     return False
 
 
-#: settings_model is None: this example carries no settings of its own.
-#: The parallel package adding a generic ``hub_settings.section(name,
-#: model)`` accessor for third-party sections is not on this branch yet;
-#: once it lands, docs/MODULES.md documents how a module like this one
-#: gets a settings section without core knowing its name in advance. This
-#: module does not depend on it.
+#: settings_model is HelloSettings: this example has one settings field, its
+#: greeting, stored under the "hello" section (Module.section defaults to
+#: the module id). See docs/MODULES.md, "Settings for a module".
 MODULE = Module(
     id="hello",
     title="HELLO",
     version="1.0.0",
-    description="Minimal example module: one page, no dataset, no settings.",
-    settings_model=None,
+    description="Minimal example module: one page, no dataset, one settings field.",
+    settings_model=HelloSettings,
     page=PageSpec(
         title="HELLO",
         templates_dir=HERE / "templates",

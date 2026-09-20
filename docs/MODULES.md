@@ -16,9 +16,13 @@ shows up and renders.
 
 See `docs/plan/2026-09-19-settings-modules-provisioning.md` (phase 2,
 "pages as modules") for the design this document describes the shipped
-half of; a few pieces it mentions (a bespoke Modules section on
-`/settings`, a `hub_settings.section()` accessor for third-party settings)
-are still in progress and called out below where they matter.
+half of. The Modules section on `/settings` and the
+`HubSettings.section(name, model)` accessor for third-party settings
+(work package 2.1b) are both shipped and described below, in "Enabling,
+ordering and disabling a module" and "Settings for a module". Moving each
+built-in's own template and fixture into `app/modules/<id>/` (2.2) is not
+shipped yet, and does not change anything a third-party module author
+reads in this document.
 
 ## What a module is
 
@@ -132,13 +136,14 @@ module cannot overwrite the frame by accident or on purpose.
 `page_title` is set from `PageSpec.title` the same way, for the same
 reason: the footer and the title bar are what the device navigates by.
 
-Concretely, `examples/modules/hello/__init__.py:hello_context` returns
-only:
+Concretely, `examples/modules/hello/__init__.py:hello_context` returns:
 
 ```python
+own = settings.section("hello", HelloSettings)
 return {
     "timezone": state.timezone,
     "block_count": len(state.blocks),
+    "greeting": own.greeting,
 }
 ```
 
@@ -298,16 +303,18 @@ installed is kept and reported through `Registry.missing_ids()`
 (line 152-154), never silently dropped, so a module can come back after
 an upgrade without losing the row that named it.
 
-The plan's design for `/settings` is a dedicated Modules section: every
-installed module listed with an enable checkbox and an order field next
-to it, plus a warning line for a missing id. On this branch, `modules` is
-already a real settings section -- part of `HubSettings`
-(`app/settings.py:HubSettings.modules`), saved and loaded like any other
-section, and it already round-trips through the generic settings-section
-form generator (`dashboard/tests/test_modules.py:test_the_modules_section_round_trips_through_the_settings_form`).
-The module-aware version of the UI itself -- one row already filled in
-per installed module, not a blank form you type ids into -- is work
-package 2.1b and is not on this branch yet.
+`/settings` has a dedicated Modules section (`app/settings_pages.py:MODULES_SECTION`,
+rendered through the same generic form generator every other section
+uses): one row already filled in per installed module -- id, an enable
+checkbox, an order field -- not a blank form you type ids into, plus a
+warning line for a row naming a module that is not installed here
+(`app/settings_pages.py:_missing_module_warnings`). See docs/SETTINGS.md,
+"Modules", for the field-by-field table and the two rules the form
+enforces: at least one module with a page has to stay enabled, and a
+stored id for a module that is not installed is kept and reported, never
+silently dropped. `dashboard/tests/test_modules.py`'s "a third-party
+section" tests exercise this against a module core has never heard of, not
+only the built-ins.
 
 Disabling a module through this section takes effect on the next
 `Hub.reload()`: any page that draws one of its datasets falls back to
@@ -317,22 +324,56 @@ failing (`app/models.py:DashboardState.block`, lines 580-594).
 ## Settings for a module
 
 A module that needs its own settings sets `Module.settings_model` to a
-pydantic `BaseModel` subclass and, if the section name should differ
-from the module id, `Module.settings_section`
-(`app/modules/__init__.py:186-197`; see `app/modules/brief/__init__.py`
-for a module that uses both `settings_model` and a `section` constant
-imported from its own `settings.py`). `Registry.sections()`
-(`app/modules/registry.py:222-238`) collects every *installed* module's
-section, enabled or not, into the map `app/settings.py:SECTIONS` is
-built from, so a disabled module's settings still load, save and render.
+pydantic `BaseModel` subclass and, if the section name should differ from
+the module id, `Module.settings_section` (`app/modules/__init__.py:Module`;
+see `app/modules/brief/__init__.py` for a built-in that uses both
+`settings_model` and a `section` constant imported from its own
+`settings.py`). `Registry.sections()` (`app/modules/registry.py:Registry.sections`)
+collects every *installed* module's section, enabled or not, into the
+section map `app/settings.py:sections_for` builds `HubSettings` from, so
+a disabled module's settings still load, save and render, and still get a
+form on `/settings` (see "Enabling, ordering and disabling a module"
+above).
 
-`examples/modules/hello` sets `settings_model = None`: it has nothing to
-configure. The accessor a third-party module is meant to use to read and
-write its own settings section without core knowing its name in advance
-(sketched in the plan as `hub_settings.section(name, model)`) is being
-added in a parallel package and is not on this branch. Once it lands,
-`docs/SETTINGS.md` documents it; this example does not depend on it and
-neither should a module you write against this branch.
+Core has no fixed attribute for a third-party section: a built-in's
+section is one (`HubSettings.weather`, `HubSettings.tasks`, ...), but a
+module core has never heard of lands in `HubSettings.extra` instead
+(`app/settings.py:HubSettings.extra`). `HubSettings.section(name, model)`
+is the one accessor a module's context builder, adapter or route needs:
+it reads either kind without the caller having to know which, answers
+with `model()`'s own defaults rather than `None` when nothing has been
+saved yet, and re-validates a stored value through `model` if it was ever
+saved under a different one (a snapshot taken before the module was
+installed, say).
+
+`examples/modules/hello` uses exactly this. It sets
+`settings_model = HelloSettings` (`examples/modules/hello/settings.py`)
+and reads its own section in its context builder
+(`examples/modules/hello/__init__.py:hello_context`):
+
+```python
+own = settings.section("hello", HelloSettings)
+return {
+    "timezone": state.timezone,
+    "block_count": len(state.blocks),
+    "greeting": own.greeting,
+}
+```
+
+Disabling the module never drops its section or its row on `/settings`
+(see above): a disabled `hello`'s greeting is exactly as saved, whenever
+it is re-enabled. `docs/SETTINGS.md`, "Modules", documents the Modules
+section from the settings-page side; `dashboard/tests/test_modules.py`'s
+"a third-party section" tests and `dashboard/tests/modules/test_example_hello.py`
+prove the accessor and the rendered form both against a synthetic module
+and against this example.
+
+A field named `source` on your own model does not earn a "Save and test"
+button next to Save: that button only ever appears for the built-in
+sections named in `app/settings_pages.py:TESTABLE_SECTIONS`, because it
+runs a forced fetch through that section's own adapter on
+`StateService.adapters` (`app/state.py`), and core has no adapter
+registered under a third-party module's section name to fetch through.
 
 ## How to test a module
 

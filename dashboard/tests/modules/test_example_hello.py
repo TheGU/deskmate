@@ -90,3 +90,45 @@ def test_the_example_module_renders_an_800x480_png(
     image = Image.open(io.BytesIO(png.content))
     image.verify()
     assert Image.open(io.BytesIO(png.content)).size == DISPLAY_SIZE
+
+
+def test_the_hello_section_renders_on_the_settings_page(
+    hello_client: TestClient, hello_token: str
+) -> None:
+    """The example's own settings section (settings.py:HelloSettings) gets
+    a form on /settings, generated like any other section (app/forms.py),
+    exactly as docs/MODULES.md's "Settings for a module" describes."""
+    page = hello_client.get("/settings", headers=auth(hello_token))
+    assert page.status_code == 200
+    assert 'id="hello"' in page.text
+    assert 'action="/settings/hello"' in page.text
+    assert 'id="hello-greeting"' in page.text
+
+
+def test_posting_a_new_greeting_saves_and_reaches_the_rendered_page(
+    hello_client: TestClient, hello_token: str
+) -> None:
+    """What POST /settings/hello saves is what hello_context reads back
+    through ``settings.section("hello", HelloSettings)``
+    (examples/modules/hello/__init__.py:hello_context) and what the
+    rendered page prints."""
+    hub = hello_client.app.state.hub
+    before = hub.hub_settings.extra["hello"]
+    try:
+        response = hello_client.post(
+            "/settings/hello",
+            data={"action": "save", "greeting": "Howdy"},
+            headers=auth(hello_token),
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        settings_page = hello_client.get("/settings", headers=auth(hello_token))
+        assert 'value="Howdy"' in settings_page.text
+
+        html = hello_client.get("/preview/hello.html", headers=auth(hello_token))
+        assert html.status_code == 200
+        assert "Howdy" in html.text
+    finally:
+        hub.settings_store.save("hello", before)
+        asyncio.run(hub.reload())

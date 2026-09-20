@@ -142,10 +142,11 @@ Panel pages and the datasets behind them are moving to a module system
 (see docs/plan/2026-09-19-settings-modules-provisioning.md, phase 2): a
 module is a package that brings its own settings, adapter, template and
 fixture. [docs/MODULES.md](docs/MODULES.md) is the module authoring
-guide, with a complete minimal example at `examples/modules/hello/`. A
-few pieces phase 2 still has in progress (a bespoke Modules section on
-`/settings`, moving each built-in's template and fixture into its own
-package) are called out in that doc where they matter.
+guide, with a complete minimal example at `examples/modules/hello/`. The
+Modules section on `/settings` and the third-party settings accessor are
+shipped; moving each built-in's own template and fixture into its own
+package (phase 2's 2.2) is the one piece still in progress, called out in
+that doc where it matters.
 
 ## License
 

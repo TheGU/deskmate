@@ -169,8 +169,12 @@ class SectionForm:
     #: "Save and test" results: the adapter Outcome's status and error text.
     test_status: str = ""
     test_error: str = ""
-    #: True when the section has a ``source`` field, which is what decides
-    #: whether "Save and test" means anything for it.
+    #: True when the section has a ``source`` field. ``render_section`` sets
+    #: this from the model alone, so it is necessary but not sufficient for
+    #: "Save and test" to mean anything: a section needs an adapter core
+    #: knows how to force-fetch too (``app/settings_pages.py:TESTABLE_SECTIONS``),
+    #: which this module does not know about. ``_section_form`` narrows it to
+    #: testable sections before the template ever sees it.
     has_source: bool = False
     #: Lines the section wants shown above its inputs, in a warning box, that
     #: are nobody's validation message: the modules section uses it to name
