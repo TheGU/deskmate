@@ -46,12 +46,13 @@
     <a class="{{ 'active' if name == page else '' }}" href="/preview?page={{ name }}">{{ name }}</a>
     {% endfor %}
     <button onclick="location.href='/preview?page={{ page }}&amp;t=' + Date.now()">Refresh</button>
+    <a href="/settings">Settings</a>
   </nav>
   <nav>
     <button id="view-toggle" onclick="toggleView()">Simulated panel</button>
   </nav>
   <div class="pane">
-    <img class="frame" id="panel" src="/display/{{ page }}.png?t={{ cache_bust }}" width="800" height="480" alt="{{ page }} page, six-ink panel simulation" style="display: none;">
+    <img class="frame" id="panel" data-src="/display/{{ page }}.png?t={{ cache_bust }}" width="800" height="480" alt="{{ page }} page, six-ink panel simulation" style="display: none;">
     <iframe class="frame" id="raw" src="/preview/{{ page }}.html?t={{ cache_bust }}" title="{{ page }} html"></iframe>
     <div class="meta" id="scale-note">Updated {{ updated_label }}, timezone {{ timezone }}.</div>
     <div class="meta">
@@ -71,7 +72,14 @@
     }
 
     function applyView(showPanel) {
-      document.getElementById('panel').style.display = showPanel ? 'block' : 'none';
+      var image = document.getElementById('panel');
+      // The panel PNG is a Playwright render behind a lock: loading it on
+      // every navigation makes even the raw view wait on it. Fetch it only
+      // the first time the panel view is actually shown.
+      if (showPanel && !image.getAttribute('src')) {
+        image.src = image.getAttribute('data-src');
+      }
+      image.style.display = showPanel ? 'block' : 'none';
       document.getElementById('raw').style.display = showPanel ? 'none' : 'block';
       document.getElementById('view-toggle').textContent = showPanel ? 'Raw HTML' : 'Simulated panel';
       document.getElementById('view-toggle').className = showPanel ? 'active' : '';
