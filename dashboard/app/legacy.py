@@ -90,6 +90,13 @@ DEFAULT_CALENDAR_COLORS: Final[tuple[str, ...]] = ("blue", "green", "yellow")
 #: there is one path, and demo data is the explicit ``fixture`` choice.
 _PUSHED_SOURCES: Final[frozenset[str]] = frozenset({"auto", "file"})
 
+#: The tasks section's own removed selector: the hub reading a mounted
+#: Obsidian vault directly. Tasks now reach the hub only through the push
+#: API (a local agent reads the owner's own vault and pushes instead, see
+#: docs/LOCAL-AGENT.md), so an old ``TASKS_SOURCE=obsidian`` also imports as
+#: ``push``, logged since silently dropping it would look like data loss.
+_REMOVED_TASKS_SOURCE: Final[str] = "obsidian"
+
 
 class LegacyEnv(BaseSettings):
     """The pre-database ``config.py:Settings`` field list, frozen in place.
@@ -243,6 +250,22 @@ def pushed_source(value: str) -> str:
     return "push" if value in _PUSHED_SOURCES else value
 
 
+def _tasks_source(value: str) -> str:
+    """Like :func:`pushed_source`, plus the removed ``obsidian`` source: an
+    old ``.env`` with ``TASKS_SOURCE=obsidian`` imports as ``push``, logged
+    at WARNING since the hub no longer reads a vault directly and the local
+    agent pushes tasks instead (docs/LOCAL-AGENT.md)."""
+    if value == _REMOVED_TASKS_SOURCE:
+        log(
+            logger,
+            logging.WARNING,
+            "TASKS_SOURCE=obsidian was removed; imported as push - the local "
+            "agent pushes tasks instead of the hub reading a vault directly",
+        )
+        return "push"
+    return pushed_source(value)
+
+
 def _split(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -318,9 +341,7 @@ def section_documents(env: LegacyEnv) -> dict[str, dict[str, Any]]:
     documents: dict[str, dict[str, Any]] = {
         "general": {"timezone": env.timezone, "units": env.units},
         "tasks": {
-            "source": pushed_source(env.tasks_source),
-            "obsidian_vault_path": _as_text(env.obsidian_vault_path),
-            "obsidian_task_glob": env.obsidian_task_glob,
+            "source": _tasks_source(env.tasks_source),
             "max_priority_tasks": env.max_priority_tasks,
             "ttl_seconds": env.tasks_ttl_seconds,
             "stale_seconds": env.tasks_stale_seconds,
@@ -369,10 +390,6 @@ def section_documents(env: LegacyEnv) -> dict[str, dict[str, Any]]:
         for section, document in documents.items()
         if any(name in configured for name in _SECTION_TRIGGERS[section])
     }
-
-
-def _as_text(value: Path | None) -> str:
-    return "" if value is None else str(value)
 
 
 # ---------------------------------------------------------------------------
