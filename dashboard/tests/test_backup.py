@@ -668,7 +668,6 @@ def test_the_settings_page_carries_the_three_forms_and_the_warnings(hub: Claimed
     assert page.text.count('name="confirm"') == 2
     assert "session secret" in page.text
     assert "DATA_DIR/modules" in page.text
-    assert "Obsidian vault" in page.text
     assert "stops fetching" in page.text
     assert "data/deskmate.sqlite" in page.text
 

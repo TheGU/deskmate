@@ -28,12 +28,10 @@ the middle argument::
 ``home`` and ``device`` never touch a timezone (Home Assistant states and
 device telemetry are shown as-is or timestamped in UTC upstream), so they
 skip ``general`` entirely rather than accept and ignore it. Within a builder,
-an individual adapter class only stores the pieces it actually reads (for
-example ``ObsidianTasksAdapter`` keeps ``tasks`` and ``env`` but not
-``general``, since a vault scan never shifts a date); the builder function
-itself always takes the full triple (or pair) so every source under one
-dataset is constructed the same way. This replaces the single
-``config.Settings`` object every adapter took through 1.2a.
+an individual adapter class only stores the pieces it actually reads; the
+builder function itself always takes the full triple (or pair) so every
+source under one dataset is constructed the same way. This replaces the
+single ``config.Settings`` object every adapter took through 1.2a.
 """
 
 from __future__ import annotations
@@ -71,7 +69,7 @@ class Adapter(Protocol[T]):
 
     #: Adapter slot, e.g. ``tasks``.
     name: str
-    #: Selected source, e.g. ``fixture`` or ``obsidian``.
+    #: Selected source, e.g. ``fixture`` or ``push``.
     source: str
 
     async def fetch(self) -> T:

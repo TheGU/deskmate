@@ -7,8 +7,8 @@ file's. The hub is claimed once for the module; datasets are pushed in a
 fixed order.
 
 1.2d note: ``push`` is now the only "real" tasks/ai_usage/brief selector
-(``obsidian`` and ``fixture`` are the other two); it reads the matching row
-of the ``datasets`` table (``app/datasets.py``) directly, so unlike the old
+(``fixture`` is the other one); it reads the matching row of the
+``datasets`` table (``app/datasets.py``) directly, so unlike the old
 ``auto`` selector it never falls back to fixture data on its own before the
 first push - a fresh hub on ``push`` shows ``unavailable`` until something is
 posted. The "auto resolves to fixture before, file after" story this file
@@ -323,26 +323,3 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
     assert ai_usage.json()["source"] == "fixture"
     assert brief.json()["source"] == "fixture"
     assert tasks.json()["source"] == "fixture"
-
-
-def test_push_tasks_warns_and_reports_obsidian_when_that_is_the_selector(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> None:
-    """Pushing tasks.json while the tasks source is obsidian does not change
-    what the panel shows (it still reads the vault): source names
-    the selector verbatim ("obsidian", not "fixture"), and the warning does
-    too."""
-    data_dir = tmp_path_factory.mktemp("push-obsidian")
-    env = Env(
-        _env_file=None,
-        DATA_DIR=data_dir,
-        LOG_LEVEL="WARNING",
-    )
-    hub_settings = HubSettings(tasks=TasksSettings(source="obsidian"))
-    app = create_app(env, hub_settings)
-    with TestClient(app) as client:
-        obsidian_token = _claim(client)
-        response = client.post("/api/tasks", json={"tasks": []}, headers=auth(obsidian_token))
-    body = response.json()
-    assert body["source"] == "obsidian"
-    assert body["warning"] == "tasks.source is obsidian; the panel will not show this push"

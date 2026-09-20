@@ -27,8 +27,7 @@ answer three questions before anything is replaced:
 
 A backup carries the session secret, every secret hash and any Home Assistant
 token, so it is a credential in its own right; it does **not** carry
-``DATA_DIR/modules/`` or an Obsidian vault, which are files on disk beside
-the database.
+``DATA_DIR/modules/``, which is files on disk beside the database.
 """
 
 from __future__ import annotations

@@ -221,7 +221,7 @@ class _Spec:
 
 
 def label_for(name: str) -> str:
-    """``obsidian_vault_path`` as "Obsidian vault path".
+    """``weather_location_name`` as "Weather location name".
 
     The label is the field name, not a second string to keep in step with
     it. :data:`_LABEL_WORDS` only fixes the few words that read as

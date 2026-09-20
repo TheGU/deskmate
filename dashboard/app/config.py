@@ -7,8 +7,8 @@ hub's own database through ``app/settings.py:SettingsStore``. What is left
 here is process and container configuration that makes no sense as a
 settings-page field, plus the demo knobs used only in development
 (plan section "What stays in the environment"). Compose keeps ``HUB_PORT``,
-``PUID``, ``PGID`` and the Obsidian bind mount path, which are never read
-here. ``app/legacy.py:LegacyEnv`` is the only place the old, now-removed
+``PUID`` and ``PGID``, which are never read here.
+``app/legacy.py:LegacyEnv`` is the only place the old, now-removed
 environment variable names survive, for the one-time import of a
 pre-database install.
 """

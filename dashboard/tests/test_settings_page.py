@@ -459,8 +459,6 @@ def test_save_and_test_on_a_disabled_module_section_is_a_message_not_a_500(
         headers=admin.auth,
         data={
             "source": "fixture",
-            "obsidian_vault_path": "",
-            "obsidian_task_glob": "**/*.md",
             "max_priority_tasks": "3",
             "ttl_seconds": "300",
             "stale_seconds": "36000",
