@@ -17,10 +17,10 @@ directly: a module installed into ``DATA_DIR/modules/`` exists only at
 runtime, so the running hub passes :func:`sections_for` over its own
 registry and that module's section is loaded, saved and rendered like any
 built-in (its value lands in :attr:`HubSettings.extra`, read back through
-:meth:`HubSettings.section`). A missing row means defaults; a row that fails to parse or
-fails validation is a WARNING and defaults, never a crash, so a hub with one
-bad section keeps serving the others (and its own honest empty state) while
-an admin fixes it on the settings page. ``app/main.py:Hub`` builds one
+:meth:`HubSettings.section`). A missing row means defaults; a row that fails
+to parse or fails validation is a WARNING and defaults, never a crash, so a
+hub with one bad section keeps serving the others (and its own honest empty
+state) while an admin fixes it on the settings page. ``app/main.py:Hub`` builds one
 ``SettingsStore`` over the hub's database at startup and reads its
 :meth:`SettingsStore.snapshot` as ``HubSettings`` (and again on every
 ``Hub.reload``), so a section saved here - through the settings page, or
