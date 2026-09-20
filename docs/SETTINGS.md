@@ -195,6 +195,10 @@ nothing configured shows every block's honest empty state, never demo data.
 `fixture` is always available as an explicit choice for development or a
 live demo.
 
+Every row here runs with the hub's own privileges (see docs/MODULES.md):
+enabling a row is not a sandboxed permission, it is running that module's
+code with this hub's database, data directory and network.
+
 **HA Dashboard** (`ha_dashboard`, off by default)
 
 | Field | Default | Notes |

@@ -75,6 +75,10 @@ Volumes (already wired in `docker-compose.yml`):
 - an optional Obsidian vault, read only, if `OBSIDIAN_VAULT_PATH` is set in
   `.env` and the tasks section's source is set to `obsidian` on
   `/settings`.
+- an optional bind mount under `/data/modules/<name>/` for a module
+  installed by directory drop (docs/MODULES.md): whatever you mount there
+  runs as the hub's own code, with the hub's database, data directory and
+  network, so mount only a module directory you have read or trust.
 
 `.env` holds only what is left outside the database: `HUB_PORT`, `PUID`,
 `PGID`, `OBSIDIAN_VAULT_PATH`, `LOG_LEVEL` and a few process knobs - see
