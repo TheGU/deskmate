@@ -10,6 +10,7 @@ docs/plan/2026-09-19-settings-modules-provisioning.md (phase 2) holds.
 from __future__ import annotations
 
 import asyncio
+import sys
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -561,6 +562,31 @@ def test_a_module_directory_without_an_init_is_ignored(hello_data_dir: Path) -> 
     (hello_data_dir / "modules" / "not-a-package").mkdir(exist_ok=True)
     ids = {module.id for module in directory_modules(hello_data_dir)}
     assert ids == {"hello"}
+
+
+def test_a_module_directory_shadowing_an_installed_package_refuses_to_load(
+    tmp_path: Path,
+) -> None:
+    """``DATA_DIR/modules/calendar/`` used to replace the standard library's
+    own ``calendar`` module for the rest of the process: ``directory_modules``
+    put the data directory at the front of ``sys.path`` and evicted whatever
+    was already in ``sys.modules`` under that name before importing its own,
+    so ``import calendar`` anywhere else in the process returned the dropped
+    package instead. It has to refuse instead, and it has to do so without
+    ever touching the real ``calendar`` module."""
+    import calendar as stdlib_calendar
+
+    month_name = stdlib_calendar.month_name
+
+    data_dir = tmp_path / "shadow"
+    write_hello_module(data_dir, package="calendar")
+
+    with pytest.raises(ModuleError, match="calendar.*shadows an installed package"):
+        directory_modules(data_dir)
+
+    assert "calendar" in sys.modules
+    assert sys.modules["calendar"] is stdlib_calendar
+    assert stdlib_calendar.month_name is month_name
 
 
 # ---------------------------------------------------------------------------
