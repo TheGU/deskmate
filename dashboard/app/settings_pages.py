@@ -144,6 +144,11 @@ def _section_form(
         current.model_dump() if values is None else values,
         errors=errors,
     )
+    # render_section only knows whether the model has a "source" field; it
+    # does not know TESTABLE_SECTIONS, so a third-party section that happens
+    # to declare its own "source" field would otherwise get a "Save and
+    # test" button with no adapter behind it.
+    form.has_source = form.has_source and section in TESTABLE_SECTIONS
     if section == MODULES_SECTION:
         form.warnings = _missing_module_warnings(hub)
     if section == "weather":

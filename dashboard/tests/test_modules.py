@@ -39,6 +39,7 @@ from app.modules.registry import (
     directory_modules,
 )
 from app.settings import SECTIONS, HubSettings
+from app.settings_pages import TESTABLE_SECTIONS
 from tests.conftest import make_state
 from tests.test_forms import submission
 from tests.test_settings_page import AdminHub
@@ -205,6 +206,80 @@ def write_greeter_module(data_dir: Path) -> Path:
     (root / "templates").mkdir(parents=True, exist_ok=True)
     (root / "__init__.py").write_text(GREETER_PACKAGE, encoding="utf-8")
     (root / "templates" / "greeter.html").write_text(GREETER_TEMPLATE, encoding="utf-8")
+    return root
+
+
+#: A third module, whose settings section declares a ``source`` field of its
+#: own but is not one of ``app/settings_pages.py:TESTABLE_SECTIONS`` (only
+#: built-ins are on that list): the field alone must not earn it a "Save and
+#: test" button, since core has no adapter registered under "sourcey" to
+#: force-fetch through.
+SOURCEY_PACKAGE = '''\
+"""A module whose settings section has a "source" field core cannot test."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+from app.modules import Module, PageSpec
+
+HERE = Path(__file__).resolve().parent
+
+
+class SourceySettings(BaseModel):
+    """Looks like a testable section; is not one."""
+
+    source: str = Field(default="push", description="No adapter reads this.")
+
+
+def sourcey_context(state, settings):
+    return {"greeting": "hi"}
+
+
+MODULE = Module(
+    id="sourcey",
+    title="SOURCEY",
+    version="1.0.0",
+    description="A settings section with a source field core cannot test.",
+    settings_model=SourceySettings,
+    page=PageSpec(
+        title="SOURCEY",
+        templates_dir=HERE / "templates",
+        template="sourcey.html",
+        context=sourcey_context,
+        render_ttl_seconds=60.0,
+    ),
+    default_order=96,
+)
+'''
+
+SOURCEY_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      {{ font_css }}
+      html, body { margin: 0; width: 800px; height: 480px; background: #ffffff; }
+      h1 { font-family: 'Google Sans', sans-serif; font-size: 40px; padding: 24px; }
+    </style>
+  </head>
+  <body>
+    <h1>{{ page_title }}</h1>
+    <p>{{ greeting }}</p>
+  </body>
+</html>
+"""
+
+
+def write_sourcey_module(data_dir: Path) -> Path:
+    """Install the module above under ``data_dir/modules/sourcey``."""
+    root = data_dir / "modules" / "sourcey"
+    (root / "templates").mkdir(parents=True, exist_ok=True)
+    (root / "__init__.py").write_text(SOURCEY_PACKAGE, encoding="utf-8")
+    (root / "templates" / "sourcey.html").write_text(SOURCEY_TEMPLATE, encoding="utf-8")
     return root
 
 
@@ -517,6 +592,8 @@ def test_the_example_package_is_plain_ascii() -> None:
     assert HELLO_TEMPLATE.isascii()
     assert textwrap.dedent(GREETER_PACKAGE).isascii()
     assert GREETER_TEMPLATE.isascii()
+    assert textwrap.dedent(SOURCEY_PACKAGE).isascii()
+    assert SOURCEY_TEMPLATE.isascii()
 
 
 # ---------------------------------------------------------------------------
@@ -595,3 +672,44 @@ def test_a_disabled_third_party_module_keeps_its_section(greeter: AdminHub) -> N
     assert greeter_settings(greeter).greeting == "bonjour"
     page = greeter.client.get("/settings", headers=greeter.auth)
     assert 'action="/settings/greeter"' in page.text
+
+
+# ---------------------------------------------------------------------------
+# "Save and test" only for sections core can actually test
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def sourcey(tmp_path: Path) -> Iterator[AdminHub]:
+    """A claimed hub with a module whose settings model has a ``source``
+    field, but whose section is not in ``TESTABLE_SECTIONS``."""
+    data_dir = tmp_path / "live"
+    write_sourcey_module(data_dir)
+    hub = AdminHub(data_dir)
+    yield hub
+    hub.hub.db.close()
+
+
+def _section_html(page_text: str, section: str) -> str:
+    """The one ``<section id="...">...</section>`` block for ``section``,
+    from a rendered /settings page: slicing it out is what lets a test say
+    "this section's button", not just "the button is on the page somewhere"."""
+    start = page_text.index(f'id="{section}"')
+    return page_text[start : page_text.index("</section>", start)]
+
+
+def test_a_source_field_alone_is_not_testable(sourcey: AdminHub) -> None:
+    """``source`` is necessary but not sufficient: ``sourcey`` is not on
+    ``TESTABLE_SECTIONS`` (app/settings_pages.py), so its section renders
+    with no adapter core could force-fetch through, and so no button."""
+    assert "sourcey" not in TESTABLE_SECTIONS
+    page = sourcey.client.get("/settings", headers=sourcey.auth)
+    assert page.status_code == 200
+    assert 'action="/settings/sourcey"' in page.text
+    assert "Save and test" not in _section_html(page.text, "sourcey")
+
+
+def test_a_testable_builtin_section_still_gets_its_button(sourcey: AdminHub) -> None:
+    """The fix for the case above must not cost weather (a real
+    ``TESTABLE_SECTIONS`` member) its own button."""
+    assert "weather" in TESTABLE_SECTIONS
+    page = sourcey.client.get("/settings", headers=sourcey.auth)
+    assert "Save and test" in _section_html(page.text, "weather")
