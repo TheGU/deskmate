@@ -441,6 +441,44 @@ def test_save_and_test_reports_a_working_source(admin: AdminHub) -> None:
     assert "Test: ok" in body[: body.index("</section>")]
 
 
+def test_save_and_test_on_a_disabled_module_section_is_a_message_not_a_500(
+    admin: AdminHub,
+) -> None:
+    """Tasks (and Home, System, Agenda) can be disabled from the Modules
+    section, but the settings page still shows the Tasks form and its "Save
+    and test" button until the page is reloaded. Posting "test" against a
+    disabled module's section used to index ``state_service.adapters[section]``
+    directly and raise a ``KeyError`` (a 500) after the row had already been
+    saved. It has to come back as the same message shape a real test uses.
+    """
+    disabled = save_modules(admin, disable={"tasks"})
+    assert disabled.status_code == 303
+
+    response = admin.client.post(
+        "/settings/tasks",
+        headers=admin.auth,
+        data={
+            "source": "fixture",
+            "obsidian_vault_path": "",
+            "obsidian_task_glob": "**/*.md",
+            "max_priority_tasks": "3",
+            "ttl_seconds": "300",
+            "stale_seconds": "36000",
+            "action": "test",
+        },
+    )
+
+    assert response.status_code == 200
+    # The row was still saved: disabling the module never stops that.
+    assert admin.hub.settings_store.load("tasks").source == "fixture"
+    body = response.text[response.text.index('id="tasks"') :]
+    section_body = body[: body.index("</section>")]
+    assert "Test: unavailable" in section_body
+    assert "disabled" in section_body
+    # No traceback: gone is gone, this is a normal 200 settings page.
+    assert "Traceback" not in response.text
+
+
 # ---------------------------------------------------------------------------
 # the wizard
 # ---------------------------------------------------------------------------
@@ -796,6 +834,52 @@ def test_an_id_that_is_not_installed_is_kept_and_warned_about(admin: AdminHub) -
     stored = admin.hub.settings_store.load("modules")
     assert "ghost" in [row.id for row in stored.items]
     assert 'value="ghost"' in page.text
+
+
+def test_a_module_toggle_id_outside_the_pattern_is_a_field_error(admin: AdminHub) -> None:
+    """``ModuleToggle.id`` used to be a plain unbounded ``str``: nothing
+    between a hand-made POST and whatever later reads the id as a template
+    fragment, a dict key or a filesystem-adjacent name. A path-shaped value
+    like ``"../x"`` has to be refused as a field error, the same as any
+    other id would be, with nothing stored."""
+    before = admin.hub.settings_store.load("modules")
+
+    response = admin.client.post(
+        "/settings/modules",
+        headers=admin.auth,
+        data={
+            "items-0-id": "../x",
+            "items-0-enabled": ["0", "1"],
+            "items-0-order": "",
+            "action": "save",
+        },
+    )
+
+    assert response.status_code == 422
+    assert '<p class="field-error">String should match pattern' in response.text
+    assert admin.hub.settings_store.load("modules") == before
+
+
+def test_settings_warns_when_no_page_is_enabled(admin: AdminHub) -> None:
+    """The settings page's own form save always refuses to leave no page
+    enabled (see ``test_disabling_every_page_is_refused_with_a_field_error``
+    below), but a restore can still put the hub in that state (it swaps the
+    whole database in, after the fact). Writing the row directly, the way a
+    restore effectively does, is what proves the warning is not only wired
+    to the save route's own refusal path."""
+    admin.hub.settings_store.save(
+        "modules",
+        ModulesSettings(
+            items=[ModuleToggle(id=page_id, enabled=False) for page_id in admin.hub.registry.page_ids()]
+        ),
+    )
+    asyncio.run(admin.hub.reload())
+    assert not admin.hub.registry.pages()
+
+    page = admin.client.get("/settings", headers=admin.auth)
+    assert page.status_code == 200
+    body = page.text[page.text.index('id="modules"') :]
+    assert "No enabled module draws a page" in body[: body.index("</section>")]
 
 
 def test_disabling_every_page_is_refused_with_a_field_error(admin: AdminHub) -> None:

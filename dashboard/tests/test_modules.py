@@ -10,19 +10,26 @@ docs/plan/2026-09-19-settings-modules-provisioning.md (phase 2) holds.
 from __future__ import annotations
 
 import asyncio
+import logging
+import sys
 import textwrap
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
+from pydantic import BaseModel
 from starlette.datastructures import FormData
 
 from app.config import Env
+from app.db import get_database
 from app.forms import parse_section, render_section
-from app.main import create_app
+from app.main import Hub, create_app
 from app.models import TasksBlock
 from app.modules import (
     DatasetSpec,
@@ -35,12 +42,15 @@ from app.modules.registry import (
     ModulesSettings,
     ModuleToggle,
     Registry,
+    builtin_modules,
     builtin_registry,
     directory_modules,
 )
+from app.renderer.palette import DISPLAY_SIZE
+from app.renderer.render import Renderer
 from app.settings import SECTIONS, HubSettings
 from app.settings_pages import TESTABLE_SECTIONS
-from tests.conftest import make_state
+from tests.conftest import make_state, run
 from tests.test_forms import submission
 from tests.test_settings_page import AdminHub
 
@@ -316,6 +326,23 @@ def test_an_id_outside_the_pattern_refuses_to_load(bad: str) -> None:
         validate_module(_module(id=bad))
 
 
+def test_an_id_longer_than_the_telemetry_page_column_refuses_to_load() -> None:
+    """A page id is a module id verbatim, and a device echoes it back on
+    every ``POST /api/device/telemetry`` (``app/models.py:DeviceTelemetry.page``,
+    capped at 32 characters). An id that loads here but does not fit there
+    would 400 every telemetry post from a device sitting on that page."""
+    too_long = "a" + "b" * 32
+    assert len(too_long) > 32
+    with pytest.raises(ModuleError, match="32"):
+        validate_module(_module(id=too_long))
+
+
+def test_an_id_exactly_at_the_length_cap_loads() -> None:
+    exactly_32 = "a" + "b" * 31
+    assert len(exactly_32) == 32
+    validate_module(_module(id=exactly_32))
+
+
 def test_a_dataset_name_outside_the_pattern_refuses_to_load() -> None:
     spec = DatasetSpec(
         name="Not A Name",
@@ -391,6 +418,89 @@ def test_two_modules_claiming_one_dataset_refuse_to_load() -> None:
     )
     with pytest.raises(ModuleError, match="both provide the dataset"):
         Registry([_module(id="one", datasets=(spec,)), _module(id="two", datasets=(spec,))])
+
+
+class _DummySettings(BaseModel):
+    """A settings model with nothing in it: only its section name matters
+    to the tests below."""
+
+
+def test_a_settings_section_reserved_for_core_refuses_to_load() -> None:
+    with pytest.raises(ModuleError, match="general.*reserved for core"):
+        validate_module(
+            _module(settings_model=_DummySettings, settings_section="general")
+        )
+
+
+@pytest.mark.parametrize("section", ["general", "device", "alert", "modules"])
+def test_every_reserved_section_refuses_to_load(section: str) -> None:
+    with pytest.raises(ModuleError, match="reserved for core"):
+        validate_module(
+            _module(settings_model=_DummySettings, settings_section=section)
+        )
+
+
+def test_two_modules_claiming_the_same_settings_section_refuse_to_load() -> None:
+    with pytest.raises(ModuleError, match="both own the settings section 'shared'"):
+        Registry(
+            [
+                _module(id="one", settings_model=_DummySettings, settings_section="shared"),
+                _module(id="two", settings_model=_DummySettings, settings_section="shared"),
+            ]
+        )
+
+
+def test_a_third_party_module_claiming_a_builtin_section_refuses_to_load() -> None:
+    """Weather is not in RESERVED_SECTIONS - it belongs to the built-in
+    weather module, not core - so this has to be caught as a duplicate
+    section owner, not a reserved-word refusal, and the message has to name
+    both modules."""
+    modules = [
+        *builtin_modules(),
+        _module(id="rival", settings_model=_DummySettings, settings_section="weather"),
+    ]
+    with pytest.raises(ModuleError, match="both own the settings section 'weather'"):
+        Registry(modules)
+
+
+# ---------------------------------------------------------------------------
+# a module's own screenshot renderer (app/renderer/render.py)
+# ---------------------------------------------------------------------------
+async def _oversized_screenshot(browser: Any, state: Any, settings: Any) -> Image.Image:
+    """A ``ScreenshotFn`` that ignores everything it is handed and returns an
+    image the wrong size, the way a careless third-party module might."""
+    return Image.new("RGB", (1024, 600), "white")
+
+
+def test_a_module_screenshot_the_wrong_size_is_forced_to_the_display_size(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The template path always hands back exactly ``DISPLAY_SIZE``
+    (Chromium's own clip guarantees it, and a mismatch there is already a
+    warning); a module's ``ScreenshotFn`` is arbitrary code with no such
+    guarantee and used to be trusted after nothing but ``convert("RGB")``.
+    It must not silently misdraw the panel - it gets resized, loudly."""
+    module = _module(
+        id="oversized",
+        page=_page(template=None, screenshot=_oversized_screenshot),
+    )
+    renderer = Renderer(env, HubSettings(), Registry([module]))
+    state = make_state(
+        generated_at=datetime(2026, 9, 20, 9, 0, tzinfo=ZoneInfo("Asia/Bangkok"))
+    )
+    try:
+        run(renderer.start())
+        with caplog.at_level(logging.WARNING, logger="app.render"):
+            image = run(renderer.render_rgb("oversized", state))
+    finally:
+        run(renderer.close())
+
+    assert image.size == DISPLAY_SIZE
+    assert any(
+        getattr(record, "fields", {}).get("page") == "oversized"
+        and getattr(record, "fields", {}).get("actual") == (1024, 600)
+        for record in caplog.records
+    )
 
 
 def test_the_built_in_pages_keep_their_ids_and_their_order() -> None:
@@ -561,6 +671,242 @@ def test_a_module_directory_without_an_init_is_ignored(hello_data_dir: Path) -> 
     (hello_data_dir / "modules" / "not-a-package").mkdir(exist_ok=True)
     ids = {module.id for module in directory_modules(hello_data_dir)}
     assert ids == {"hello"}
+
+
+def test_a_module_directory_shadowing_an_installed_package_refuses_to_load(
+    tmp_path: Path,
+) -> None:
+    """``DATA_DIR/modules/calendar/`` used to replace the standard library's
+    own ``calendar`` module for the rest of the process: ``directory_modules``
+    put the data directory at the front of ``sys.path`` and evicted whatever
+    was already in ``sys.modules`` under that name before importing its own,
+    so ``import calendar`` anywhere else in the process returned the dropped
+    package instead. It has to refuse instead, and it has to do so without
+    ever touching the real ``calendar`` module."""
+    import calendar as stdlib_calendar
+
+    month_name = stdlib_calendar.month_name
+
+    data_dir = tmp_path / "shadow"
+    write_hello_module(data_dir, package="calendar")
+
+    with pytest.raises(ModuleError, match="calendar.*shadows an installed package"):
+        directory_modules(data_dir)
+
+    assert "calendar" in sys.modules
+    assert sys.modules["calendar"] is stdlib_calendar
+    assert stdlib_calendar.month_name is month_name
+
+
+# ---------------------------------------------------------------------------
+# a module route colliding with a core path (app/main.py:create_app)
+# ---------------------------------------------------------------------------
+#: A module whose push route is "/alert" - the same path core's own
+#: POST/DELETE /api/alert answers, once mounted under the shared "/api"
+#: prefix every module router gets. Written to disk (not built in Python
+#: and handed to a Registry directly) because the collision check lives in
+#: create_app's own route-mounting loop, which only ever sees modules the
+#: normal discovery paths found.
+SHADOW_ALERT_PACKAGE = '''\
+"""A module that declares a route colliding with a core path."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from app.modules import Module, ModuleContext
+
+
+def _routes(context: ModuleContext) -> APIRouter:
+    router = APIRouter()
+
+    @router.post("/alert")
+    async def shadow_alert() -> dict:
+        return {"shadowed": True}
+
+    return router
+
+
+MODULE = Module(
+    id="shadow",
+    title="SHADOW",
+    version="1.0.0",
+    description="Declares POST /alert, which core already owns under /api.",
+    routes=_routes,
+)
+'''
+
+
+def write_shadow_alert_module(data_dir: Path) -> Path:
+    root = data_dir / "modules" / "shadow"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "__init__.py").write_text(SHADOW_ALERT_PACKAGE, encoding="utf-8")
+    return root
+
+
+def test_a_module_route_colliding_with_a_core_path_refuses_to_load(tmp_path: Path) -> None:
+    """Module routers used to be mounted before core's own /api/alert and
+    /api/device/telemetry routes were even declared, so a module route of
+    the same path would shadow core's - Starlette matches in declaration
+    order - silently, for as long as the process stayed up. core's routes
+    are declared first now, and this is the belt: a collision refuses to
+    load at all rather than merely losing the ordering race the other way."""
+    data_dir = tmp_path / "shadow-route"
+    write_shadow_alert_module(data_dir)
+    env = Env(_env_file=None, DATA_DIR=data_dir, LOG_LEVEL="WARNING")
+
+    try:
+        with pytest.raises(ModuleError, match="POST /api/alert.*collides with a core path"):
+            create_app(env)
+    finally:
+        get_database(env.hub_db_file).close()
+
+
+def test_an_ordinary_module_route_still_mounts_and_answers(tmp_path: Path) -> None:
+    """The sanity check the refusal above needs: a module route that does
+    not collide with anything still mounts under /api and still answers, so
+    the fix is a refusal for a real collision, not routers failing to mount
+    in general once core's own routes come first."""
+    data_dir = tmp_path / "harmless-route"
+    root = data_dir / "modules" / "harmless"
+    root.mkdir(parents=True)
+    (root / "__init__.py").write_text(
+        textwrap.dedent(
+            '''\
+            from __future__ import annotations
+
+            from fastapi import APIRouter
+            from fastapi.responses import JSONResponse
+
+            from app.modules import Module, ModuleContext
+
+
+            def _routes(context: ModuleContext) -> APIRouter:
+                router = APIRouter()
+
+                @router.post("/harmless")
+                async def harmless() -> JSONResponse:
+                    return JSONResponse({"ok": True})
+
+                return router
+
+
+            MODULE = Module(
+                id="harmless",
+                title="HARMLESS",
+                version="1.0.0",
+                description="A push route with no collision.",
+                routes=_routes,
+            )
+            '''
+        ),
+        encoding="utf-8",
+    )
+    env = Env(_env_file=None, DATA_DIR=data_dir, LOG_LEVEL="WARNING")
+    app = create_app(env)
+    try:
+        secrets = asyncio.run(
+            app.state.hub.identity.claim(
+                name="deskmate", base_url="http://dashboard-hub.lan:8080"
+            )
+        )
+        client = TestClient(app)
+        response = client.post(
+            "/api/harmless", headers={"Authorization": f"Bearer {secrets.token}"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+    finally:
+        app.state.hub.db.close()
+
+
+# ---------------------------------------------------------------------------
+# reload publishes registry, state_service and renderer together
+# (app/main.py:Hub.reload)
+# ---------------------------------------------------------------------------
+def _same_generation(hub: "Hub") -> bool:
+    """Whether ``hub.registry``, its state service's own registry and its
+    renderer's own registry are literally the same object.
+
+    ``Hub._rebuild`` used to assign ``self.registry`` from inside the
+    threadpool call ``reload`` awaits it through, while ``state_service`` and
+    ``renderer`` were only rebuilt after that call returned: a request
+    landing on the event loop in that window read a new registry paired with
+    an old state service, so a page a settings save had just enabled was a
+    KeyError there instead of a render. Identity (``is``), not equality: two
+    separately-built registries over the same settings could compare equal
+    without being the one object every reader is holding.
+    """
+    return (
+        hub.registry is hub.state_service._registry  # noqa: SLF001 - the whole point of this check
+        and hub.registry is hub.renderer.registry
+    )
+
+
+def test_reload_leaves_registry_state_service_and_renderer_in_step(tmp_path: Path) -> None:
+    env = Env(_env_file=None, DATA_DIR=tmp_path / "reload-step", LOG_LEVEL="WARNING")
+    hub = Hub(env)
+    try:
+        assert _same_generation(hub)
+        before = hub.registry
+
+        hub.settings_store.save(
+            "modules", ModulesSettings(items=[ModuleToggle(id="weather", enabled=False)])
+        )
+        run(hub.reload())
+
+        assert _same_generation(hub)
+        # And it really did rebuild, not just re-check the same objects.
+        assert hub.registry is not before
+    finally:
+        hub.db.close()
+
+
+def test_reload_never_publishes_a_torn_pair_under_a_slow_rebuild(tmp_path: Path) -> None:
+    """The regression this closes: a concurrent reader on the event loop
+    must never see a new registry paired with an old state service or
+    renderer while ``_rebuild`` is still running in its threadpool.
+
+    ``_rebuild`` is monkeypatched to sleep *after* doing its real work but
+    *before* returning, which is exactly the window the old code's
+    assignment of ``self.registry`` from inside that call would have opened:
+    if this were still assigning eagerly, ``hub.registry`` would already be
+    the new one here while ``hub.state_service``/``hub.renderer`` were still
+    the old ones. A background task samples ``_same_generation`` on every
+    loop iteration for the duration of the sleep; the assertion is that
+    every single sample agreed, not just the ones before and after.
+    """
+    env = Env(_env_file=None, DATA_DIR=tmp_path / "reload-torn", LOG_LEVEL="WARNING")
+    hub = Hub(env)
+    try:
+        real_rebuild = Hub._rebuild
+
+        def slow_rebuild(self: Hub, seed: HubSettings | None = None) -> Any:
+            result = real_rebuild(self, seed)
+            time.sleep(0.2)
+            return result
+
+        async def scenario() -> list[bool]:
+            samples: list[bool] = []
+
+            async def sample_while_reloading() -> None:
+                for _ in range(50):
+                    samples.append(_same_generation(hub))
+                    await asyncio.sleep(0.005)
+
+            hub.settings_store.save(
+                "modules", ModulesSettings(items=[ModuleToggle(id="weather", enabled=False)])
+            )
+            with mock.patch.object(Hub, "_rebuild", slow_rebuild):
+                await asyncio.gather(hub.reload(), sample_while_reloading())
+            return samples
+
+        samples = run(scenario())
+        assert samples, "the sampler never got a chance to run"
+        assert all(samples)
+        assert _same_generation(hub)
+    finally:
+        hub.db.close()
 
 
 # ---------------------------------------------------------------------------

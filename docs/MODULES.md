@@ -290,6 +290,14 @@ for a complete, working instance of this.
    module directory; modules are discovered at hub startup, not on the
    fly.
 
+A module is arbitrary Python that the hub imports and runs with its own
+process: your database (token hashes, the session secret, a Home Assistant
+token if you have configured one), your data directory and your network,
+whichever way it was installed. None of the three install paths above
+sandbox a module from any of that. Install only a module you have read or
+trust, the same way you would before running any other program with access
+to your own credentials.
+
 ## Enabling, ordering and disabling a module
 
 The `modules` settings section

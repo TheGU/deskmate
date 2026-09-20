@@ -46,7 +46,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app import __version__
@@ -83,7 +83,7 @@ from app.models import (
     DeviceSample,
     DeviceTelemetry,
 )
-from app.modules import Module, ModuleContext
+from app.modules import Module, ModuleContext, ModuleError
 from app.modules.registry import Registry, load_registry
 from app.renderer.render import Renderer
 from app.settings import HubSettings, SettingsStore, sections_for
@@ -206,6 +206,28 @@ def _seed_missing_sections(store: SettingsStore, seed: HubSettings) -> None:
             store.save(section, seed.section(section, model))
 
 
+@dataclass(slots=True)
+class _RebuiltSettings:
+    """What :meth:`Hub._rebuild` computes, handed back rather than assigned
+    onto ``self`` from inside it.
+
+    ``_rebuild`` runs in a threadpool (``reload`` awaits it): if it assigned
+    ``self.registry``/``self.sections``/``self.settings_store``/
+    ``self.hub_settings`` itself, a request running concurrently on the event
+    loop could read the *new* registry off ``self`` while ``self.renderer``
+    and ``self.state_service`` - only rebuilt after the threadpool call
+    returns - were still built from the *old* one (a just-enabled page's
+    dataset missing from the old state service is a ``KeyError``, a 500).
+    Returning the four together is what lets the caller publish them in one
+    synchronous block instead.
+    """
+
+    registry: Registry
+    sections: dict[str, type[BaseModel]]
+    settings_store: SettingsStore
+    hub_settings: HubSettings
+
+
 class Hub:
     """Everything the request handlers need, built once at startup."""
 
@@ -232,7 +254,11 @@ class Hub:
         # Registry, section map, settings store and snapshot, in that order
         # and for that reason (see :meth:`_rebuild`). Every one of them is
         # rebuilt on reload, which is how a settings save takes effect.
-        self._rebuild(hub_settings)
+        rebuilt = self._rebuild(hub_settings)
+        self.registry = rebuilt.registry
+        self.sections = rebuilt.sections
+        self.settings_store = rebuilt.settings_store
+        self.hub_settings = rebuilt.hub_settings
         self.alerts = AlertStore(self.db, self.hub_settings.general.timezone)
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
         self.state_service = StateService(
@@ -272,11 +298,28 @@ class Hub:
         ``AlertStore.set_timezone``), and the render cache is dropped under
         ``_cache_lock`` so a render already in flight finishes on the old
         service while the next request sees the new one.
+
+        ``_rebuild`` runs in a threadpool and only *returns* the new
+        registry/sections/settings_store/hub_settings rather than assigning
+        them onto ``self`` itself, and everything below that publishes them
+        - the four assignments, the telemetry store, the state service, and
+        the renderer's own two attributes - is one synchronous stretch with
+        no ``await`` in it. A concurrent request reads ``self`` from the
+        event loop, never mid-threadpool-call, so the only two states it can
+        ever observe are "every one of these is still the old snapshot" or
+        "every one of these is the new snapshot together"; a just-enabled
+        page's dataset missing from an old state service paired with a new
+        registry (a ``KeyError``, a 500) is the inconsistent state this
+        forecloses.
         """
         identity = await run_in_threadpool(HubIdentity, self.db)
         self.identity = identity
         await run_in_threadpool(self.alerts.load)
-        await run_in_threadpool(self._rebuild)
+        rebuilt = await run_in_threadpool(self._rebuild)
+        self.registry = rebuilt.registry
+        self.sections = rebuilt.sections
+        self.settings_store = rebuilt.settings_store
+        self.hub_settings = rebuilt.hub_settings
         self.alerts.set_timezone(self.hub_settings.general.timezone)
         # TelemetryStore owns no connection of its own (see __init__), but it
         # does carry retention_days as a plain attribute read by the
@@ -292,8 +335,8 @@ class Hub:
             self._cache.clear()
         log(logger, logging.INFO, "hub reloaded", configured=self.identity.configured)
 
-    def _rebuild(self, seed: HubSettings | None = None) -> None:
-        """Re-read the registry, the section map, the store and the snapshot.
+    def _rebuild(self, seed: HubSettings | None = None) -> _RebuiltSettings:
+        """Compute the registry, the section map, the store and the snapshot.
 
         The order is forced and looks circular until you follow it: the
         registry decides which settings sections exist, and the ``modules``
@@ -316,18 +359,33 @@ class Hub:
         4. the real store over that map, seeded again for whatever the
            bootstrap store had no section for, and its snapshot.
 
+        Returns the four instead of assigning them onto ``self``: this runs
+        in a threadpool from :meth:`reload`, on a database that never
+        changes underneath it mid-call, but ``self`` is read concurrently
+        from the event loop the whole time. Assigning here, one at a time,
+        would let a request see a new registry paired with an old state
+        service and renderer (see :meth:`reload`'s own docstring); the
+        caller publishes all four together instead, synchronously, with
+        nothing in between them for a request to land in.
+
         Plain synchronous I/O throughout, like the store itself:
         :meth:`reload` calls it in a threadpool.
         """
         bootstrap = SettingsStore(self.db)
         if seed is not None:
             _seed_missing_sections(bootstrap, seed)
-        self.registry = load_registry(bootstrap.modules(), self.env.data_dir)
-        self.sections = sections_for(self.registry)
-        self.settings_store = SettingsStore(self.db, self.sections)
+        registry = load_registry(bootstrap.modules(), self.env.data_dir)
+        sections = sections_for(registry)
+        settings_store = SettingsStore(self.db, sections)
         if seed is not None:
-            _seed_missing_sections(self.settings_store, seed)
-        self.hub_settings = self.settings_store.snapshot()
+            _seed_missing_sections(settings_store, seed)
+        hub_settings = settings_store.snapshot()
+        return _RebuiltSettings(
+            registry=registry,
+            sections=sections,
+            settings_store=settings_store,
+            hub_settings=hub_settings,
+        )
 
     def module_context(self, module: Module) -> ModuleContext:
         """What this hub hands ``module`` when it builds a router."""
@@ -452,6 +510,25 @@ def _telemetry_origin(request: Request) -> tuple[str | None, str | None]:
     except InvalidBaseURL:
         hub_host = None
     return remote_addr, hub_host
+
+
+def _route_signatures(app: FastAPI) -> set[tuple[str, str]]:
+    """Every ``(method, path)`` pair a route already mounted on ``app``
+    answers for.
+
+    What the module-router collision check compares a new router's routes
+    against: recomputed fresh each time a module is mounted (see
+    ``create_app``), so it also catches two modules claiming the same path,
+    not only a module against core.
+    """
+    signatures: set[tuple[str, str]] = set()
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path is None or not methods:
+            continue
+        signatures.update((method, path) for method in methods)
+    return signatures
 
 
 def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) -> FastAPI:
@@ -597,28 +674,6 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
                     "tasks": {"source": hub.hub_settings.tasks.source},
                 },
             }
-        )
-
-    # -- pushed data -------------------------------------------------------
-    # A module that declares routes hands core an APIRouter; core mounts it
-    # under /api with the bearer-token dependency applied, so a module
-    # cannot forget auth. Each push route writes its dataset row in a
-    # threadpool and invalidates the matching CachedAdapter so /api/state
-    # reflects it on the very next build, not after the adapter's own TTL
-    # (app/modules/<id>/routes.py).
-    #
-    # Every installed module, not only the enabled ones: routes are fixed at
-    # startup (FastAPI has no unmount), so mounting only the enabled ones
-    # would mean a restart after every enable, while leaving a disabled
-    # module's route up costs nothing - it writes a row nothing draws and
-    # says exactly that in its own "warning" field.
-    for module in app.state.hub.registry.modules:
-        if module.routes is None:
-            continue
-        app.include_router(
-            module.routes(app.state.hub.module_context(module)),
-            prefix="/api",
-            dependencies=[Depends(require_token)],
         )
 
     # -- alerts ------------------------------------------------------------
@@ -956,6 +1011,43 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         state = await hub.state(force="t" in request.query_params)
         html = hub.renderer.render_html(page, state, embed_fonts=False)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+    # -- pushed data -------------------------------------------------------
+    # A module that declares routes hands core an APIRouter; core mounts it
+    # under /api with the bearer-token dependency applied, so a module
+    # cannot forget auth. Each push route writes its dataset row in a
+    # threadpool and invalidates the matching CachedAdapter so /api/state
+    # reflects it on the very next build, not after the adapter's own TTL
+    # (app/modules/<id>/routes.py).
+    #
+    # Mounted last, after every one of core's own routes above: Starlette
+    # matches routes in declaration order, so a module router included
+    # before /api/alert or /api/device/telemetry could shadow either of
+    # them - the module's own handler would run instead of core's, silently,
+    # for as long as the process stayed up. Declaring core's routes first
+    # and refusing a collision below (rather than only ordering around it)
+    # is what makes that impossible instead of merely unlikely.
+    #
+    # Every installed module, not only the enabled ones: routes are fixed at
+    # startup (FastAPI has no unmount), so mounting only the enabled ones
+    # would mean a restart after every enable, while leaving a disabled
+    # module's route up costs nothing - it writes a row nothing draws and
+    # says exactly that in its own "warning" field.
+    for module in app.state.hub.registry.modules:
+        if module.routes is None:
+            continue
+        router = module.routes(app.state.hub.module_context(module))
+        prefix = "/api"
+        existing = _route_signatures(app)
+        for route in router.routes:
+            full_path = prefix + getattr(route, "path", "")
+            for method in getattr(route, "methods", None) or ():
+                if (method, full_path) in existing:
+                    raise ModuleError(
+                        f"module {module.id!r}: route {method} {full_path} collides "
+                        "with a core path; rename it"
+                    )
+        app.include_router(router, prefix=prefix, dependencies=[Depends(require_token)])
 
     @app.exception_handler(LoginRedirect)
     async def login_redirect_handler(request: Request, exc: LoginRedirect) -> RedirectResponse:

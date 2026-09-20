@@ -17,6 +17,7 @@ never meant to be in it.
 
 from __future__ import annotations
 
+import asyncio
 import http.server
 import logging
 import socket
@@ -24,12 +25,15 @@ import threading
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone as dt_timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from playwright.async_api import async_playwright
 
 from app.config import Env
+from app.main import create_app
 from app.modules.ha_dashboard.screenshot import (
     _guard_origin_of,
     _init_script,
@@ -461,3 +465,51 @@ def test_failures_never_log_the_token_or_the_url(
         if isinstance(fields, dict):
             assert TOKEN not in str(fields)
             assert base_url not in str(fields)
+
+
+# ---------------------------------------------------------------------------
+# (f) enabled and configured, the token and the URL never leave the read API
+# ---------------------------------------------------------------------------
+def test_the_token_and_url_never_appear_in_healthz_state_or_hub(
+    tmp_path: Path, base_url: str
+) -> None:
+    """/healthz, /api/state and /api/hub hand-build their JSON bodies
+    (app/main.py) rather than dumping ``hub_settings`` wholesale, but
+    nothing had ever pinned that down for this module specifically: a
+    long-lived Home Assistant token, or a dashboard URL that itself carries
+    a token as a query string, must never reach a reader through any of the
+    three, whether or not the reader also has the admin bearer token."""
+    env = Env(_env_file=None, DATA_DIR=tmp_path / "leak-check", LOG_LEVEL="WARNING")
+    dashboard_url = f"{base_url}/lovelace-kiosk/0?kiosk&token={TOKEN}"
+    seed = HubSettings(
+        modules=ModulesSettings(items=[ModuleToggle(id="ha_dashboard", enabled=True)]),
+        ha_dashboard=HaDashboardSettings(
+            dashboard_url=dashboard_url,
+            token=TOKEN,  # type: ignore[arg-type] - pydantic coerces this to SecretStr
+            settle_ms=50,
+            ttl_seconds=60,
+        ),
+    )
+    app = create_app(env, seed)
+    hub = app.state.hub
+    try:
+        secrets = asyncio.run(
+            hub.identity.claim(name="deskmate", base_url="http://dashboard-hub.lan:8080")
+        )
+        assert "ha_dashboard" in hub.registry.page_ids()
+        client = TestClient(app)
+        auth = {"Authorization": f"Bearer {secrets.token}"}
+
+        responses = [
+            client.get("/healthz", headers=auth),
+            client.get("/api/state", headers=auth),
+            client.get("/api/hub", headers=auth),
+        ]
+
+        for response in responses:
+            assert response.status_code == 200
+            assert TOKEN not in response.text
+            assert base_url not in response.text
+            assert dashboard_url not in response.text
+    finally:
+        hub.db.close()

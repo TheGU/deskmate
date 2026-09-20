@@ -55,9 +55,28 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 #: so anything else would have to be escaped somewhere.
 MODULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
+#: Longest a module id, settings section, dataset name or dataset section
+#: may be. A page id is a module id verbatim, and it is what a device echoes
+#: back in every ``POST /api/device/telemetry``
+#: (``app/models.py:DeviceTelemetry.page``, ``max_length=32``): a longer id
+#: would load here today, and then 400 every telemetry post from a device
+#: sitting on that page, forever after.
+MAX_ID_LENGTH = 32
+
 #: Ids core owns and a module may never claim. ``alert`` is the interrupt
 #: page (see the module docstring).
 RESERVED_IDS: frozenset[str] = frozenset({"alert"})
+
+#: Settings sections core owns outright and no module's own ``settings_model``
+#: may claim, matching ``app/settings.py:CORE_SECTIONS``'s keys: ``general``
+#: is the hub's own timezone and units, ``device`` belongs to the telemetry
+#: routes and the retention sweep, ``alert`` is the interrupt page, and
+#: ``modules`` is the registry's own enable/order list. A dataset is still
+#: free to *read* one of these (the built-in ``system`` module's ``device``
+#: dataset does exactly that); what is refused here is a module trying to
+#: *own* the row, which would make core's own section a module's to edit or
+#: to lose the moment that module is uninstalled.
+RESERVED_SECTIONS: frozenset[str] = frozenset({"general", "device", "alert", "modules"})
 
 #: The datasets an agent pushes to the hub, and therefore the only ones a
 #: page may mark DEMO when they fall back to a fixture. A fetched dataset on
@@ -213,6 +232,10 @@ def validate_module(module: Module) -> None:
     _check_id(module.id, "module id")
     if module.settings_section is not None:
         _check_id(module.settings_section, "settings section", reserved=False)
+    if module.settings_model is not None and module.section in RESERVED_SECTIONS:
+        raise ModuleError(
+            f"module {module.id!r}: settings section {module.section!r} is reserved for core"
+        )
     if module.settings_model is not None and not (
         isinstance(module.settings_model, type)
         and issubclass(module.settings_model, BaseModel)
@@ -252,6 +275,12 @@ def validate_module(module: Module) -> None:
 def _check_id(value: Any, what: str, *, reserved: bool = True) -> None:
     if not isinstance(value, str) or not MODULE_ID_RE.match(value):
         raise ModuleError(f"{what} {value!r} must match {MODULE_ID_RE.pattern}")
+    if len(value) > MAX_ID_LENGTH:
+        raise ModuleError(
+            f"{what} {value!r} is {len(value)} characters; the longest allowed is "
+            f"{MAX_ID_LENGTH} (a page id is a module id, and that is what a device "
+            "echoes back on every telemetry post)"
+        )
     if value.isdigit():
         # Unreachable through the pattern above (it demands a leading
         # letter), and checked anyway: /display/{n}.png reads an all-digit
@@ -263,9 +292,11 @@ def _check_id(value: Any, what: str, *, reserved: bool = True) -> None:
 
 
 __all__ = [
+    "MAX_ID_LENGTH",
     "MODULE_ID_RE",
     "PUSHED_DATASETS",
     "RESERVED_IDS",
+    "RESERVED_SECTIONS",
     "DatasetSpec",
     "Module",
     "ModuleContext",

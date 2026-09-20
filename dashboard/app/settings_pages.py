@@ -65,6 +65,7 @@ from app.hub_config import (
 )
 from app.httputil import _cap_form_body, _cap_restore_length, _stream_upload_to
 from app.logging_setup import log
+from app.models import AdapterStatus
 from app.modules.registry import ModulesSettings
 
 if TYPE_CHECKING:
@@ -147,10 +148,18 @@ def _section_form(
     # render_section only knows whether the model has a "source" field; it
     # does not know TESTABLE_SECTIONS, so a third-party section that happens
     # to declare its own "source" field would otherwise get a "Save and
-    # test" button with no adapter behind it.
-    form.has_source = form.has_source and section in TESTABLE_SECTIONS
+    # test" button with no adapter behind it. A testable section whose
+    # owning module is currently disabled has no adapter in
+    # ``state_service.adapters`` either (Registry.datasets() only counts
+    # enabled modules), so the button is hidden then too rather than posting
+    # to a test that cannot run.
+    form.has_source = (
+        form.has_source
+        and section in TESTABLE_SECTIONS
+        and section in hub.state_service.adapters
+    )
     if section == MODULES_SECTION:
-        form.warnings = _missing_module_warnings(hub)
+        form.warnings = _modules_section_warnings(hub)
     if section == "weather":
         # The place search exists only for weather: it is what turns a place
         # name into the latitude and longitude that section stores.
@@ -193,23 +202,42 @@ def _settings_html(
     return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
-def _missing_module_warnings(hub: "Hub") -> tuple[str, ...]:
-    """One line per id the modules section holds that is not installed.
+def _modules_section_warnings(hub: "Hub") -> tuple[str, ...]:
+    """Lines the Modules section shows above its rows: never an error, since
+    the form itself is fine, but something about what is or is not enabled
+    that the owner would otherwise only discover from a blank panel.
 
-    An id in the database is the owner's intent and a module can come back
-    after an upgrade, so the row is kept (``registry.missing_ids``). What it
-    must not do is sit there silently: the page says which ids answer for
+    One line per id the modules section holds that is not installed. An id
+    in the database is the owner's intent and a module can come back after
+    an upgrade, so the row is kept (``registry.missing_ids``). What it must
+    not do is sit there silently: the page says which ids answer for
     nothing on this hub.
+
+    Then, if it applies, one line saying no enabled module draws a page at
+    all: a hub can reach this state either through this very form (blocked
+    by ``_no_page_left`` before it is ever saved) or through a restore
+    whose modules section disables every page module installed here
+    (``post_settings_restore``, which cannot check before the fact - the
+    database it would check against is the one being replaced). Either way
+    the settings page is where an admin would come looking for why the
+    panel is blank, so the warning belongs here next to the missing-module
+    one, not only in the log.
     """
+    warnings: list[str] = []
     missing = hub.registry.missing_ids()
-    if not missing:
-        return ()
-    return (
-        "Not installed on this hub: "
-        + ", ".join(missing)
-        + ". The rows are kept in case the module comes back; nothing on the "
-        "panel uses them meanwhile.",
-    )
+    if missing:
+        warnings.append(
+            "Not installed on this hub: "
+            + ", ".join(missing)
+            + ". The rows are kept in case the module comes back; nothing on the "
+            "panel uses them meanwhile."
+        )
+    if not hub.registry.pages():
+        warnings.append(
+            "No enabled module draws a page: the panel has nothing to show. "
+            "Turn at least one page module back on below."
+        )
+    return tuple(warnings)
 
 
 def _no_page_left(hub: "Hub", value: BaseModel) -> bool:
@@ -305,9 +333,27 @@ async def _tested_section_form(hub: "Hub", section: str, *, search_url: str) -> 
     That is what "Save and test" is for: the Outcome's status and error
     string (``adapters/base.py:Outcome``) are what tell the owner an ICS URL
     or a Home Assistant token is wrong, on the page, before they move on.
+
+    A section stays in ``TESTABLE_SECTIONS`` even while the module that
+    provides its dataset is disabled through the Modules section (the row is
+    still there to edit and re-enable later), but ``state_service.adapters``
+    then has no entry for it: there is nothing to force-fetch. That is a
+    message on the form, in the same Outcome shape a real test uses, not a
+    500 from indexing an adapter that is not there.
     """
     form = _section_form(hub, section, search_url=search_url)
-    adapter = hub.state_service.adapters[section]
+    adapter = hub.state_service.adapters.get(section)
+    if adapter is None:
+        form.test_status = AdapterStatus.UNAVAILABLE.value
+        form.test_error = "the module that provides this dataset is disabled"
+        log(
+            logger,
+            logging.INFO,
+            "settings section tested",
+            section=section,
+            status=form.test_status,
+        )
+        return form
     outcome = await adapter.get(force=True)
     form.test_status = outcome.status.value
     form.test_error = outcome.error or ""
@@ -490,6 +536,20 @@ def register(app: FastAPI, env: Env) -> None:
                 logging.WARNING,
                 "the restored backup carries a different device key: the flashed device "
                 "stops fetching until its hub key is set to the one from this backup",
+            )
+        if not hub.registry.pages():
+            # A restored backup's own modules section can disable every page
+            # module installed here (it was written by, and for, a different
+            # set of installed modules): _no_page_left only guards a save
+            # made through this settings page, and a restore is not one. The
+            # device still gets a plain 404 from /display/{n}.png either way;
+            # this is what tells whoever is watching the log why, without
+            # them having to notice a blank panel first.
+            log(
+                logger,
+                logging.WARNING,
+                "the restored backup leaves no page module enabled: "
+                "/display/<n>.png answers 404 until one is turned back on",
             )
         # The query is what login.html turns into a notice: the two hashes are
         # only knowable after the upload, so the warning cannot sit on the

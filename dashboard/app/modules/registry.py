@@ -36,6 +36,8 @@ built-ins-only default the module-level constants in
 from __future__ import annotations
 
 import importlib
+import importlib.machinery
+import importlib.util
 import logging
 import sys
 from collections.abc import Iterable
@@ -47,7 +49,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.logging_setup import log
-from app.modules import DatasetSpec, Module, ModuleError, validate_module
+from app.modules import MODULE_ID_RE, DatasetSpec, Module, ModuleError, validate_module
 
 logger = logging.getLogger("app.modules")
 
@@ -77,11 +79,38 @@ MODULES_DIRNAME = "modules"
 #: The settings section this file owns.
 SECTION = "modules"
 
+#: Every ``DATA_DIR/modules`` root :func:`directory_modules` has ever put on
+#: ``sys.path``, across every ``Hub`` built in this process. What tells the
+#: shadow check in :func:`directory_modules` apart from an installed
+#: package: a name that resolves into one of these roots is some other
+#: hub's own directory module of the same name (allowed, and how the tests
+#: run two hubs in one process), never the standard library or a real
+#: dependency (refused).
+_KNOWN_MODULE_ROOTS: set[Path] = set()
+
+#: For each name ever imported by :func:`directory_modules`, the root it was
+#: last imported from. What :func:`_forget_foreign` uses to tell "this name
+#: belongs to a *different* data directory's module of the same id, safe to
+#: evict and reimport" from "this name is something else already in
+#: ``sys.modules`` - the standard library, an installed package, anything
+#: this process imported for its own reasons - which must never be touched.
+_DIRECTORY_MODULE_ROOTS: dict[str, Path] = {}
+
 
 class ModuleToggle(BaseModel):
     """One module's row in the ``modules`` settings section."""
 
-    id: str = Field(description="The module's id, as its package reports it.")
+    # Bounded and pattern-matched the same as a real module id
+    # (app/modules/__init__.py:MODULE_ID_RE): this field is what a hand-made
+    # POST /settings/modules lands in before anything else ever looks at it,
+    # so an id like "../x" or a multi-kilobyte string has to be a plain
+    # pydantic field error here, never something later code (a template
+    # id="...", a filesystem path, a dict key) has to defend itself against.
+    id: str = Field(
+        max_length=64,
+        pattern=MODULE_ID_RE.pattern,
+        description="The module's id, as its package reports it.",
+    )
     enabled: bool = Field(default=True, description="Draw this module's page and fetch its data.")
     order: int | None = Field(
         default=None,
@@ -113,6 +142,7 @@ class Registry:
         toggles = {toggle.id: toggle for toggle in (settings or ModulesSettings()).items}
         by_id: dict[str, Module] = {}
         dataset_owner: dict[str, str] = {}
+        section_owner: dict[str, str] = {}
         for module in modules:
             validate_module(module)
             if module.id in by_id:
@@ -126,6 +156,23 @@ class Registry:
                         f"dataset {dataset.name!r}"
                     )
                 dataset_owner[dataset.name] = module.id
+            # A settings section has one owner, exactly like a dataset name:
+            # ``validate_module`` already refuses a module trying to claim
+            # one of core's own (RESERVED_SECTIONS), so what is left here is
+            # two modules both wanting the same section - the built-in that
+            # already owns "weather" wins simply by loading first
+            # (BUILTIN_MODULE_PACKAGES is walked before entry points and
+            # directory modules), and a third-party module claiming it
+            # refuses to load rather than silently sharing the row under
+            # whichever settings_model happened to be validated last.
+            if module.settings_model is not None:
+                owner = section_owner.get(module.section)
+                if owner is not None:
+                    raise ModuleError(
+                        f"modules {owner!r} and {module.id!r} both own the "
+                        f"settings section {module.section!r}"
+                    )
+                section_owner[module.section] = module.id
 
         self._toggles = toggles
         self._modules = tuple(
@@ -309,24 +356,40 @@ def directory_modules(data_dir: Path) -> tuple[Module, ...]:
     """Modules dropped into ``DATA_DIR/modules/`` as plain packages.
 
     The directory goes on ``sys.path`` and each subdirectory that holds an
-    ``__init__.py`` is imported by its own name. A name already imported
-    from somewhere else is dropped from ``sys.modules`` first, so two hubs
-    in one process (the tests) cannot serve each other's ``hello``.
+    ``__init__.py`` is imported by its own name. It is appended, not put at
+    the front: a name that also names something already installed - the
+    standard library's own ``calendar``, or ``json``, or ``app`` itself -
+    must resolve to that real module first, which is what lets the check
+    below tell a genuine shadow apart from a harmless name (see
+    :func:`_is_a_directory_module`). A name already imported from a
+    *different* data directory's own module of the same id is dropped from
+    ``sys.modules`` first (:func:`_forget_foreign`), so two hubs in one
+    process (the tests) cannot serve each other's ``hello``; the actual
+    import then always loads from this ``root``, never from sys.path order,
+    so the other hub's copy cannot win just for having been imported first
+    (:func:`_import_from_root`).
     """
     root = data_dir / MODULES_DIRNAME
     if not root.is_dir():
         return ()
     if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+        sys.path.append(str(root))
+    _KNOWN_MODULE_ROOTS.add(root)
     importlib.invalidate_caches()
 
     found: list[Module] = []
     for entry in sorted(root.iterdir()):
         if not entry.is_dir() or not (entry / "__init__.py").is_file():
             continue
-        _forget_foreign(entry.name, entry)
+        _forget_foreign(entry.name, root)
+        collision = importlib.util.find_spec(entry.name)
+        if collision is not None and not _is_a_directory_module(collision, entry):
+            raise ModuleError(
+                f"module directory {entry.name!r} shadows an installed package; rename it"
+            )
         try:
-            found.append(_module_of(importlib.import_module(entry.name)))
+            module = _import_from_root(entry.name, root)
+            found.append(_module_of(module))
         except ModuleError:
             raise
         except Exception as exc:  # noqa: BLE001 - one bad package, not a dead hub
@@ -338,6 +401,8 @@ def directory_modules(data_dir: Path) -> tuple[Module, ...]:
                 path=str(entry),
                 error=str(exc),
             )
+            continue
+        _DIRECTORY_MODULE_ROOTS[entry.name] = root
     return tuple(found)
 
 
@@ -391,15 +456,82 @@ def _module_of(obj: Any) -> Module:
     raise ModuleError(f"{obj!r} does not expose a Module as MODULE")
 
 
-def _forget_foreign(name: str, package_dir: Path) -> None:
-    existing = sys.modules.get(name)
-    if existing is None:
-        return
-    filename = getattr(existing, "__file__", None)
-    if filename is not None and Path(filename).resolve().parent == package_dir.resolve():
+def _forget_foreign(name: str, root: Path) -> None:
+    """Evict ``name`` from ``sys.modules`` only when that is known safe.
+
+    Safe means: :func:`directory_modules` itself loaded ``name`` before, for
+    a *different* ``root``, so what is cached is another data directory's
+    own module of this id and reimporting for this ``root`` is exactly what
+    is wanted. Anything else - ``name`` never seen by this function, or
+    already loaded for this same ``root`` - is left untouched. The old rule
+    ("evict unless the cached module's file lives under this package
+    directory") deleted the standard library's own ``calendar`` from
+    ``sys.modules`` the moment a ``DATA_DIR/modules/calendar`` package
+    existed, corrupting ``import calendar`` for the rest of the process; this
+    rule can only ever evict something *this function* put there.
+    """
+    previous_root = _DIRECTORY_MODULE_ROOTS.get(name)
+    if previous_root is None or previous_root == root:
         return
     for key in [key for key in sys.modules if key == name or key.startswith(f"{name}.")]:
         del sys.modules[key]
+
+
+def _is_a_directory_module(spec: importlib.machinery.ModuleSpec, entry: Path) -> bool:
+    """Whether ``spec`` - what ``importlib.util.find_spec`` already resolved
+    ``entry.name`` to, from the *whole* of ``sys.path`` - is ``entry`` itself
+    or some other data directory's own module of the same id, rather than an
+    installed package or the standard library.
+
+    This is the check :func:`directory_modules` refuses on when it fails:
+    ``sys.path.append`` (not ``insert(0)``) means a real installed package
+    always wins a plain name search over a data directory's own package, so
+    a spec that resolves anywhere else has to be a genuine collision - a
+    ``DATA_DIR/modules/calendar`` shadowing the standard library, say -
+    unless it lands inside a root some *other* call to
+    :func:`directory_modules` already put on ``sys.path``, which is simply
+    two hubs' own modules sharing an id (the multi-hub tests).
+    """
+    origin = spec.origin
+    if origin is None:
+        return False
+    path = Path(origin).resolve()
+    if path.parent == entry.resolve():
+        return True
+    return any(_is_relative_to(path, known.resolve()) for known in _KNOWN_MODULE_ROOTS)
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _import_from_root(name: str, root: Path) -> Any:
+    """Import ``name`` strictly from ``root``, never from the rest of
+    ``sys.path``.
+
+    Needed because ``root`` is appended, not inserted at the front: a plain
+    ``importlib.import_module(name)`` would follow ``sys.path`` order and
+    could resolve to an *earlier* data directory's own same-named module
+    instead of this one's, which is exactly the case
+    :func:`_is_a_directory_module` allows through as "not a real shadow".
+    Scoping the actual load to ``root`` is what makes this hub's own module
+    win regardless of import order.
+    """
+    spec = importlib.machinery.PathFinder.find_spec(name, path=[str(root)])
+    if spec is None or spec.loader is None:
+        raise ModuleNotFoundError(f"no module named {name!r} under {root}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return module
 
 
 __all__ = [
