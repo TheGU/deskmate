@@ -201,6 +201,17 @@ status mark or a tell-tale, never as a fill behind a percentage or a whole
 field, so a bar that lights up for good news never trains the eye to ignore
 color.
 
+**Note: screenshot pages.** The optional Home Assistant dashboard module
+(`ha_dashboard`) is not drawn from this system: it screenshots a Lovelace
+view the owner built elsewhere and hands the result straight to the same
+six-ink quantize step every other page goes through, with no template, no
+numeral-and-label grammar and none of this file's rules applied to it. Only
+large flat type and high-contrast, near-primary colors survive that snap;
+gradients, translucency and mid-grey text do not. See
+`docs/HA-DASHBOARD.md` for what a dashboard view needs to look like to
+survive it; this file's own rules are unaffected and still bind everything
+else on the panel.
+
 ## Typography
 
 **Display and Body Font:** Google Sans (variable, weights 400 to 700),

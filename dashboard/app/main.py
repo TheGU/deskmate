@@ -23,6 +23,14 @@ brief, tasks) are mounted here at startup from ``app/modules/<id>/routes.py``
 (see the registry loop in :func:`create_app`), and the settings page, the
 setup wizard, and backup/restore/rotate (``GET/POST /settings...``,
 ``GET/POST /setup/{step}``) are registered by ``app/settings_pages.py``.
+
+There is no module-level ``app`` object: uvicorn builds one through
+:func:`create_app` itself (``--factory app.main:create_app``, see
+:func:`main` and ``dashboard/Dockerfile``'s ``CMD``). A module-level
+``app = create_app()`` used to sit at the bottom of this file, which meant
+every import of ``app.main`` - including under pytest, before any test
+asked for a hub at all - built a real :class:`Hub` and created
+``data/deskmate.sqlite`` in the current directory.
 """
 
 from __future__ import annotations
@@ -1062,17 +1070,21 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     return app
 
 
-app = create_app()
-
-
 def main() -> None:  # pragma: no cover - convenience entry point
     import uvicorn
 
     env = Env()
     # workers=1 (the default here): HubIdentity.claim()'s asyncio.Lock only
     # serializes concurrent POST /setup within one process (see Dockerfile).
+    # factory=True: create_app() is called by uvicorn itself, once, inside
+    # its own process, rather than at import time (see the module docstring
+    # for why a module-level ``app = create_app()`` was removed).
     uvicorn.run(
-        "app.main:app", host="0.0.0.0", port=DEFAULT_PORT, log_level=env.log_level.lower()
+        "app.main:create_app",
+        factory=True,
+        host="0.0.0.0",
+        port=DEFAULT_PORT,
+        log_level=env.log_level.lower(),
     )
 
 

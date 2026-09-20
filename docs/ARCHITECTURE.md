@@ -52,7 +52,7 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | POST | `/settings/restore` | admin | Replace the database with an uploaded backup |
 | POST | `/settings/rotate` | admin | Mint a fresh token, device key and session secret |
 | GET | `/api/hub` | reader | Hub name, base URL, configured, sources |
-| GET | `/api/state` | reader | Normalized state JSON that pages render from |
+| GET | `/api/state` | reader | Schema 2 state JSON that pages render from; see "State" below |
 | GET | `/display/{page}.png` | reader | `page` is an enabled page's id, or its 0-based index in the window list |
 | GET | `/preview` | reader | Browser page: switch between pages, shows PNG and HTML; an unauthenticated browser is redirected to `/login` |
 | GET | `/preview/{page}.html` | reader | Raw HTML at 800x480, for CSS work in a browser; same redirect |
@@ -221,6 +221,16 @@ problems for a `422`).
    Bayer 8x8, edge-only) spiky on e-paper and rejected it. The PNG must
    already be six-ink: the ESPHome `epaper_spi` driver thresholds every
    pixel itself and cannot show anti-aliasing.
+   A page whose module declares a `screenshot` instead of a `template`
+   (`app/modules/__init__.py:PageSpec`) skips the template-and-Chromium-
+   screenshot step above: `Renderer.render_rgb` calls it directly, handing
+   it the shared `Browser` under the same render lock as every other page
+   (so it is fully serialized against the rest of the render path), and it
+   must hand back an 800x480 RGB image ready for the six-ink snap; a
+   mismatched size is logged and resized rather than trusted. No built-in
+   page draws itself this way except the optional `ha_dashboard` module,
+   off by default, which screenshots a live Home Assistant Lovelace view in
+   place of a template (see `docs/HA-DASHBOARD.md`).
 3. Determinism: bundled fonts only, no system fonts, no animations, no
    timestamps other than the state `updated_at`. `view.py` turns the state
    into a flat context and `icons.py` chooses every glyph, so the templates
@@ -334,6 +344,102 @@ there is nothing there for a remote agent's push to represent. See
 "Staleness" below.
 
 Obsidian access is read only. The vault is mounted read-only in Docker.
+
+### State
+
+`GET /api/state` answers schema 2: `{schema, generated_at, timezone,
+blocks, alert}` (`app/models.py:DashboardState`, `STATE_SCHEMA_VERSION`).
+`blocks` is a mapping keyed by dataset name (`tasks`, `weather`, `device`,
+...) rather than a fixed set of top-level fields, because a module brings
+its own dataset names that the model cannot know at class-definition time;
+the field type is `dict[str, SerializeAsAny[Block]]`, and `SerializeAsAny`
+is required - without it pydantic would serialize every value as the bare
+`Block` envelope and the response would carry no items, no weather and no
+brief. Nothing reads `state.blocks[name]` directly: `state.block(name,
+Model)` (`DashboardState.block`) is the one accessor, and it always answers
+with a value of the asked-for type - the stored block when there is one, or
+an `unavailable` placeholder of that type when the dataset's module is
+disabled, not installed, or has not fetched yet - so a page or a route
+never has to `None`-check a dataset. Schema 1, the seven fixed top-level
+fields this endpoint carried before the module system, is gone; `schema`
+marks the break, and `skills/deskmate/SKILL.md` notes it for an agent
+reading `GET /api/state` to write a brief.
+
+### Modules
+
+Every panel page and the dataset behind it is a module: a Python package
+that exposes one frozen `Module` dataclass as `MODULE`
+(`app/modules/__init__.py`), providing zero or more `DatasetSpec`s (a named
+block plus the adapter that produces it) and at most one `PageSpec` (drawn
+by a Jinja template, or by a `screenshot` callable instead - see
+"Rendering pipeline" above), plus its own settings section and push routes
+if it wants either. Core keeps the frame (header, footer, the render
+engine, the alert page and API, auth, the settings machinery, the device
+routes and telemetry); `alert` is reserved and can never be a module's id.
+
+**Registry.** `app/modules/registry.py:Registry` finds modules from three
+places, in order: the built-in packages under `app/modules/<id>/`
+(`BUILTIN_MODULE_PACKAGES`), the `deskmate.modules` entry point group (how
+a `pip install`ed module announces itself), then packages dropped into
+`DATA_DIR/modules/` (added to `sys.path`, imported by directory name). Every
+module is validated (`validate_module`: a bad id, a page with neither a
+template nor a screenshot, a dataset naming a field its own block model
+does not have) and a duplicate module id, or two modules claiming the same
+dataset name or settings section, refuses the hub outright rather than
+dropping one silently - a panel that draws something the settings page
+cannot explain is worse than one that fails to start. The `modules`
+settings section (`ModulesSettings`: one `{id, enabled, order}` row per
+module) decides which installed modules are enabled and in what order; a
+module with no row keeps its own `default_enabled`/`default_order`, and a
+row naming an id that is not installed is kept and reported
+(`Registry.missing_ids`, a `/settings` warning) rather than dropped, so a
+module can come back after an upgrade. `Registry.pages()` is the enabled
+page modules in window-list order, `Registry.page_by_index()` is what
+`/display/{n}.png` resolves an index against, `Registry.datasets()` is the
+enabled modules' own datasets, and `Registry.sections()` is every
+*installed* module's own settings section, enabled or not, so disabling a
+module never throws its settings away.
+
+**Settings map.** `app/settings.py:HubSettings` is the composite every
+adapter, context builder and route reads: one fixed attribute per built-in
+section, plus `extra` for a section that only an installed, non-built-in
+module brought. Which sections exist is not a fixed constant:
+`sections_for(registry)` reads it straight off the *running* hub's own
+registry (`{**registry.sections(), **CORE_SECTIONS}`, ordered by
+`SECTION_ORDER`), so a module dropped into `DATA_DIR/modules/` gets its
+section loaded, saved and rendered on `/settings` exactly like a built-in
+the moment the container restarts with it in place.
+`HubSettings.section(name, Model)` is the one accessor that reads either
+kind - a fixed attribute or an `extra` row - without the caller needing to
+know which.
+
+**Reload.** `Hub.reload()` (`app/main.py`) is what a settings save, a
+restore or a rotate calls after the database changed: it rebuilds the
+registry, the section map, the settings store and the `HubSettings`
+snapshot in a threadpool, then publishes all four onto `Hub`, together with
+the identity, the state service and the renderer's own two attributes, in
+one synchronous stretch with no `await` in between, before dropping the
+render cache. Publishing them one at a time would let a request running
+concurrently on the event loop read a freshly rebuilt registry (a
+just-enabled page's dataset) paired with the old state service that has
+never heard of it - a `KeyError`, a `500`; publishing together forecloses
+that, since the only two states a concurrent request can ever observe are
+"every one of these is still the old snapshot" or "every one of these is
+the new snapshot together".
+
+**Mounting push routes.** A module's `routes` callable returns a plain
+`APIRouter`; `create_app` mounts every *installed* module's router (not
+only the enabled ones - routes are fixed at startup, with no unmount, so a
+disabled module still answers its own push route, writing a row nothing
+draws and saying so in its own `warning` field) under `/api` with
+`Depends(require_token)` applied by core, so a module cannot forget auth.
+Every module router is mounted last, after every one of core's own routes,
+and each of its routes is checked against the set of paths already mounted
+(`_route_signatures`); a module trying to claim a path core, or an
+earlier-mounted module, already owns raises `ModuleError` at startup rather
+than silently shadowing it - Starlette matches routes in declaration order,
+so an unchecked collision mounted first would run instead of core's own
+handler for as long as the process stayed up.
 
 ### Staleness
 

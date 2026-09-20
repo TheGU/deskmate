@@ -80,6 +80,13 @@ Volumes (already wired in `docker-compose.yml`):
   runs as the hub's own code, with the hub's database, data directory and
   network, so mount only a module directory you have read or trust.
 
+The optional `ha_dashboard` module (a Home Assistant Lovelace view
+screenshotted straight to the panel, off by default) ships in the image
+like every other built-in module and needs no volume of its own: enable it
+and fill in its Dashboard url and Token fields on `/settings`. See
+`docs/HA-DASHBOARD.md` for the settings, making a long-lived access token,
+and building a view that survives six-ink quantization.
+
 `.env` holds only what is left outside the database: `HUB_PORT`, `PUID`,
 `PGID`, `OBSIDIAN_VAULT_PATH`, `LOG_LEVEL` and a few process knobs - see
 `.env.example`. Every dataset's source, credentials and cache TTLs are set

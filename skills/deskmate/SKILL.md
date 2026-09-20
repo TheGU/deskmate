@@ -102,8 +102,15 @@ The Brief page has room for 9 lines total: each section title and each item coun
 and whatever does not fit past that budget is cut, so put the sections that matter most first. A
 headline over about 30 characters drops to a smaller size on the panel. `note` doubles as the
 Today page's AI NOTE bar (falling back to `headline` when empty), so leaving it blank degrades
-Today too. Write the brief from `GET /api/state` (send the same `Authorization` header): it
-returns the calendar, weather, home and task state the panel is already rendering, so build the
+Today too. Write the brief from `GET /api/state` (send the same `Authorization` header). Its shape
+is schema 2, keyed by dataset name rather than a fixed set of fields:
+
+```
+{"schema": 2, "generated_at": "...", "timezone": "...", "alert": null,
+ "blocks": {"tasks": {...}, "calendar": {...}, "weather": {...}, "home": {...}, "device": {...}}}
+```
+
+It returns the calendar, weather, home and task state the panel is already rendering, so build the
 brief from that rather than guessing. Suggested sections - morning:
 today's schedule, key tasks, suggested focus, things at risk, unfinished work from yesterday.
 Evening: work completed, open tasks, things that changed, what should happen tomorrow.

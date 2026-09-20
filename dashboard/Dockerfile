@@ -62,4 +62,4 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
 # across a single worker process. A second worker would let two claims race
 # past each other at the filesystem. Scale by running one container, not by
 # adding --workers.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

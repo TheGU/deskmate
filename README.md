@@ -18,13 +18,21 @@ Data sources -> dashboard-hub (FastAPI + Jinja2 + Chromium at 4x + Lanczos + Pil
 
 Pages: `today`, `agenda`, `weather`, `brief`, `system`, `alert`.
 
-Status (2026-09-19): the E1002 is flashed and running on the desk, its Wi-Fi,
-hub URL and device key provisioned at runtime rather than baked into the
-firmware, and dashboard-hub is deployed with Docker. Setup, every setting
-and backup/restore are a web page (`/setup`, `/settings`; see
-docs/SETTINGS.md), not `.env` edits. It serves the Today, Agenda, Weather,
-Brief and System pages plus alerts, each pulling from its configured source
-or, honestly, reporting unavailable.
+Status (2026-09-20): dashboard-hub is deployed with Docker. Setup, every
+setting, and backup, restore and rotate are a web page (`/setup`,
+`/settings`; see docs/SETTINGS.md), not `.env` edits, holding one SQLite
+database (identity, settings, pushed datasets, telemetry). Every panel page
+is a module: the settings page's Modules section enables, disables and
+orders them, and a third-party module can be dropped in without touching
+the hub's own code (see docs/MODULES.md). The built-in modules serve the
+Today, Agenda, Weather, Brief and System pages plus alerts, each pulling
+from its configured source or, honestly, reporting unavailable; an optional
+Home Assistant dashboard module screenshots a Lovelace view straight to the
+panel instead (off by default, see docs/HA-DASHBOARD.md). Firmware
+provisioning - Wi-Fi, the hub URL and the device key set at runtime rather
+than baked into the firmware - is compiled and validated against ESPHome
+2026.8.2; the owner flashes it onto the E1002 themselves (see
+docs/FLASHING.md).
 
 ## Quick start
 
@@ -36,7 +44,7 @@ uv sync --all-groups
 uv run playwright install chromium
 
 # run the server, then open http://127.0.0.1:8080/setup in a browser
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8080
+uv run uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8080
 ```
 
 The wizard claims the hub, shows the bearer token and device key once, and
@@ -130,15 +138,15 @@ or redirects to `/setup` (`/preview` and `/`). See "Auth" in
 | GET, POST | `/setup/{step}` | The setup wizard's optional steps; admin only |
 | GET | `/login` | Sign in with the token (admin) or the device key (reader); sets a session cookie |
 | GET | `/settings` | Every settings section, backup, restore and rotate; admin only, see [docs/SETTINGS.md](docs/SETTINGS.md) |
-| GET | `/api/hub` | Hub name, base URL, configured sources |
-| GET | `/api/state` | The normalized state the pages render from |
-| GET | `/display/{page}.png` | 800x480 PNG, `ETag` + `304`, `?t=` busts the cache |
+| GET | `/api/hub` | Hub name, base URL, configured, `sources` (`{dataset: {source}}` for each pushed dataset) |
+| GET | `/api/state` | Schema 2: `{schema, generated_at, timezone, blocks, alert}`, `blocks` keyed by dataset name, the state the pages render from |
+| GET | `/display/{page}.png` | 800x480 PNG by page id (`today`) or its 0-based index in the window list (`/display/0.png`); `ETag` + `304`, `?t=` busts the cache |
 | GET | `/preview` | Developer page for switching between pages |
 | GET | `/preview/{page}.html` | Raw HTML at 800x480, for CSS work |
 | POST | `/api/ai-usage`, `/api/brief`, `/api/tasks` | Agent pushes, token required |
 | POST | `/api/alert` | Set the current alert, token required |
 | DELETE | `/api/alert` | Clear it, token required |
-| POST | `/api/device/telemetry` | Device pushes one sample every 5 min, `202`, token or device key required |
+| POST | `/api/device/telemetry` | Device pushes one sample every 5 min, `202` with `page_count` and `pages` (enabled page ids, in order), token or device key required |
 | GET | `/api/device/telemetry` | Latest sample plus sample count, oldest, newest |
 | GET | `/api/device/history` | `?hours=24`, downsampled to at most 300 points |
 
@@ -196,6 +204,9 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 - [docs/MODULES.md](docs/MODULES.md) - writing a module: the page and
   dataset contract, how to install one, and the minimal example at
   `examples/modules/hello/`.
+- [docs/HA-DASHBOARD.md](docs/HA-DASHBOARD.md) - the optional Home Assistant
+  dashboard module: settings, making a long-lived access token, and
+  building a Lovelace view that survives six-ink quantization.
 - [skills/deskmate/SKILL.md](skills/deskmate/SKILL.md) - how a remote agent
   pushes AI usage, a brief and tasks to the hub.
 - [docs/HOOKS.md](docs/HOOKS.md) - a POSIX sh hook that pushes AI quota
@@ -212,6 +223,8 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
   `HUB_PORT`, `PUID`, `PGID`, the Obsidian bind mount, a few process knobs.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - dev setup, tests and checks, writing
   and design rules, how to propose a change.
+- [docs/plan/](docs/plan/) - design plans for work that spans more than one
+  commit, each with a Status table kept current.
 
 ## Design rules
 

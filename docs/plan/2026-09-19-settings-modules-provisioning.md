@@ -1,7 +1,7 @@
 # SQLite settings, page modules, HA dashboard, firmware provisioning
 
-Status: in progress. See the Status table at the end. Reviewed once
-(senior review 2026-09-19); the review's changes are folded in below.
+Status: done. See the Status table at the end. Reviewed once (senior review
+2026-09-19); the review's changes are folded in below.
 
 ## Goal
 
@@ -233,7 +233,8 @@ the frame (header, footer, rules), the render engine, the alert page and
 API (id `alert` is reserved: never a module, never an index), auth, the
 settings machinery, the device routes and telemetry.
 
-**Module API** (`app/modules/__init__.py`):
+**Module API** (`app/modules/__init__.py`; as built - two fields were added
+past this draft, noted inline):
 
 ```python
 @dataclass(frozen=True)
@@ -242,31 +243,47 @@ class Module:
     title: str                   # footer name, upper case
     version: str
     description: str
-    settings_model: type[BaseModel] | None
+    settings_model: type[BaseModel] | None = None
+    settings_section: str | None = None  # added: the row this module's own
+                                  # settings_model is stored under, when it
+                                  # is not the module's own id (agenda's
+                                  # settings_model is stored under "calendar",
+                                  # system's under "home")
     datasets: tuple[DatasetSpec, ...] = ()
     page: PageSpec | None = None
     routes: Callable[[ModuleContext], APIRouter] | None = None
     default_order: int = 100
     default_enabled: bool = True
+    # .section property: settings_section or id, the actual row name.
 
 @dataclass(frozen=True)
 class DatasetSpec:
     name: str
     block_model: type[Block]
-    build_adapter: Callable[[BaseModel, ModuleContext], Adapter]
-    ttl_seconds: Callable[[BaseModel], float]
-    fixture: Path | None
+    value_field: str              # added: the one field of block_model the
+                                   # adapter's value lands in ("items" for
+                                   # tasks, "weather" for weather)
+    section: str                  # added: the settings section the adapter
+                                   # reads, usually the module's id but not
+                                   # always (system's device dataset reads
+                                   # the core "device" section)
+    build_adapter: Callable[[Any, Any, ModuleContext], Adapter[Any]]
+    ttl_seconds: Callable[[Any], float]
+    fixture: Path | None = None
 
 @dataclass(frozen=True)
 class PageSpec:
-    template: str | None          # file in the module's templates/ dir
+    title: str                    # added: the window-list name, since a
+                                   # screenshot page has no on-page title of
+                                   # its own for core to fall back to
     templates_dir: Path
     context: Callable[[DashboardState, HubSettings], dict[str, Any]]
     render_ttl_seconds: float
-    needs: tuple[str, ...]        # dataset names it draws
-    demo_datasets: tuple[str, ...]  # DEMO mark when one of these is fixture; pushed datasets only
-    flag: Callable[[DashboardState, HubSettings], bool] | None
-    screenshot: ScreenshotFn | None   # phase 3: custom RGB renderer
+    template: str | None = None   # file in the module's templates/ dir
+    needs: tuple[str, ...] = ()   # dataset names it draws
+    demo_datasets: tuple[str, ...] = ()  # DEMO mark when one of these is fixture; pushed datasets only
+    flag: Callable[[DashboardState, HubSettings], bool] | None = None
+    screenshot: ScreenshotFn | None = None   # phase 3: custom RGB renderer
 ```
 
 Core computes `header` and `footer` through `base_context` and merges them
@@ -490,4 +507,4 @@ groups.
 | 2.3 | done | CONTRIBUTING.md, docs/MODULES.md, examples/modules/hello/ with an install test |
 | 2.4 | done | page_count/page_names globals, index URLs, page_index in telemetry; compiled; not flashed |
 | 3.1 | done | ha_dashboard built-in (off by default), screenshot renderer bounded to 8 s, error frames, token never logged, docs/HA-DASHBOARD.md; 729 tests |
-| 3.3 | planned | |
+| 3.3 | done | main.py no longer builds an app at import time (uvicorn --factory), README/ARCHITECTURE/PRODUCT/DESIGN/DEPLOY/SKILL.md and this plan brought current with the module system, settings UI and HA dashboard; 765 tests; Docker image builds and scripts/e2e-check.py passes all 75 checks |

@@ -36,7 +36,7 @@ Run the server, then open `http://127.0.0.1:8080/setup` to set up a fresh
 hub, and `/settings` afterwards to look at the settings page:
 
 ```sh
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8080
+uv run uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8080
 ```
 
 To render every page to `output/` without starting a server, using demo
