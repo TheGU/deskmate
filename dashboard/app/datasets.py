@@ -2,15 +2,16 @@
 
 Every pushed dataset (``tasks``, ``ai_usage``, ``brief``) is one row: a JSON
 payload plus when it arrived. The three push routes in ``app/main.py`` and
-the matching ``Push*Adapter`` classes in ``app/adapters/`` are this module's
-only callers; ``app/alerts.py`` keeps its own copy of the same upsert (see
-that module's docstring) because ``alert`` is not a pushed dataset a module
-can claim and reads its row back into a specific model, not a bare dict.
-``app/legacy.py`` writes rows directly with its own ``INSERT`` (it is a
-one-time import that must never overwrite an existing row, which
-:func:`write_dataset`'s upsert would do), but writes the same two columns
-this module reads, so a legacy-imported row loads through :func:`read_dataset`
-exactly as a pushed one does.
+the matching ``Push*Adapter`` classes in ``app/adapters/`` are the main
+callers; ``app/alerts.py`` also reads and writes through this module for its
+``alert`` row (``alert`` is not a pushed dataset a module can claim, so it
+is never listed alongside them), and reads the payload back into a specific
+model rather than a bare dict; its delete-on-clear path has no equivalent
+here and still runs its own ``DELETE``. ``app/legacy.py`` writes rows
+directly with its own ``INSERT`` (it is a one-time import that must never
+overwrite an existing row, which :func:`write_dataset`'s upsert would do),
+but writes the same two columns this module reads, so a legacy-imported row
+loads through :func:`read_dataset` exactly as a pushed one does.
 """
 
 from __future__ import annotations
