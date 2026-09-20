@@ -460,32 +460,34 @@ def render_section(
     )
 
 
-def _last(form: FormData, name: str) -> str | None:
+def _last(values: Mapping[str, list[str]], name: str) -> str | None:
     """The last value submitted under ``name``, or ``None`` if there is none.
 
     Last, never first: a bool is a hidden ``0`` followed by a checkbox
-    carrying ``1``, so the checkbox only wins if it is read last.
+    carrying ``1``, so the checkbox only wins if it is read last. ``values``
+    is :func:`parse_section`'s one-pass index of the submitted form, read
+    here instead of a fresh ``FormData.getlist()`` scan per field.
     """
-    values = [value for value in form.getlist(name) if isinstance(value, str)]
-    if not values:
+    found = values.get(name)
+    if not found:
         return None
-    return values[-1]
+    return found[-1]
 
 
-def _checked(form: FormData, name: str) -> bool:
-    value = _last(form, name)
+def _checked(values: Mapping[str, list[str]], name: str) -> bool:
+    value = _last(values, name)
     return value is not None and value.strip().lower() in _TRUE_VALUES
 
 
-def _parse_scalar(form: FormData, name: str, spec: _Spec, current: Any) -> Any:
+def _parse_scalar(values: Mapping[str, list[str]], name: str, spec: _Spec, current: Any) -> Any:
     """One submitted input as the value its model field expects."""
     if spec.kind == "checkbox":
-        return _checked(form, name)
+        return _checked(values, name)
 
-    raw = _last(form, name)
+    raw = _last(values, name)
 
     if spec.kind == "password":
-        if _checked(form, f"{name}-clear"):
+        if _checked(values, f"{name}-clear"):
             return ""
         if raw is None or raw == "":
             # Blank keeps what is stored: the input is never pre-filled, so
@@ -510,14 +512,19 @@ def parse_section(
     data: dict[str, Any] = {}
     errors: dict[str, str] = {}
 
-    # Which indices were submitted for each list field. The names carry the
-    # indices, so this is the only way to know how many rows came back (and
-    # a hostile client is free to send any indices at all: they are sorted
-    # and renumbered below, never trusted as positions).
+    # One pass over the submitted form: every value by name (read by every
+    # _last/_checked call below instead of a fresh FormData.getlist() scan
+    # per field, which used to run once per sub-field per row), and which
+    # indices were submitted for each list field. The names carry the
+    # indices, so the latter is the only way to know how many rows came back
+    # (and a hostile client is free to send any indices at all: they are
+    # sorted and renumbered below, never trusted as positions).
+    values: dict[str, list[str]] = {}
     row_indices: dict[str, set[int]] = {}
     for key, value in form.multi_items():
         if not isinstance(value, str):
             continue
+        values.setdefault(key, []).append(value)
         match = _ROW_NAME.match(key)
         if match is None:
             continue
@@ -530,7 +537,21 @@ def parse_section(
         spec = _classify(info.annotation)
         if spec.kind != "list":
             stored = getattr(current, name, None) if current is not None else None
-            data[name] = _parse_scalar(form, name, spec, stored)
+            data[name] = _parse_scalar(values, name, spec, stored)
+            continue
+
+        indices = row_indices.get(name, set())
+        if len(indices) > MAX_LIST_ROWS + BLANK_ROWS:
+            # Refused before a single row is parsed: with a list field's rows
+            # each carrying several sub-fields, parsing every row only to
+            # throw the result away once the cap was exceeded was the
+            # expensive part. The threshold allows for BLANK_ROWS spare rows
+            # on top of a full set of stored rows: render_section renders
+            # existing rows plus BLANK_ROWS empty ones, so a section with
+            # exactly MAX_LIST_ROWS stored rows legitimately submits that
+            # many indices.
+            errors[name] = f"at most {MAX_LIST_ROWS} rows; {len(indices)} were submitted"
+            data[name] = []
             continue
 
         item_model = spec.item_model
@@ -540,14 +561,14 @@ def parse_section(
             for sub_name, sub_info in item_model.model_fields.items()
         }
         rows: list[dict[str, Any]] = []
-        for index in sorted(row_indices.get(name, set())):
-            if _checked(form, f"{name}-{index}-delete"):
+        for index in sorted(indices):
+            if _checked(values, f"{name}-{index}-delete"):
                 continue
             row: dict[str, Any] = {}
             filled: list[bool] = []
             for sub_name, sub_spec in sub_specs.items():
                 key = f"{name}-{index}-{sub_name}"
-                parsed = _parse_scalar(form, key, sub_spec, None)
+                parsed = _parse_scalar(values, key, sub_spec, None)
                 row[sub_name] = parsed
                 if sub_spec.kind in _ALWAYS_SUBMITTED:
                     # A select submits its first option and a checkbox its

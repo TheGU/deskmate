@@ -231,6 +231,50 @@ def test_more_than_the_cap_is_a_field_error_and_nothing_is_validated() -> None:
     assert str(MAX_LIST_ROWS) in parsed.errors["feeds"]
 
 
+def test_the_row_cap_is_checked_against_submitted_indices_before_parsing() -> None:
+    """The cap is refused before a single row is parsed, off the raw count
+    of submitted indices - not the rows that survive delete/blank
+    filtering. Every row below is marked deleted, so parsing every one of
+    them would still filter down to zero: a check made *after* the per-row
+    loop (the shape being fixed here) would never trip on this input."""
+    rows: list[tuple[str, str]] = [("source", "ics"), ("agenda_days", "7"), ("ttl_seconds", "300")]
+    for index in range(MAX_LIST_ROWS + 5):
+        rows.append((f"feeds-{index}-url", ""))
+        rows.append((f"feeds-{index}-name", ""))
+        rows.append((f"feeds-{index}-color", "blue"))
+        rows.append((f"feeds-{index}-delete", "1"))
+
+    parsed = parse_section(CalendarSettings, FormData(rows), CalendarSettings())
+
+    assert "feeds" in parsed.errors
+    assert str(MAX_LIST_ROWS) in parsed.errors["feeds"]
+    assert parsed.data["feeds"] == []
+
+
+def test_a_full_page_of_rows_plus_the_blank_rows_parses_with_no_error() -> None:
+    """A section storing exactly ``MAX_LIST_ROWS`` feeds renders those rows
+    plus ``BLANK_ROWS`` empty spares (see
+    ``test_list_rows_are_indexed_and_three_blank_rows_are_offered``), so
+    submitting that page back unchanged is the ordinary case, not an
+    overflow: it must parse to exactly ``MAX_LIST_ROWS`` rows with no
+    error."""
+    rows: list[tuple[str, str]] = [("source", "ics"), ("agenda_days", "7"), ("ttl_seconds", "300")]
+    for index in range(MAX_LIST_ROWS):
+        rows.append((f"feeds-{index}-url", f"https://example.test/{index}.ics"))
+        rows.append((f"feeds-{index}-name", f"feed {index}"))
+        rows.append((f"feeds-{index}-color", "blue"))
+    for offset in range(BLANK_ROWS):
+        index = MAX_LIST_ROWS + offset
+        rows.append((f"feeds-{index}-url", ""))
+        rows.append((f"feeds-{index}-name", ""))
+        rows.append((f"feeds-{index}-color", "blue"))
+
+    parsed = parse_section(CalendarSettings, FormData(rows), CalendarSettings())
+
+    assert "feeds" not in parsed.errors
+    assert len(parsed.data["feeds"]) == MAX_LIST_ROWS
+
+
 def test_a_row_error_location_lands_on_that_row_s_input() -> None:
     """``("feeds", 1, "color")`` has to come back as ``feeds-1-color``, or
     the message has no input to sit next to."""
