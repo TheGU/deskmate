@@ -350,10 +350,11 @@ Disabling a dataset module leaves the pages that draw it showing
 opens a fresh browser context on the shared browser (it holds the render
 lock like any page, so its whole path is bounded to 8 s: navigation
 timeout 4 s, settle, screenshot), runs an init script that stores
-`hassTokens` in `localStorage` for the HA origin (`access_token`,
-`token_type: Bearer`, `hassUrl`, `expires` far in the future,
-`expires_in`, `clientId: null`), the way sibbl/hass-lovelace-kindle-
-screensaver does, navigates to the dashboard at 800x480 with the 4x device
+`hassTokens` in `localStorage` for the HA origin (`hassUrl`,
+`access_token`, `token_type: Bearer`, the three fields sibbl/hass-lovelace-
+kindle-screensaver has always stored; the earlier draft of this plan listed
+`expires`, `expires_in` and `clientId`, which upstream never sets) plus
+`selectedLanguage`, navigates to the dashboard at 800x480 with the 4x device
 scale factor, waits, screenshots, and hands the RGB image to the usual
 quantize step. A timeout, a network error or a login page (URL containing
 `/auth/`) becomes an error render: the frame with a hatch box and the
@@ -488,5 +489,5 @@ groups.
 | 2.2 | planned | |
 | 2.3 | done | CONTRIBUTING.md, docs/MODULES.md, examples/modules/hello/ with an install test |
 | 2.4 | done | page_count/page_names globals, index URLs, page_index in telemetry; compiled; not flashed |
-| 3.1 | planned | |
+| 3.1 | done | ha_dashboard built-in (off by default), screenshot renderer bounded to 8 s, error frames, token never logged, docs/HA-DASHBOARD.md; 729 tests |
 | 3.3 | planned | |
