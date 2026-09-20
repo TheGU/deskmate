@@ -46,7 +46,7 @@ endpoints, and `GET /openapi.json` for the schema of record.
 
 | Section | Sources | Default | Settings |
 | --- | --- | --- | --- |
-| tasks | `fixture`, `push`, `obsidian` | `push` | Source, Obsidian vault path, Obsidian task glob |
+| tasks | `fixture`, `push` | `push` | Source |
 | calendar | `fixture`, `ics` | `ics` | Source, Feeds (URL, name, color) |
 | weather | `fixture`, `open_meteo` | `open_meteo` | Source, Latitude, Longitude, Location name |
 | ai_usage | `fixture`, `push` | `push` | Source |
@@ -87,9 +87,10 @@ the files.
 
 ## Tasks
 
-Two ways to get tasks onto the panel: push, or a read-only Obsidian vault.
-The tasks section's source (default `push`, set on `/settings`, see
-docs/SETTINGS.md) picks between them, plus `fixture` for demo data.
+Tasks reach the panel only one way: a local agent reads the owner's own
+task manager and pushes what it finds (see docs/LOCAL-AGENT.md). The tasks
+section's source (default `push`, set on `/settings`, see docs/SETTINGS.md)
+is `push`, plus `fixture` for demo data.
 
 ### Push (default)
 
@@ -108,46 +109,9 @@ inside one push is `422`. The push writes a `tasks` row of the `datasets`
 table (`data/deskmate.sqlite`) and invalidates the cached adapter, so
 `/api/state` reflects it on the very next build. Response `200`:
 `{"stored": "tasks", "received_at": "<local ISO>", "count": <n>,
-"source": "push"|"fixture"|"obsidian"}`, plus `"warning"` when the
-tasks section's source is pinned to `fixture` or set to `obsidian` (either
-way the push is stored, but the panel will not show it, and
-`source` names which). Full shape: `GET /openapi.json`.
-
-### Obsidian (read only)
-
-Set the tasks section's source to `obsidian` on `/settings`, with a vault
-path (in Docker, `/vault`, the container's mount point - see
-`OBSIDIAN_VAULT_PATH` in `.env.example` for the host side of that bind
-mount) and a task glob (default `**/*.md`).
-
-The vault is opened read only and is bind-mounted `:ro` in Docker. Directories
-whose name starts with `.` (such as `.obsidian`) are skipped, and the scan stops
-after 5000 files.
-
-Two task dialects are parsed, and they may be mixed in one file:
-
-Dataview inline fields:
-
-```markdown
-- [ ] Send the vendor quote (due:: 2026-09-05) [priority:: high]
-- [x] Draft retro notes (due:: 2026-09-03)
-```
-
-Tasks plugin, emoji markers (calendar emoji = due date, double-up arrow = high
-priority, and so on):
-
-```markdown
-- [ ] Review PR 482 auth refactor <calendar emoji> 2026-09-06 <double-up emoji> #code
-```
-
-Recognised: `due` / `deadline` and `priority` / `prio` as inline fields;
-due, scheduled, start, done, created and cancelled date emoji; the five Tasks
-priority emoji; `#tags`; `[x]` as completed; `[-]` (cancelled) is dropped.
-Recurrence text after the repeat emoji is ignored. The emoji never reach the
-rendered page.
-
-Normalized fields: `id`, `title`, `due`, `priority`, `completed`, `source`,
-`tags`.
+"source": "push"|"fixture"}`, plus `"warning"` when the tasks section's
+source is pinned to `fixture` (the push is stored, but the panel will not
+show it). Full shape: `GET /openapi.json`.
 
 ---
 

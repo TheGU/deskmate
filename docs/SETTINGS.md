@@ -7,7 +7,7 @@ row per section. This document covers the setup wizard, the settings page,
 every section's fields and defaults, backup and restore, rotating secrets,
 resetting the hub, and the one-time import of a pre-database install.
 `.env.example` covers what is left outside the database (`HUB_PORT`, `PUID`,
-`PGID`, the Obsidian bind mount, and a few process knobs).
+`PGID`, and a few process knobs).
 
 ## Who may open these pages
 
@@ -76,17 +76,14 @@ next to the input that caused it.
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| Source | `push` | `push`, `obsidian` or `fixture`. |
-| Obsidian vault path | (blank) | Only read when the source is `obsidian`. In Docker, enter `/vault` (the container's mount point), not the host path from `OBSIDIAN_VAULT_PATH`. |
-| Obsidian task glob | `**/*.md` | Which files in the vault are scanned. |
+| Source | `push` | `push` or `fixture`. |
 | Max priority tasks | `3` | How many open tasks the Today page lists. |
 | TTL seconds | `300` | How long a fetched or pushed list is cached. |
 | Stale seconds | `36000` | How old a pushed list can get before it is marked stale (`push` source only). |
 
 Until a source is configured: `push` shows nothing until the first
-`POST /api/tasks` (see docs/DATA-SOURCES.md); `obsidian` reports
-`unavailable` until a vault path is set and mounted; `fixture` always shows
-demo data and marks the page DEMO.
+`POST /api/tasks` (see docs/DATA-SOURCES.md); `fixture` always shows demo
+data and marks the page DEMO.
 
 **Calendar** (`calendar`)
 
@@ -281,9 +278,9 @@ store it somewhere only you can read, never attach it to a public issue or
 chat.
 
 The backup does **not** carry `DATA_DIR/modules/` (any locally installed
-module package) or an Obsidian vault - both are files on disk beside the
-database, not rows in it. Restoring a backup on a different install still
-needs those, if you use them, put back separately.
+module package) - it is files on disk beside the database, not rows in it.
+Restoring a backup on a different install still needs it, if you use it,
+put back separately.
 
 ## Restore
 

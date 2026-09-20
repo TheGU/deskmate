@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from collections.abc import Iterator
 from datetime import datetime, timezone as dt_timezone
@@ -221,6 +222,30 @@ def test_the_pushed_sources_are_mapped_on_the_way_in(clean_env: None) -> None:
     assert documents["tasks"]["source"] == "push"
     assert documents["ai_usage"]["source"] == "push"
     assert documents["brief"]["source"] == "push"
+
+
+def test_an_old_obsidian_tasks_source_imports_as_push_with_a_warning(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``TASKS_SOURCE=obsidian`` is the removed hub-side vault reader: it has
+    to import as ``push`` (the only other real selector left), and, unlike
+    ``auto``/``file``, it is logged - silently dropping it would look like
+    the operator's setting vanished rather than being replaced by the local
+    agent push story in docs/LOCAL-AGENT.md. The now-unsupported
+    ``obsidian_vault_path`` and ``obsidian_task_glob`` fields must not appear
+    in the imported document (``TasksSettings`` no longer has them)."""
+    env = LegacyEnv(
+        _env_file=None,
+        TASKS_SOURCE="obsidian",
+        OBSIDIAN_VAULT_PATH="/vault",
+        OBSIDIAN_TASK_GLOB="**/*.md",
+    )
+    with caplog.at_level(logging.WARNING, logger="app.legacy"):
+        documents = section_documents(env)
+    assert documents["tasks"]["source"] == "push"
+    assert "obsidian_vault_path" not in documents["tasks"]
+    assert "obsidian_task_glob" not in documents["tasks"]
+    assert any("obsidian" in record.getMessage().lower() for record in caplog.records)
 
 
 def test_feeds_are_built_from_the_three_comma_lists(clean_env: None) -> None:

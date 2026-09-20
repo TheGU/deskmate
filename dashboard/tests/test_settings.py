@@ -249,6 +249,38 @@ def test_extra_keys_in_a_row_are_ignored(store: SettingsStore, database: Databas
     assert store.load("general") == GeneralSettings(timezone="Europe/Berlin", units="metric")
 
 
+def test_a_tasks_row_with_the_removed_obsidian_source_upgrades_in_place(
+    store: SettingsStore, database: Database
+) -> None:
+    """A hub upgraded from before the ``obsidian`` source was removed can
+    still have a ``tasks`` row shaped like the old settings page. It must
+    load as ``push`` with its other fields intact, not fall back to the
+    whole section's defaults the way
+    ``test_a_row_that_fails_validation_falls_back_to_defaults_with_a_warning``
+    above does for an unrelated broken field."""
+    with database.writing() as connection:
+        connection.execute(
+            "INSERT INTO settings (section, value_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "tasks",
+                json.dumps(
+                    {
+                        "source": "obsidian",
+                        "obsidian_vault_path": "/vault",
+                        "obsidian_task_glob": "**/*.md",
+                        "max_priority_tasks": 5,
+                        "ttl_seconds": 60.0,
+                        "stale_seconds": 3600.0,
+                    }
+                ),
+                "2026-09-19T00:00:00.000+00:00",
+            ),
+        )
+    assert store.load("tasks") == TasksSettings(
+        source="push", max_priority_tasks=5, ttl_seconds=60.0, stale_seconds=3600.0
+    )
+
+
 def test_snapshot_builds_a_hub_settings_from_every_section(store: SettingsStore) -> None:
     store.save("general", GeneralSettings(timezone="Europe/Berlin", units="metric"))
     snapshot = store.snapshot()

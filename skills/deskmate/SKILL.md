@@ -31,10 +31,10 @@ curl -s -H "Authorization: Bearer $DESKMATE_TOKEN" "$DESKMATE_URL/api/hub"
 
 Returns `{name, base_url, configured, version, timezone, sources}`, where `sources` is
 `{ai_usage: {source}, brief: {source}, tasks: {source}}`. `source` is that section's setting on
-the hub's own settings page: `push`, `fixture`, or (tasks only) `obsidian`. It is a live read on
+the hub's own settings page: `push` or `fixture`. It is a live read on
 every call, so it already shows `push` right after your first push (the footer's own DEMO mark
 instead tracks what is currently drawn on the panel, and only catches up at the panel's own next
-render). If `source` is `fixture` or `obsidian`, the section is not reading what you push; the
+render). If `source` is `fixture`, the section is not reading what you push; the
 push response also warns you (see below).
 
 **GET `/openapi.json` before posting.** The schema there is the truth: field names, types, length
@@ -68,8 +68,7 @@ All three: `POST`, require the token, `schema_version` optional (defaults to 1; 
 understood), unknown fields are rejected (422), every datetime field must carry a UTC offset
 (`+07:00` or `Z`; a naive value is 422, never silently assumed to be the hub's own timezone).
 Response 200: `{stored, received_at, count, source}`, plus `warning` when
-`source` is not what you pushed toward (the section's source is pinned to `fixture`, or
-to `obsidian` for tasks).
+`source` is not what you pushed toward (the section's source is pinned to `fixture`).
 
 ### AI usage / quota
 

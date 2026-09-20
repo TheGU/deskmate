@@ -272,7 +272,7 @@ def run_full_check(base: str) -> None:
 
     # -- tasks: fixture source shows a warning, push does not --------------------
     tasks_fixture_form = urlencode({
-        "source": "fixture", "obsidian_vault_path": "", "obsidian_task_glob": "**/*.md",
+        "source": "fixture",
         "max_priority_tasks": "3", "ttl_seconds": "300", "stale_seconds": "36000", "action": "save",
     })
     s, _, _ = call(admin, base, "/settings/tasks", "POST", tasks_fixture_form,
@@ -295,7 +295,7 @@ def run_full_check(base: str) -> None:
     expect("post tasks warning present while source is fixture", "warning" in push_result, True)
 
     tasks_push_form = urlencode({
-        "source": "push", "obsidian_vault_path": "", "obsidian_task_glob": "**/*.md",
+        "source": "push",
         "max_priority_tasks": "3", "ttl_seconds": "300", "stale_seconds": "36000", "action": "save",
     })
     s, _, _ = call(admin, base, "/settings/tasks", "POST", tasks_push_form,

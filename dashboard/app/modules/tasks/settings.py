@@ -4,19 +4,20 @@ priority list is built from them.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: The ``settings`` row name this model reads and writes.
 SECTION = "tasks"
 
-#: ``push`` reads the latest ``POST /api/tasks`` payload; ``obsidian`` scans a
-#: mounted vault for open checkboxes; ``fixture`` is the explicit demo choice.
-#: The old ``auto`` and ``file`` selectors are gone (see the plan's
-#: Non-goals): both meant "the pushed file", which is now just ``push``.
-TasksSource = Literal["push", "obsidian", "fixture"]
+#: ``push`` reads the latest ``POST /api/tasks`` payload; ``fixture`` is the
+#: explicit demo choice. The old ``auto`` and ``file`` selectors are gone
+#: (see the plan's Non-goals): both meant "the pushed file", which is now
+#: just ``push``. The ``obsidian`` selector (the hub reading a mounted vault
+#: directly) is also gone: tasks reach the hub only through the push API, a
+#: local agent reads the owner's own vault and pushes (docs/LOCAL-AGENT.md).
+TasksSource = Literal["push", "fixture"]
 
 
 class TasksSettings(BaseModel):
@@ -26,15 +27,7 @@ class TasksSettings(BaseModel):
 
     source: TasksSource = Field(
         default="push",
-        description="Where tasks come from: an agent pushing them, an Obsidian vault, or demo data.",
-    )
-    obsidian_vault_path: Path | None = Field(
-        default=None,
-        description="Path to the mounted Obsidian vault, used only when the source is obsidian.",
-    )
-    obsidian_task_glob: str = Field(
-        default="**/*.md",
-        description="Glob pattern selecting which files in the vault are scanned for open tasks.",
+        description="Where tasks come from: an agent pushing them, or demo data.",
     )
     max_priority_tasks: int = Field(
         default=3,
@@ -56,6 +49,23 @@ class TasksSettings(BaseModel):
         allow_inf_nan=False,
         description="How old a pushed task list can get before the panel marks it stale.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _removed_obsidian_source(cls, data: Any) -> Any:
+        """A hub upgraded from before the ``obsidian`` source was removed can
+        still have a ``tasks`` row with ``source: "obsidian"`` and an
+        ``obsidian_vault_path``, neither of which this model accepts any
+        more. Map the source to ``push`` and drop the stale fields here,
+        before validation, so ``SettingsStore.load`` does not fall back to
+        defaults for the *whole* section (losing ``max_priority_tasks`` and
+        the TTLs too) just because one field no longer parses."""
+        if isinstance(data, dict) and data.get("source") == "obsidian":
+            data = dict(data)
+            data["source"] = "push"
+            data.pop("obsidian_vault_path", None)
+            data.pop("obsidian_task_glob", None)
+        return data
 
 
 __all__ = ["SECTION", "TasksSettings", "TasksSource"]

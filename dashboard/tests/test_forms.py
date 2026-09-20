@@ -117,7 +117,7 @@ def test_literal_becomes_a_select_with_the_current_value_selected() -> None:
 
 
 def test_label_for_reads_the_field_name() -> None:
-    assert label_for("obsidian_vault_path") == "Obsidian vault path"
+    assert label_for("weather_location_name") == "Weather location name"
     assert label_for("ttl_seconds") == "TTL seconds"
     assert label_for("ai_usage") == "AI usage"
     assert label_for("entity_id") == "Entity ID"

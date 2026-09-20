@@ -75,9 +75,8 @@ def push_warning(dataset: str, configured: str) -> str | None:
     what the panel actually draws.
 
     The source is pinned to ``fixture`` (a fresh hub still shows demo data
-    for this dataset) or, for tasks only, ``obsidian`` (the push landed but
-    the panel keeps reading the vault). ``None`` when the source is
-    ``push``, since that is exactly the row the route just wrote.
+    for this dataset). ``None`` when the source is ``push``, since that is
+    exactly the row the route just wrote.
 
     It lives here rather than in a route because all three push routes
     (``app/modules/<id>/routes.py``) answer with it and none of them owns

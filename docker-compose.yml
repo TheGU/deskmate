@@ -26,18 +26,10 @@ services:
         required: false
     environment:
       DATA_DIR: /data
-      # The vault is always mounted at /vault inside the container; the host
-      # path lives in OBSIDIAN_VAULT_PATH and is used by the volume below.
-      OBSIDIAN_VAULT_PATH: /vault
     volumes:
       # The hub's one database (data/deskmate.sqlite: identity, settings,
       # pushed datasets, telemetry), read-write.
       - ./data:/data
-      # Optional Obsidian vault, read only. Set OBSIDIAN_VAULT_PATH in .env to
-      # a host path; leave it as ./data to keep the bind mount harmless. Set
-      # the tasks section's source to obsidian on /settings to use it, and
-      # enter /vault (not the host path) as its vault path there.
-      - ${OBSIDIAN_VAULT_PATH:-./data}:/vault:ro
     healthcheck:
       test:
         - CMD

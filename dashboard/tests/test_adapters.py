@@ -17,7 +17,7 @@ from app.adapters.ai_usage import FixtureAIUsageAdapter, PushAIUsageAdapter
 from app.adapters.base import AdapterError, AdapterUnavailable, CachedAdapter
 from app.adapters.calendar import FixtureCalendarAdapter, IcsCalendarAdapter, parse_ics
 from app.adapters.home_assistant import FixtureHomeAdapter, RestHomeAdapter, build_home_state
-from app.adapters.tasks import FixtureTasksAdapter, ObsidianTasksAdapter, PushTasksAdapter
+from app.adapters.tasks import FixtureTasksAdapter, PushTasksAdapter
 from app.adapters.weather import (
     FixtureWeatherAdapter,
     OpenMeteoWeatherAdapter,
@@ -68,13 +68,6 @@ def test_fixture_tasks_keep_literal_dates_when_shifting_is_off(
     literal = env.model_copy(update={"fixture_relative_dates": False})
     tasks = run(FixtureTasksAdapter(hub_settings.tasks, hub_settings.general, literal, TASKS_FIXTURE).fetch())
     assert any(task.due == date(2026, 9, 4) for task in tasks)
-
-
-def test_obsidian_adapter_without_a_vault_is_unavailable(hub_settings: HubSettings, env: Env) -> None:
-    tasks = hub_settings.tasks.model_copy(update={"obsidian_vault_path": None})
-    adapter = ObsidianTasksAdapter(tasks, env)
-    with pytest.raises(AdapterUnavailable):
-        run(adapter.fetch())
 
 
 def test_push_tasks_is_unavailable_before_anything_is_pushed(  # type: ignore[no-untyped-def]
