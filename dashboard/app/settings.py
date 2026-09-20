@@ -2,28 +2,27 @@
 and writes sections through the hub's database.
 
 ``app/modules/<id>/settings.py`` defines one pydantic model per section;
-:data:`SECTIONS` is the registry of them, in the wizard's order (the plan's
-``/setup/general``, ``/setup/weather``, ... sequence extended to every
-section). :class:`HubSettings` is the composite every adapter, context
-builder and route will read once 1.2b switches call sites to it. Until then,
-this module has no effect on the running hub: ``app/config.py:Settings``
-stays what everything actually reads.
+:data:`SECTIONS` is the registry of them, keyed by section name and in the
+wizard's order (the plan's ``/setup/general``, ``/setup/weather``, ...
+sequence extended to every section) - the settings page, the setup wizard
+and :class:`HubSettings` itself all walk sections in this order, so there is
+no separate ordering list to keep in sync. :class:`HubSettings` is the
+composite every adapter, context builder and route reads: one attribute per
+section, each defaulted, built by :meth:`SettingsStore.snapshot`.
 
 :class:`SettingsStore` is the other half: it loads a section's row from
 ``settings`` (``app/db.py``), validates it through the section's model, and
 saves one back. A missing row means defaults; a row that fails to parse or
 fails validation is a WARNING and defaults, never a crash, so a hub with one
 bad section keeps serving the others (and its own honest empty state) while
-an admin fixes it on the settings page (1.4).
-
-``app/main.py:Hub`` is what makes the store real: it builds one over the
-hub's database at startup and reads its :meth:`SettingsStore.snapshot` as
-``HubSettings`` (and again on every :meth:`Hub.reload`), so a section saved
-here - through the settings page, or once through
-``app/legacy.py:import_legacy`` on the old environment - is what the running
-hub actually reads. There is no separate "build a HubSettings from the
-environment" path any more: ``app/legacy.py:LegacyEnv`` is read only inside
-that one-time import.
+an admin fixes it on the settings page. ``app/main.py:Hub`` builds one
+``SettingsStore`` over the hub's database at startup and reads its
+:meth:`SettingsStore.snapshot` as ``HubSettings`` (and again on every
+``Hub.reload``), so a section saved here - through the settings page, or
+once through ``app/legacy.py:import_legacy`` on the old environment - is
+what the running hub actually reads. ``app/legacy.py:LegacyEnv`` is read
+only inside that one-time import; there is no other path that builds a
+``HubSettings`` from the environment.
 """
 
 from __future__ import annotations
