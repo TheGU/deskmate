@@ -22,8 +22,8 @@
 .sys-battery .hatch { width: 96px; height: 48px; }
 .sys-battery-meter { width: 120px; margin-top: 6px; }
 .sys-power-word { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
-.sys-age { font-size: 16px; font-weight: 500; margin-top: 2px; }
-.sys-battery-label-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.sys-battery-label-row { display: flex; align-items: baseline; gap: 6px; margin-top: 4px; }
+.sys-age { font-size: 14px; }
 
 .sys-body .meter { display: block; position: relative; height: 2px; border: 2px solid #000000; background: #FFFFFF; box-sizing: content-box; flex: 0 0 auto; }
 .sys-body .meter-thick { height: 4px; }
@@ -113,8 +113,8 @@
       <div class="sys-battery-label-row">
         {% if device.stale %}<span class="telltale yellow"></span>{% endif %}
         <div class="label">BATTERY</div>
+        {% if device.stale %}<div class="label sys-age">{{ device.age_text }}</div>{% endif %}
       </div>
-      {% if device.stale %}<div class="sys-age">{{ device.age_text }}</div>{% endif %}
     </div>
     <div class="rule-v"></div>
     <div class="sys-metrics">
