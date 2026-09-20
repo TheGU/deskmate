@@ -59,7 +59,7 @@ Sequencing: R.1, R.2 and F.2 in parallel worktrees; R.3 after R.1; R.4 last.
 
 | Package | State | Notes |
 | --- | --- | --- |
-| R.1 | planned | |
+| R.1 | done | e2e PNGs deleted; battery age in the label row (16 px, clipped); plug icon on usb_present with power word USB/CHARGING; weather location under the hero; /preview Settings link and lazy panel PNG; device wording; alert-while-awake note; gate refrozen |
 | R.2 | done | obsidian source, adapter, tests, /vault mount and OBSIDIAN_VAULT_PATH removed; a stored or legacy obsidian source upgrades to push with a warning; PROPOSAL.md kept as the historical brief |
 | R.3 | planned | |
 | F.2 | done | refresh_minutes, telemetry_minutes, wake_hours in the device section and the telemetry response; firmware restorable globals with a 24-bit hour mask, poller restart, independent clamps; compiled on ESPHome 2026.8.2, not flashed; 775 tests |
