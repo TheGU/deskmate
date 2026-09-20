@@ -132,6 +132,7 @@ class Registry:
         toggles = {toggle.id: toggle for toggle in (settings or ModulesSettings()).items}
         by_id: dict[str, Module] = {}
         dataset_owner: dict[str, str] = {}
+        section_owner: dict[str, str] = {}
         for module in modules:
             validate_module(module)
             if module.id in by_id:
@@ -145,6 +146,23 @@ class Registry:
                         f"dataset {dataset.name!r}"
                     )
                 dataset_owner[dataset.name] = module.id
+            # A settings section has one owner, exactly like a dataset name:
+            # ``validate_module`` already refuses a module trying to claim
+            # one of core's own (RESERVED_SECTIONS), so what is left here is
+            # two modules both wanting the same section - the built-in that
+            # already owns "weather" wins simply by loading first
+            # (BUILTIN_MODULE_PACKAGES is walked before entry points and
+            # directory modules), and a third-party module claiming it
+            # refuses to load rather than silently sharing the row under
+            # whichever settings_model happened to be validated last.
+            if module.settings_model is not None:
+                owner = section_owner.get(module.section)
+                if owner is not None:
+                    raise ModuleError(
+                        f"modules {owner!r} and {module.id!r} both own the "
+                        f"settings section {module.section!r}"
+                    )
+                section_owner[module.section] = module.id
 
         self._toggles = toggles
         self._modules = tuple(

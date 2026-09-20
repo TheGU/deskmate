@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 from starlette.datastructures import FormData
 
 from app.config import Env
@@ -36,6 +37,7 @@ from app.modules.registry import (
     ModulesSettings,
     ModuleToggle,
     Registry,
+    builtin_modules,
     builtin_registry,
     directory_modules,
 )
@@ -392,6 +394,49 @@ def test_two_modules_claiming_one_dataset_refuse_to_load() -> None:
     )
     with pytest.raises(ModuleError, match="both provide the dataset"):
         Registry([_module(id="one", datasets=(spec,)), _module(id="two", datasets=(spec,))])
+
+
+class _DummySettings(BaseModel):
+    """A settings model with nothing in it: only its section name matters
+    to the tests below."""
+
+
+def test_a_settings_section_reserved_for_core_refuses_to_load() -> None:
+    with pytest.raises(ModuleError, match="general.*reserved for core"):
+        validate_module(
+            _module(settings_model=_DummySettings, settings_section="general")
+        )
+
+
+@pytest.mark.parametrize("section", ["general", "device", "alert", "modules"])
+def test_every_reserved_section_refuses_to_load(section: str) -> None:
+    with pytest.raises(ModuleError, match="reserved for core"):
+        validate_module(
+            _module(settings_model=_DummySettings, settings_section=section)
+        )
+
+
+def test_two_modules_claiming_the_same_settings_section_refuse_to_load() -> None:
+    with pytest.raises(ModuleError, match="both own the settings section 'shared'"):
+        Registry(
+            [
+                _module(id="one", settings_model=_DummySettings, settings_section="shared"),
+                _module(id="two", settings_model=_DummySettings, settings_section="shared"),
+            ]
+        )
+
+
+def test_a_third_party_module_claiming_a_builtin_section_refuses_to_load() -> None:
+    """Weather is not in RESERVED_SECTIONS - it belongs to the built-in
+    weather module, not core - so this has to be caught as a duplicate
+    section owner, not a reserved-word refusal, and the message has to name
+    both modules."""
+    modules = [
+        *builtin_modules(),
+        _module(id="rival", settings_model=_DummySettings, settings_section="weather"),
+    ]
+    with pytest.raises(ModuleError, match="both own the settings section 'weather'"):
+        Registry(modules)
 
 
 def test_the_built_in_pages_keep_their_ids_and_their_order() -> None:

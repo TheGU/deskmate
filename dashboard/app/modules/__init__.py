@@ -59,6 +59,17 @@ MODULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 #: page (see the module docstring).
 RESERVED_IDS: frozenset[str] = frozenset({"alert"})
 
+#: Settings sections core owns outright and no module's own ``settings_model``
+#: may claim, matching ``app/settings.py:CORE_SECTIONS``'s keys: ``general``
+#: is the hub's own timezone and units, ``device`` belongs to the telemetry
+#: routes and the retention sweep, ``alert`` is the interrupt page, and
+#: ``modules`` is the registry's own enable/order list. A dataset is still
+#: free to *read* one of these (the built-in ``system`` module's ``device``
+#: dataset does exactly that); what is refused here is a module trying to
+#: *own* the row, which would make core's own section a module's to edit or
+#: to lose the moment that module is uninstalled.
+RESERVED_SECTIONS: frozenset[str] = frozenset({"general", "device", "alert", "modules"})
+
 #: The datasets an agent pushes to the hub, and therefore the only ones a
 #: page may mark DEMO when they fall back to a fixture. A fetched dataset on
 #: ``fixture`` never prints DEMO, and never has
@@ -213,6 +224,10 @@ def validate_module(module: Module) -> None:
     _check_id(module.id, "module id")
     if module.settings_section is not None:
         _check_id(module.settings_section, "settings section", reserved=False)
+    if module.settings_model is not None and module.section in RESERVED_SECTIONS:
+        raise ModuleError(
+            f"module {module.id!r}: settings section {module.section!r} is reserved for core"
+        )
     if module.settings_model is not None and not (
         isinstance(module.settings_model, type)
         and issubclass(module.settings_model, BaseModel)
@@ -266,6 +281,7 @@ __all__ = [
     "MODULE_ID_RE",
     "PUSHED_DATASETS",
     "RESERVED_IDS",
+    "RESERVED_SECTIONS",
     "DatasetSpec",
     "Module",
     "ModuleContext",
