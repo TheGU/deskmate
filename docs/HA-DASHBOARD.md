@@ -113,15 +113,21 @@ what the System page reads, and `ha_dashboard` does not touch them. This
 module has no dataset and no adapter of its own; it only ever draws what it
 just screenshotted.
 
-## The 8 second bound
+## The timeout bound
 
 The whole call above - opening the context, navigating, settling and
 screenshotting - runs inside the same render lock as every other page, so
 a slow or hung dashboard cannot make the rest of the panel wait
-indefinitely. The function enforces an outer 8 second bound on itself
-(on top of the 4 second navigation timeout and the settle time, which is
-itself capped at 4 seconds by the Settle ms field) as a backstop for
-anything its own timeouts miss.
+indefinitely. The function enforces an outer bound on itself as a backstop
+for anything its own steps' timeouts miss, computed as the sum of those
+steps' own timeouts plus one second of slack: the 4 second navigation
+timeout, plus the Settle ms field's value, plus the 2 second screenshot
+timeout, plus 1 second. Settle ms is capped at 4000, so this bound is at
+most 11 seconds; at the default Settle ms of 2000 it is 9 seconds. A fixed
+bound shorter than the sum of its own steps' timeouts would report "timed
+out" on a slow-but-working dashboard even though every step finished
+inside its own budget - this is why the bound follows Settle ms instead of
+being a flat number.
 
 ## Failure frames
 
@@ -132,7 +138,7 @@ render - each is a plain frame, drawn with Pillow, naming what went wrong:
 | --- | --- |
 | "HA dashboard: no URL configured" | The Dashboard url field is blank. |
 | "HA dashboard: login page, check the token" | The final URL after navigation contains `/auth/` - Home Assistant's own login page, which means the token is missing, wrong or expired. |
-| "HA dashboard: timed out after 8 s" | Navigation, the settle wait or the screenshot together took longer than the bound. |
+| "HA dashboard: timed out after _N_ s" | Navigation, the settle wait or the screenshot together took longer than the bound (see "The timeout bound" above; _N_ is that render's own computed bound, rounded up). |
 | "HA dashboard: network error, check the URL" | The browser could not reach the URL at all (DNS failure, connection refused, and similar). |
 | "HA dashboard: could not load the dashboard" | Anything else that does not fit the above. |
 

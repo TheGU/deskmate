@@ -1,6 +1,6 @@
 """The ``ha_dashboard`` module: token injection (only into the Home
-Assistant origin), the screenshot renderer's error frames, and its
-bounded, secret-free logging
+Assistant origin), the screenshot renderer's error frames, its settle-aware
+timeout bound, and its bounded, secret-free logging
 (docs/plan/2026-09-19-settings-modules-provisioning.md, package 3.1).
 
 A small stdlib ``http.server`` stub stands in for Home Assistant: one route
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import http.server
 import logging
+import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -29,7 +30,12 @@ import pytest
 from playwright.async_api import async_playwright
 
 from app.config import Env
-from app.modules.ha_dashboard.screenshot import _guard_origin_of, _init_script, _origin_of
+from app.modules.ha_dashboard.screenshot import (
+    _guard_origin_of,
+    _init_script,
+    _origin_of,
+    _total_timeout_seconds,
+)
 from app.modules.ha_dashboard.settings import HaDashboardSettings
 from app.modules.registry import ModulesSettings, ModuleToggle, builtin_registry
 from app.renderer.palette import assert_display_image
@@ -349,13 +355,17 @@ def test_login_redirect_produces_a_different_error_frame(
 def test_hang_produces_a_timeout_error_frame_within_the_bound(
     ha_renderer: Renderer, base_url: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    ha_renderer.hub_settings = _settings(f"{base_url}/hang")
+    settle_ms = 50
+    ha_renderer.hub_settings = _settings(f"{base_url}/hang", settle_ms=settle_ms)
+    bound = _total_timeout_seconds(settle_ms)
     started = time.monotonic()
     with caplog.at_level(logging.INFO, logger="app.modules.ha_dashboard"):
         png = run(ha_renderer.render_png("ha_dashboard", STATE))
     elapsed = time.monotonic() - started
 
-    assert elapsed < 10.0, f"took {elapsed:.1f}s, expected well under the 8s render bound"
+    # 2s of scheduling slack on top of the computed bound itself, so this
+    # stays a wall-time sanity check rather than a race with the bound.
+    assert elapsed < bound + 2.0, f"took {elapsed:.1f}s, expected well under the {bound:.1f}s bound"
     image = open_png(png)
     assert_display_image(image)
     assert any(
@@ -363,6 +373,52 @@ def test_hang_produces_a_timeout_error_frame_within_the_bound(
         for record in caplog.records
         if record.name == "app.modules.ha_dashboard"
     )
+
+
+# ---------------------------------------------------------------------------
+# the total bound follows settle_ms rather than a flat number (finding 5:
+# navigation + settle + screenshot could sum past a fixed 8 s backstop)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("settle_ms", "expected_seconds"),
+    [(0, 7.0), (2000, 9.0), (4000, 11.0)],
+)
+def test_total_timeout_seconds_follows_settle_ms(settle_ms: int, expected_seconds: float) -> None:
+    assert _total_timeout_seconds(settle_ms) == expected_seconds
+    # settle_ms is capped at 4000 (settings.py); the bound must stay <= 11s.
+    assert _total_timeout_seconds(settle_ms) <= 11.0
+
+
+# ---------------------------------------------------------------------------
+# an unreachable host produces the network-error frame, and the log names
+# a network error without the URL (the reviewer's missing test)
+# ---------------------------------------------------------------------------
+def test_unreachable_host_produces_a_network_error_frame(
+    ha_renderer: Renderer, caplog: pytest.LogCaptureFixture
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    # The socket above is closed on exit from the with-block, so nothing is
+    # listening on this port by the time the render below tries to connect.
+    unreachable_url = f"http://127.0.0.1:{closed_port}/"
+
+    ha_renderer.hub_settings = _settings(unreachable_url)
+    with caplog.at_level(logging.INFO, logger="app.modules.ha_dashboard"):
+        png = run(ha_renderer.render_png("ha_dashboard", STATE))
+
+    image = open_png(png)
+    assert_display_image(image)
+    records = [record for record in caplog.records if record.name == "app.modules.ha_dashboard"]
+    assert any("network error" in record.getMessage().lower() for record in records)
+    for record in records:
+        message = record.getMessage()
+        assert unreachable_url not in message
+        assert str(closed_port) not in message
+        fields = getattr(record, "fields", None)
+        if isinstance(fields, dict):
+            assert unreachable_url not in str(fields)
+            assert str(closed_port) not in str(fields)
 
 
 # ---------------------------------------------------------------------------
