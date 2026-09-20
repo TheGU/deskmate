@@ -18,6 +18,7 @@ from app.timeutil import zone
 from app.modules.weather.page import (
     weather_context,
     weather_daily_rows,
+    weather_header,
     weather_hourly_plates,
     weather_readings,
     weather_summary,
@@ -181,3 +182,80 @@ def test_weather_next_hours_baseline_ends_with_the_last_plate(renderer: Renderer
 
     six = run(renderer.probe("weather", _weather_state_with_hourly_plates(6), _WX_BASELINE_GEOMETRY))
     assert abs(six["baselineRight"] - six["lastPlateRight"]) <= 2, six
+
+
+# ---------------------------------------------------------------------------
+# The header widget (R.3, docs/plan/2026-09-20-owner-feedback-round.md). Was
+# app/view.py:header_weather and its tests in tests/test_view.py; the reading
+# is this module's own now, drawn into the header's slot through
+# templates/weather_header.html.
+# ---------------------------------------------------------------------------
+def empty_state() -> DashboardState:
+    """A state where every adapter failed: the widget must still answer."""
+    return make_state(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok")),
+        timezone="Asia/Bangkok",
+    )
+
+
+def test_weather_header_without_data_is_the_hatch_flag(hub_settings: HubSettings) -> None:
+    state = empty_state()
+    assert weather_header(state, hub_settings) == {"available": False}
+
+
+def test_weather_header_marks_a_stale_block_as_unavailable(hub_settings: HubSettings) -> None:
+    state = empty_state()
+    state.blocks["weather"] = WeatherBlock(status=AdapterStatus.STALE, weather=None)
+    assert weather_header(state, hub_settings)["available"] is False
+
+
+def test_weather_header_rain_gives_blue_and_the_rain_label(hub_settings: HubSettings) -> None:
+    tz = zone("Asia/Bangkok")
+    state = make_state(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
+        timezone="Asia/Bangkok",
+        weather=WeatherBlock(
+            status=AdapterStatus.OK,
+            weather=Weather(condition="Showers", temperature_c=29.0, rain_from="15:00"),
+        ),
+    )
+    reading = weather_header(state, hub_settings)
+    assert reading["available"] is True
+    assert reading["color"] == "blue"
+    assert reading["dot"] == "blue"
+    assert reading["label"] == "RAIN 15:00"
+    assert reading["temp"] == "29"
+
+
+def test_weather_header_heat_outranks_rain_and_gives_red(hub_settings: HubSettings) -> None:
+    tz = zone("Asia/Bangkok")
+    state = make_state(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
+        timezone="Asia/Bangkok",
+        weather=WeatherBlock(
+            status=AdapterStatus.OK,
+            weather=Weather(
+                condition="Sunny", temperature_c=37.0, rain_from="15:00"
+            ),
+        ),
+    )
+    reading = weather_header(state, hub_settings)
+    assert reading["color"] == "red"
+    assert reading["dot"] == "red"
+    assert reading["label"] == "HEAT"
+
+
+def test_weather_header_plain_condition_has_no_dot(hub_settings: HubSettings) -> None:
+    tz = zone("Asia/Bangkok")
+    state = make_state(
+        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
+        timezone="Asia/Bangkok",
+        weather=WeatherBlock(
+            status=AdapterStatus.OK,
+            weather=Weather(condition="Cloudy", temperature_c=28.0),
+        ),
+    )
+    reading = weather_header(state, hub_settings)
+    assert reading["color"] == ""
+    assert reading["dot"] == ""
+    assert reading["label"] == "CLOUDY"

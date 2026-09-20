@@ -71,6 +71,17 @@ next to the input that caused it.
 | --- | --- | --- |
 | Timezone | `Asia/Bangkok` | IANA name, validated by `ZoneInfo`. Free text: the slim image carries no full tzdata list to build a dropdown from. |
 | Units | `metric` | `metric` or `imperial`. |
+| Header widget | `weather` | Which module fills the header's widget slot, on every page that does not override it in the Modules section. `none` leaves the slot empty (no widget, no vertical rule). The select is built from the modules installed on this hub, so it lists whatever brings a widget: the built-ins are `weather`, `agenda`, `system` and `ai_usage`. |
+
+The header widget field is stored as a plain string, not a fixed list of
+choices: what is a legal value depends on what is installed here, and this
+model is also validated where no registry exists (restoring a backup taken
+on another hub, and the one-time legacy import). The check that the id
+names a widget this hub actually has is the save's: the page refuses it
+with the reason next to the select, and nothing is written. A value that
+slips in another way -- a restore, a hand-edited row -- is not an error at
+render time either: the header falls back to the first installed widget
+rather than drawing a hole. See docs/MODULES.md, "Header widget".
 
 **Tasks** (`tasks`)
 
@@ -177,6 +188,7 @@ as a package, or was dropped into `DATA_DIR/modules/`.
 | ID | (the module's own) | The id its package reports. Also the `/display/<id>.png` segment. |
 | Enabled | the module's manifest default | Unticked: its page leaves the window list and `/display/<id>.png` answers 404, and its datasets stop being fetched. |
 | Order | the module's manifest default | Where it sits in the window list, which is also what `/display/<n>.png` counts. |
+| Header widget | `default` | What this page's own header shows: `default` (whatever the General section says), `none` (an empty slot on this page alone), or the id of a module with a widget. Only a module that draws a page gets this column: a dataset-only module has no header of its own to override. |
 
 A module with no row yet shows its manifest defaults, so installing one is
 enough to see it here. Saving the section reloads the hub: the window list,
@@ -198,6 +210,9 @@ Two rules the form enforces:
 - A row naming a module that is not installed here is kept, not dropped,
   and the section says so in a warning: an id in the database is the
   owner's intent, and a module can come back after an upgrade.
+- A header widget naming a module that has no widget on this hub is
+  refused, the same way and for the same reason as the General section's
+  own field above.
 
 There is no `fixture` default anywhere on this page: a fresh hub with
 nothing configured shows every block's honest empty state, never demo data.

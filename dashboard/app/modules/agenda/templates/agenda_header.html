@@ -1,0 +1,30 @@
+{# The agenda module's header widget: the next event, its start time and
+   its title. Values: app/modules/agenda/page.py:agenda_header, merged
+   under header.widget by app/view.py:header_widget_context.
+
+   Core draws the vertical rule before this file and clamps the root to the
+   380 x 40 px slot through .hdr-widget (app/templates/base.html). The
+   title is the one variable-width thing here: it is clipped in Python to
+   the measured character budget and carries core's own .clip class as
+   well, so a Thai title with no spaces to break on is cut by the browser
+   rather than pushing the clock off the panel. #}
+<style>
+.hdr-next { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.hdr-next-when {
+  font-size: 20px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap;
+  font-variant-numeric: tabular-nums; flex: 0 0 auto;
+}
+.hdr-next-title { font-size: 20px; font-weight: 500; max-width: 268px; }
+.hdr-next-none {
+  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+</style>
+<div class="hdr-widget hdr-next">
+{% if header.widget.available %}
+<span class="hdr-next-when num">{{ header.widget.when }}</span>
+<span class="hdr-next-title clip">{{ header.widget.title }}</span>
+{% else %}
+<span class="hdr-next-none">NO MORE EVENTS</span>
+{% endif %}
+</div>

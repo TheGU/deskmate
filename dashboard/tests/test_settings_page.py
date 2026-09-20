@@ -110,9 +110,7 @@ def state_at(hour: int = 9) -> Any:
 
 def window_names(admin: AdminHub) -> list[str]:
     """The footer's window list, as the panel would print it."""
-    context = build_context(
-        "today", state_at(), admin.hub.hub_settings, admin.hub.registry.pages()
-    )
+    context = build_context("today", state_at(), admin.hub.hub_settings, admin.hub.registry)
     return [window["name"] for window in context["footer"]["windows"]]
 
 
@@ -121,6 +119,7 @@ def modules_form(
     *,
     disable: frozenset[str] = frozenset(),
     extra_rows: tuple[str, ...] = (),
+    widgets: dict[str, str] | None = None,
 ) -> dict[str, list[str]]:
     """The modules section exactly as the browser posts it.
 
@@ -129,15 +128,26 @@ def modules_form(
     why the enabled fields carry two values - from the rows the page is
     showing, so this is a round trip through the page rather than through a
     hand-made payload.
+
+    ``widgets`` overrides one or more rows' header widget choice, keyed by
+    module id, exactly as picking one from that row's select would.
     """
+    chosen = widgets or {}
     items: dict[str, list[str]] = {}
-    rows = [(row.id, row.enabled, row.order) for row in admin.hub.registry.toggle_rows()]
-    rows.extend((module_id, True, None) for module_id in extra_rows)
-    for index, (module_id, enabled, order) in enumerate(rows):
+    rows = [
+        (row.id, row.enabled, row.order, row.header_widget)
+        for row in admin.hub.registry.toggle_rows()
+    ]
+    rows.extend((module_id, True, None, "default") for module_id in extra_rows)
+    for index, (module_id, enabled, order, widget) in enumerate(rows):
         items[f"items-{index}-id"] = [module_id]
         ticked = enabled and module_id not in disable
         items[f"items-{index}-enabled"] = ["0", "1"] if ticked else ["0"]
         items[f"items-{index}-order"] = ["" if order is None else str(order)]
+        # Every row posts its header widget choice, whether the page drew it
+        # as a select or as a hidden input
+        # (app/settings_pages.py:_modules_rows_with_widget_choices).
+        items[f"items-{index}-header_widget"] = [chosen.get(module_id, widget)]
     items["action"] = ["save"]
     return items
 
@@ -194,7 +204,12 @@ def test_saving_a_section_stores_it_reloads_the_hub_and_says_so(admin: AdminHub)
     response = admin.client.post(
         "/settings/general",
         headers=admin.auth,
-        data={"timezone": "Europe/Berlin", "units": "imperial", "action": "save"},
+        data={
+            "timezone": "Europe/Berlin",
+            "units": "imperial",
+            "header_widget": "weather",
+            "action": "save",
+        },
         follow_redirects=False,
     )
 
@@ -515,7 +530,12 @@ def test_a_wizard_step_saves_like_the_settings_page_and_moves_on(admin: AdminHub
     response = admin.client.post(
         "/setup/general",
         headers=admin.auth,
-        data={"timezone": "Europe/Berlin", "units": "metric", "action": "save"},
+        data={
+            "timezone": "Europe/Berlin",
+            "units": "metric",
+            "header_widget": "weather",
+            "action": "save",
+        },
         follow_redirects=False,
     )
 
@@ -892,6 +912,97 @@ def test_disabling_every_page_is_refused_with_a_field_error(admin: AdminHub) -> 
     # page is still there.
     assert admin.hub.registry.page_ids()
     assert admin.hub.settings_store.load("modules") == ModulesSettings()
+
+
+# ---------------------------------------------------------------------------
+# the header widget selects (R.3, docs/plan/2026-09-20-owner-feedback-round.md)
+# ---------------------------------------------------------------------------
+def test_the_general_section_offers_every_installed_widget_and_none(
+    admin: AdminHub,
+) -> None:
+    """The select is built from the live registry, not from the model: what
+    is a legal widget id depends on what is installed on this hub, and the
+    model is validated in places where no registry exists."""
+    page = admin.client.get("/settings", headers=admin.auth)
+    assert page.status_code == 200
+    select = page.text.split('id="general-header_widget"')[1].split("</select>")[0]
+    installed = [module.id for module in admin.hub.registry.installed_header_widgets()]
+    assert installed == ["agenda", "weather", "system", "ai_usage"]
+    assert '<option value="none"' in select
+    for widget in installed:
+        assert f'<option value="{widget}"' in select
+    assert '<option value="weather" selected' in select
+
+
+def test_the_modules_section_offers_a_widget_per_page_and_none_for_a_dataset(
+    admin: AdminHub,
+) -> None:
+    """A page module's row picks what its own header shows; a module with no
+    page has no header to override, so its cell is a hidden input carrying
+    what is stored rather than a select that means nothing."""
+    page = admin.client.get("/settings", headers=admin.auth)
+    rows = {row.id: index for index, row in enumerate(admin.hub.registry.toggle_rows())}
+
+    today = page.text.split(f'id="modules-items-{rows["today"]}-header_widget"')[1]
+    today_select = today.split("</select>")[0]
+    assert '<option value="default" selected' in today_select
+    assert '<option value="none"' in today_select
+    assert '<option value="agenda"' in today_select
+
+    assert f'id="modules-items-{rows["ai_usage"]}-header_widget"' not in page.text
+    assert (
+        f'<input type="hidden" name="items-{rows["ai_usage"]}-header_widget" value="default">'
+        in page.text
+    )
+
+
+def test_a_per_page_override_round_trips_through_the_modules_form(
+    admin: AdminHub,
+) -> None:
+    before = admin.hub.settings_store.load("modules")
+    try:
+        response = save_modules(admin, widgets={"agenda": "agenda", "brief": "none"})
+        assert response.status_code == 303
+        assert admin.hub.registry.header_override("agenda") == "agenda"
+        assert admin.hub.registry.header_override("brief") == "none"
+        assert admin.hub.registry.header_override("today") == "default"
+
+        page = admin.client.get("/settings", headers=admin.auth)
+        rows = {row.id: index for index, row in enumerate(admin.hub.registry.toggle_rows())}
+        agenda = page.text.split(f'id="modules-items-{rows["agenda"]}-header_widget"')[1]
+        assert '<option value="agenda" selected' in agenda.split("</select>")[0]
+    finally:
+        admin.hub.settings_store.save("modules", before)
+        asyncio.run(admin.hub.reload())
+
+
+def test_a_general_widget_no_module_answers_for_is_refused(admin: AdminHub) -> None:
+    response = admin.client.post(
+        "/settings/general",
+        headers=admin.auth,
+        data={
+            "timezone": "Asia/Bangkok",
+            "units": "metric",
+            "header_widget": "from_another_hub",
+            "action": "save",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 422
+    assert "no module installed here draws a header widget" in response.text
+    # Nothing written, and the live snapshot is untouched.
+    assert admin.hub.hub_settings.general.header_widget == "weather"
+    assert admin.hub.settings_store.load("general").header_widget == "weather"
+
+
+def test_a_row_widget_no_module_answers_for_is_refused(admin: AdminHub) -> None:
+    response = save_modules(admin, widgets={"today": "from_another_hub"})
+
+    assert response.status_code == 422
+    assert "no module installed here draws a header widget" in response.text
+    assert admin.hub.settings_store.load("modules") == ModulesSettings()
+    assert admin.hub.registry.header_override("today") == "default"
 
 
 def test_today_may_be_disabled_while_another_page_stays(admin: AdminHub) -> None:

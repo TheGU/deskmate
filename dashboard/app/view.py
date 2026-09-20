@@ -28,8 +28,13 @@ page, or core itself, reads:
   ``base_context``) and the flag plumbing every page's own ``PageSpec.flag``
   is built from (``page_reference``), plus the DEMO-mark bookkeeping
   (``PAGE_PUSH_DATASETS``, ``PUSHED_BLOCK_MODELS``, ``page_shows_demo_data``);
-* ``is_heat``, since both the header's weather chip and the Weather page's
-  own hero reading rank heat the same way;
+* the header's widget slot (``resolve_header_widget``,
+  ``header_widget_context``): which module fills the cell after the vertical
+  rule is core's decision, from the ``general`` and ``modules`` settings and
+  the registry, even though every widget's own reading belongs to a module
+  (2026-09-20 owner feedback, R.3);
+* ``is_heat``, since both the weather module's header widget and the
+  Weather page's own hero reading rank heat the same way;
 * the alert page itself (``alert_context`` and its own small helpers):
   ``alert`` is reserved to core (``app/modules/__init__.py:RESERVED_IDS``), it
   is never a module, and it is the one page core draws itself;
@@ -62,9 +67,11 @@ from app.models import (
     Task,
     TasksBlock,
     Weather,
-    WeatherBlock,
 )
 from app.timeutil import to_local
+
+from app.modules import header_template_name
+from app.modules.general.settings import HEADER_WIDGET_NONE
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     # app/settings.py's SECTIONS registry is derived from the module
@@ -74,6 +81,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     # that chain acyclic; ``from __future__ import annotations`` at the top
     # makes every use below a string.
     from app.modules import Module, PageContextFn
+    from app.modules.registry import Registry
     from app.settings import HubSettings
 
 UNKNOWN = "unknown"
@@ -444,28 +452,62 @@ def is_heat(weather: Weather | None) -> bool:
     ) >= HEAT_FEELS_LIKE_C
 
 
-def header_weather(state: DashboardState) -> dict[str, Any]:
-    """The header's weather reading: a numeral, a glyph, and one state label.
+# ---------------------------------------------------------------------------
+# the header's widget slot: which module fills it, and with what
+# ---------------------------------------------------------------------------
+#: A page override that defers to the General section's own choice, which is
+#: what every page does until someone says otherwise
+#: (``app/modules/registry.py:ModuleToggle.header_widget``). Kept pinned at
+#: this value by default so the slot behaves exactly as it did when the
+#: weather reading was hard-coded into ``base.html``.
+HEADER_WIDGET_DEFAULT = "default"
 
-    Heat outranks rain (a 40 degree feel is the thing to know first); a dry,
-    cool reading gets the plain condition word with no dot and no colour.
+
+def resolve_header_widget(
+    registry: Registry, settings: HubSettings, page: str
+) -> Module | None:
+    """Which module draws ``page``'s header widget, or ``None`` for none.
+
+    In order: the page's own override from the ``modules`` section, then the
+    General section's default when the override defers to it. ``none`` at
+    either level means an empty slot, rule and all. An id that names no
+    enabled widget on this hub falls back to the first enabled widget in
+    module order rather than drawing nothing: a hub restored from a backup
+    taken elsewhere, or one whose weather module has just been turned off,
+    still shows something rather than a silent hole.
+
+    A pure function of settings, registry, state and page, deliberately: the
+    PNG cache and the ETag are keyed by a state fingerprint, so a widget
+    that changed with the clock would be served stale for a whole page TTL
+    (docs/plan/2026-09-20-owner-feedback-round.md, finding 10b).
     """
-    weather = state.block("weather", WeatherBlock).weather
-    if not state.block("weather", WeatherBlock).usable or weather is None:
-        return {"available": False}
-    if is_heat(weather):
-        color, label = "red", "HEAT"
-    elif weather.rain_from:
-        color, label = "blue", f"RAIN {weather.rain_from}"
-    else:
-        color, label = "", weather.condition.upper()
+    override = registry.header_override(page)
+    pick = settings.general.header_widget if override == HEADER_WIDGET_DEFAULT else override
+    if pick == HEADER_WIDGET_NONE:
+        return None
+    chosen = registry.header_widget(pick)
+    if chosen is not None:
+        return chosen
+    widgets = registry.header_widgets()
+    return widgets[0] if widgets else None
+
+
+def header_widget_context(
+    state: DashboardState, settings: HubSettings, registry: Registry, page: str
+) -> dict[str, Any] | None:
+    """The chosen widget's own dict, plus the two keys core owns.
+
+    ``module`` and ``template`` are merged *over* the module's dict, the
+    same rule ``_with_frame`` follows for the frame as a whole: a widget
+    cannot point core's include at another file.
+    """
+    module = resolve_header_widget(registry, settings, page)
+    if module is None or module.header is None:
+        return None
     return {
-        "available": True,
-        "temp": fmt_number(weather.temperature_c),
-        "icon": icons.weather_icon(weather.condition),
-        "color": color,
-        "dot": color,
-        "label": label,
+        **module.header.context(state, settings),
+        "module": module.id,
+        "template": header_template_name(module.id),
     }
 
 
@@ -475,8 +517,22 @@ def header_weather(state: DashboardState) -> dict[str, Any]:
 PAGES_WITH_OWN_OVERDUE_CHIP: frozenset[str] = frozenset({"today", "brief"})
 
 
-def header_context(state: DashboardState, today: date, reference: datetime, page: str) -> dict[str, Any]:
-    """Everything the shared header draws, on every page."""
+def header_context(
+    state: DashboardState,
+    settings: HubSettings,
+    today: date,
+    reference: datetime,
+    page: str,
+    registry: Registry | None = None,
+) -> dict[str, Any]:
+    """Everything the shared header draws, on every page.
+
+    ``registry`` is the hub's own, which the widget slot is resolved
+    against. Leaving it out uses the built-ins, which is what a direct
+    caller (a test, or a module calling ``base_context`` itself, whose
+    header core overwrites anyway) wants.
+    """
+    live = default_registry(settings) if registry is None else registry
     device: DeviceState | None = state.block("device", DeviceBlock).device
     has_device = state.block("device", DeviceBlock).usable and device is not None and device.has_reading
     level = device.battery_level if has_device else None
@@ -487,7 +543,12 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
         "day": reference.strftime("%d"),
         "weekday": reference.strftime("%a").upper(),
         "month": reference.strftime("%b").upper(),
-        "weather": header_weather(state),
+        # The third line of the day stack. 16 px like the other two, so the
+        # stack grows inside the 64 px header rather than past it; the
+        # numeral beside it drops 1.6 px, which is the whole of this
+        # change's effect on every page's pixels (finding 10a).
+        "year": reference.strftime("%Y"),
+        "widget": header_widget_context(state, settings, live, page),
         "overdue_count": overdue_count,
         "show_overdue_chip": overdue_count > 0 and page not in PAGES_WITH_OWN_OVERDUE_CHIP,
         "wifi_icon": icons.wifi_icon(rssi),
@@ -500,8 +561,8 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
     }
 
 
-def enabled_pages() -> tuple[Module, ...]:
-    """The built-in pages, for a caller that has no registry to hand.
+def default_registry(settings: HubSettings | None = None) -> Registry:
+    """The built-ins, for a caller that has no registry to hand.
 
     Core always passes the hub's own registry (``app/main.py`` builds it,
     the renderer carries it). This fallback is for the direct callers -
@@ -509,10 +570,19 @@ def enabled_pages() -> tuple[Module, ...]:
     whose header and footer core overwrites anyway - and it is imported
     lazily because the registry imports the built-in module packages, which
     import this file.
+
+    ``settings`` is applied when it is given, so a direct caller's own
+    ``modules`` section (a disabled page, a per-page header override) is
+    honoured rather than silently ignored.
     """
     from app.modules.registry import builtin_registry
 
-    return builtin_registry().pages()
+    return builtin_registry(None if settings is None else settings.modules)
+
+
+def enabled_pages() -> tuple[Module, ...]:
+    """The built-in pages, for a caller that has no registry to hand."""
+    return default_registry().pages()
 
 
 def footer_context(
@@ -561,6 +631,7 @@ def base_context(
     page: str,
     pages: Sequence[Module] | None = None,
     demo_datasets: Sequence[str] | None = None,
+    registry: Registry | None = None,
 ) -> dict[str, Any]:
     reference = to_local(state.updated_at, state.timezone)
     today = reference.date()
@@ -573,7 +644,7 @@ def base_context(
         "reference": reference,
         # Named constants for the fixed glyphs; the chosen ones are per row.
         "icons": icons,
-        "header": header_context(state, today, reference, page),
+        "header": header_context(state, settings, today, reference, page, registry),
         "footer": footer_context(
             state, settings, today, reference, page, pages, demo_datasets
         ),
@@ -645,7 +716,7 @@ def build_context(
     page: str,
     state: DashboardState,
     settings: HubSettings,
-    pages: Sequence[Module] | None = None,
+    registry: Registry | None = None,
 ) -> dict[str, Any]:
     """The page's own context, with core's frame merged over it.
 
@@ -654,18 +725,22 @@ def build_context(
     on purpose. ``page_title`` comes from the page spec for the same reason:
     the footer and the title bar are what the device navigates by.
 
-    ``pages`` is the registry's enabled pages, which the footer's window
-    list and the flags are built from. Leaving it out uses the built-ins,
-    which is what a test asking for one page's context wants.
+    ``registry`` is the hub's own: the footer's window list and the flags
+    come from its enabled pages, and the header's widget slot is resolved
+    against its installed widgets and its per-page overrides. It is the
+    registry rather than the bare page sequence it used to be because the
+    slot needs both of those and a page list can answer neither. Leaving it
+    out uses the built-ins under ``settings.modules``, which is what a test
+    asking for one page's context wants.
     """
-    window_pages = enabled_pages() if pages is None else tuple(pages)
+    live = default_registry(settings) if registry is None else registry
     core = CORE_CONTEXT_BUILDERS.get(page)
     if core is not None:
         return _with_frame(
-            core(state, settings), state, settings, page, window_pages, (), PAGE_TITLES[page]
+            core(state, settings), state, settings, page, live, (), PAGE_TITLES[page]
         )
 
-    module = next((candidate for candidate in window_pages if candidate.id == page), None)
+    module = next((candidate for candidate in live.pages() if candidate.id == page), None)
     if module is None or module.page is None:
         raise KeyError(f"unknown page {page!r}")
     spec = module.page
@@ -674,7 +749,7 @@ def build_context(
         state,
         settings,
         page,
-        window_pages,
+        live,
         spec.demo_datasets,
         spec.title,
     )
@@ -685,12 +760,12 @@ def _with_frame(
     state: DashboardState,
     settings: HubSettings,
     page: str,
-    window_pages: Sequence[Module],
+    registry: Registry,
     demo_datasets: Sequence[str],
     title: str,
 ) -> dict[str, Any]:
     """The page's dict with core's frame merged over it, never under it."""
-    frame = base_context(state, settings, page, window_pages, demo_datasets)
+    frame = base_context(state, settings, page, registry.pages(), demo_datasets, registry)
     merged = dict(context)
     merged["page"] = page
     merged["page_title"] = title

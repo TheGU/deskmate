@@ -1,0 +1,27 @@
+{# The example module's header widget.
+
+   The file name is not a choice: core looks for "<module id>_header.html"
+   in the directory the HeaderSpec names, and refuses to load a module whose
+   partial is not there (app/modules/__init__.py:header_template_name,
+   validate_module). The prefix is what keeps two modules' partials from
+   shadowing each other, since every module's templates directory is
+   searched by one flat Jinja loader.
+
+   The values are whatever hello_header returned (__init__.py), merged under
+   header.widget together with the module's id and this file's name. Core
+   draws the vertical rule before this file and clamps the root element to
+   380 x 40 px through its own .hdr-widget class; keeping the root inside
+   that budget is still this module's job, and .clip (overflow hidden,
+   ellipsis, nowrap) is core's own class for the variable-width part.
+
+   CSS goes in a style element here rather than in core's base.html: a
+   widget is a module's own markup, and a module cannot edit core's
+   template. Prefix the class names with the module id for the same reason
+   the partial is prefixed. #}
+<style>
+.hdr-hello { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.hdr-hello-text { font-size: 20px; font-weight: 500; max-width: 380px; }
+</style>
+<div class="hdr-widget hdr-hello">
+<span class="hdr-hello-text clip">{{ header.widget.greeting }}</span>
+</div>

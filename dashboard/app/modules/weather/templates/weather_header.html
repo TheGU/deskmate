@@ -1,0 +1,37 @@
+{# The weather module's header widget: the reading core drew itself until
+   R.3 (docs/plan/2026-09-20-owner-feedback-round.md), markup and CSS
+   unchanged so the header's pixels did not move when the slot became a
+   module's.
+
+   Core draws the vertical rule before this file and clamps the root to the
+   380 x 40 px slot through .hdr-widget (app/templates/base.html); the
+   module's own classes live in the style element below, which is how a
+   third-party widget ships CSS without touching core's template.
+
+   The values are app/modules/weather/page.py:weather_header, merged under
+   header.widget by app/view.py:header_widget_context. #}
+<style>
+.hdr-weather { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.hdr-wx-temp {
+  font-size: 40px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.hdr-wx-unit { font-size: 16px; font-weight: 600; position: relative; top: -18px; margin-left: 1px; }
+.hdr-wx-icon { font-size: 32px; }
+.hdr-wx-state {
+  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.hdr-wx-hatch { width: 32px; height: 18px; }
+</style>
+<div class="hdr-widget hdr-weather">
+{% if header.widget.available %}
+<span class="hdr-wx-temp num">{{ header.widget.temp }}<span class="hdr-wx-unit">C</span></span>
+<span class="i hdr-wx-icon">{{ header.widget.icon }}</span>
+<span class="hdr-wx-state{% if header.widget.color %} t-{{ header.widget.color }}{% endif %}">
+{% if header.widget.dot %}<span class="telltale {{ header.widget.dot }}"></span>{% endif %}{{ header.widget.label }}
+</span>
+{% else %}
+<span class="hatch hdr-wx-hatch"></span>
+<span class="hdr-wx-state">UNAVAILABLE</span>
+{% endif %}
+</div>

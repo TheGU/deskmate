@@ -1,4 +1,5 @@
-"""The Agenda page's own context builder and the helpers only it needs.
+"""The Agenda page's own context builder, its header widget, and the
+helpers only they need.
 
 Moved out of ``app/view.py`` in 2.2 (docs/plan/2026-09-19-settings-modules-
 provisioning.md): everything here is read by no other page. Shared helpers
@@ -13,6 +14,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, TYPE_CHECKING
 
 from app.models import CalendarBlock, DashboardState, Event
+from app.modules import HEADER_WIDGET_WIDTH_PX
 from app.view import (
     base_context,
     block_note,
@@ -232,6 +234,71 @@ def next_seven_days(state: DashboardState, today: date) -> list[dict[str, Any]]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# the header widget: the next event, in the 380 x 40 px slot
+# (docs/MODULES.md, "Header widget")
+# ---------------------------------------------------------------------------
+#: The widget's own time column, wide enough for its widest reading, a later
+#: day's "SAT 18:00" at this row's 20 px weight 700 (measured against the
+#: agenda list's own 20 px figures: 65.9 px for "ALL DAY", so a weekday plus
+#: a clock lands just under 100).
+AGENDA_HEADER_WHEN_PX: float = 100.0
+#: Gap between the time and the title, the agenda list's own.
+AGENDA_HEADER_GAP_PX: float = 12.0
+#: What is left of the 380 px slot for the title itself.
+AGENDA_HEADER_TITLE_AVAILABLE_PX: float = (
+    HEADER_WIDGET_WIDTH_PX - AGENDA_HEADER_WHEN_PX - AGENDA_HEADER_GAP_PX
+)
+#: Per-character width at 20 px weight 500, the agenda list's own measured
+#: figure (:data:`AGENDA_LIST_TITLE_CHAR_PX`).
+AGENDA_HEADER_TITLE_MAX_CHARS: int = int(
+    AGENDA_HEADER_TITLE_AVAILABLE_PX // AGENDA_LIST_TITLE_CHAR_PX
+)
+
+
+def _agenda_header_when(event: Event, today: date) -> str:
+    """The event's slot, the same grammar Today's upcoming list uses: a bare
+    clock for something today, the 3-letter weekday in front of it for a
+    later day, and the weekday alone for an all-day event."""
+    day = event.start.date()
+    if day == today:
+        return "ALL DAY" if event.all_day else event.start.strftime("%H:%M")
+    prefix = day.strftime("%a").upper()
+    return prefix if event.all_day else f"{prefix} {event.start.strftime('%H:%M')}"
+
+
+def agenda_header(state: DashboardState, settings: "HubSettings") -> dict[str, Any]:
+    """This module's header widget: when the next event starts, and what it
+    is.
+
+    "Next" is measured from the same reference every page reasons from
+    (:func:`app.view.page_reference`) and an event counts until it ends, so
+    the meeting the owner is sitting in is still the one on the header
+    rather than the one after it. Nothing left today or later is an honest
+    empty state, not a blank cell.
+    """
+    block = state.block("calendar", CalendarBlock)
+    if not block.usable:
+        return {"available": False}
+    reference = page_reference(state)
+    upcoming = sorted(
+        (event for event in block.items if (event.end or event.start) >= reference),
+        key=lambda event: event.start,
+    )
+    if not upcoming:
+        return {"available": False}
+    event = upcoming[0]
+    # No calendar colour here, unlike the agenda list's own rows: the
+    # header carries no legend, so a green time would be colour without a
+    # state behind it, which is exactly what the panel's grammar refuses
+    # (DESIGN.md, "colour is a state").
+    return {
+        "available": True,
+        "when": _agenda_header_when(event, reference.date()),
+        "title": clip_words(event.title, AGENDA_HEADER_TITLE_MAX_CHARS),
+    }
+
+
 def agenda_context(state: DashboardState, settings: "HubSettings") -> dict[str, Any]:
     context = base_context(state, settings, "agenda")
     today: date = context["today"]
@@ -247,6 +314,10 @@ def agenda_context(state: DashboardState, settings: "HubSettings") -> dict[str, 
 
 
 __all__ = [
+    "AGENDA_HEADER_GAP_PX",
+    "AGENDA_HEADER_TITLE_AVAILABLE_PX",
+    "AGENDA_HEADER_TITLE_MAX_CHARS",
+    "AGENDA_HEADER_WHEN_PX",
     "AGENDA_HEAD_GAP_PX",
     "AGENDA_HEAD_HEIGHT_PX",
     "AGENDA_LEFT_BODY_HEIGHT_PX",
@@ -263,6 +334,7 @@ __all__ = [
     "SCALE_END_HOUR",
     "agenda_context",
     "agenda_flag",
+    "agenda_header",
     "agenda_list_rows",
     "month_grid",
     "next_seven_days",

@@ -116,6 +116,22 @@ class ModuleToggle(BaseModel):
         default=None,
         description="Where it sits in the window list. Blank keeps the module's own default.",
     )
+    # Shape only, exactly like ``id`` above: "default", "none" or a widget's
+    # module id, all three of which match MODULE_ID_RE. Whether the id names
+    # a module that has a widget *on this hub* is not a pydantic question -
+    # a backup restore and the legacy import both validate this model with
+    # no registry in reach - so that check lives in the settings save
+    # (``app/settings_pages.py:_unknown_header_widgets``), and the render
+    # falls back rather than failing (``app/view.py:resolve_header_widget``).
+    header_widget: str = Field(
+        default="default",
+        max_length=64,
+        pattern=MODULE_ID_RE.pattern,
+        description=(
+            "Which module fills the header's widget slot on this page: "
+            "default (use the General section's choice), none, or a module id."
+        ),
+    )
 
 
 class ModulesSettings(BaseModel):
@@ -191,6 +207,16 @@ class Registry:
         toggle = self._toggles.get(module.id)
         return module.default_enabled if toggle is None else toggle.enabled
 
+    def header_override(self, module_id: str) -> str:
+        """This page's own header widget choice: ``default`` when it has none.
+
+        A module with no row in the ``modules`` section has not overridden
+        anything, which is exactly what ``default`` means, so an absent row
+        and a row left alone answer the same.
+        """
+        toggle = self._toggles.get(module_id)
+        return "default" if toggle is None else toggle.header_widget
+
     # -- what is installed -------------------------------------------------
     @property
     def modules(self) -> tuple[Module, ...]:
@@ -214,7 +240,12 @@ class Registry:
         what puts the warning next to them).
         """
         rows = [
-            ModuleToggle(id=module.id, enabled=self.is_enabled(module), order=self.order_of(module))
+            ModuleToggle(
+                id=module.id,
+                enabled=self.is_enabled(module),
+                order=self.order_of(module),
+                header_widget=self.header_override(module.id),
+            )
             for module in self._modules
         ]
         rows.extend(self._toggles[name] for name in self._missing)
@@ -266,18 +297,54 @@ class Registry:
         return 0.0 if module is None or module.page is None else module.page.render_ttl_seconds
 
     def templates_dirs(self) -> tuple[Path, ...]:
-        """Every enabled page's template directory, without repeats.
+        """Every enabled module's template directories, without repeats.
+
+        A page's directory and a header widget's, because a module may have
+        either or both: ``ai_usage`` draws no page at all and still ships a
+        header widget, and its partial has to be findable or the first page
+        that resolves to it dies with a Jinja ``TemplateNotFound``.
 
         Order matters: it is the Jinja search order after core's own
         ``app/templates``.
         """
         seen: list[Path] = []
-        for module in self.pages():
-            assert module.page is not None
-            directory = module.page.templates_dir
-            if directory not in seen:
-                seen.append(directory)
+        for module in self.enabled_modules():
+            candidates = (
+                None if module.page is None else module.page.templates_dir,
+                None if module.header is None else module.header.templates_dir,
+            )
+            for directory in candidates:
+                if directory is not None and directory not in seen:
+                    seen.append(directory)
         return tuple(seen)
+
+    # -- header widgets ----------------------------------------------------
+    def header_widgets(self) -> tuple[Module, ...]:
+        """The enabled modules that draw a header widget, in module order.
+
+        The order is what the fallback walks: a stored choice naming a
+        module that is not here takes the first of these rather than an
+        empty header, so a hub restored from a backup made on another hub
+        still draws something (``app/view.py:resolve_header_widget``).
+        """
+        return tuple(module for module in self.enabled_modules() if module.header is not None)
+
+    def header_widget(self, widget_id: str) -> Module | None:
+        """The enabled module whose header widget ``widget_id`` names."""
+        return next(
+            (module for module in self.header_widgets() if module.id == widget_id), None
+        )
+
+    def installed_header_widgets(self) -> tuple[Module, ...]:
+        """Every installed module with a header widget, enabled or not.
+
+        What the two settings selects are built from and what a save is
+        checked against: a widget whose module is turned off is still a
+        legitimate thing to have chosen (the render falls back meanwhile),
+        and refusing it would mean a hub that cannot save its own General
+        section the moment the weather module is disabled.
+        """
+        return tuple(module for module in self._modules if module.header is not None)
 
     # -- datasets ----------------------------------------------------------
     def datasets(self) -> dict[str, DatasetSpec]:

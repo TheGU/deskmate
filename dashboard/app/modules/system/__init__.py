@@ -16,10 +16,10 @@ from app import __version__
 from app.adapters.device import build_device_adapter
 from app.adapters.home_assistant import build_home_adapter
 from app.models import DeviceBlock, HomeBlock
-from app.modules import DatasetSpec, Module, PageSpec
+from app.modules import DatasetSpec, HeaderSpec, Module, PageSpec
 from app.modules.device.settings import SECTION as DEVICE_SECTION
 from app.modules.home.settings import SECTION as HOME_SECTION, HomeSettings
-from app.modules.system.page import system_context, system_flag
+from app.modules.system.page import system_context, system_flag, system_header
 from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
 #: The demo data ``home`` and ``device`` fall back to on ``source: fixture``.
@@ -66,6 +66,10 @@ MODULE = Module(
         needs=("home", "device"),
         demo_datasets=PAGE_PUSH_DATASETS["system"],
         flag=system_flag,
+    ),
+    header=HeaderSpec(
+        context=system_header,
+        templates_dir=Path(__file__).parent / "templates",
     ),
     default_order=50,
 )

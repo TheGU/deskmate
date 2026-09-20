@@ -1,0 +1,32 @@
+{# The system module's header widget: the desk's own temperature and
+   humidity, the two readings the device reports about the room it sits in.
+   Values: app/modules/system/page.py:system_header, merged under
+   header.widget by app/view.py:header_widget_context.
+
+   Core draws the vertical rule before this file and clamps the root to the
+   380 x 40 px slot through .hdr-widget (app/templates/base.html). Both
+   readings are tabular numerals of at most four characters, so nothing
+   here is variable-width; a device that has never reported gets the hatch
+   flag instead, the panel's grammar for a reading that does not exist. #}
+<style>
+.hdr-desk { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.hdr-desk-label {
+  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.hdr-desk-num {
+  font-size: 32px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.hdr-desk-unit { font-size: 16px; font-weight: 600; margin-left: 2px; }
+.hdr-desk-hatch { width: 32px; height: 18px; }
+</style>
+<div class="hdr-widget hdr-desk">
+<span class="hdr-desk-label">DESK</span>
+{% if header.widget.available %}
+<span class="hdr-desk-num num">{{ header.widget.temperature }}<span class="hdr-desk-unit">C</span></span>
+<span class="hdr-desk-num num">{{ header.widget.humidity }}<span class="hdr-desk-unit">%</span></span>
+{% else %}
+<span class="hatch hdr-desk-hatch"></span>
+<span class="hdr-desk-label">UNAVAILABLE</span>
+{% endif %}
+</div>

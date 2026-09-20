@@ -99,6 +99,29 @@ PageContextFn = Callable[["DashboardState", "HubSettings"], dict[str, Any]]
 #: Whether a page wants the window list's "!" right now.
 PageFlagFn = Callable[["DashboardState", "HubSettings"], bool]
 
+#: How wide and how tall a header widget's root element may be, in panel
+#: pixels. The header's left group is the day numeral, a vertical rule and
+#: then one module's cell; 380 x 40 is what is left for that cell once the
+#: day stack carries its third line and the right group (overdue chip,
+#: Wi-Fi, battery pill, clock) is at its widest (measured, see
+#: docs/plan/2026-09-20-owner-feedback-round.md, finding 10b). Core clamps
+#: the slot in ``app/templates/base.html`` (``.hdr-widget``); a widget that
+#: wants more simply gets clipped.
+HEADER_WIDGET_WIDTH_PX: int = 380
+HEADER_WIDGET_HEIGHT_PX: int = 40
+
+
+def header_template_name(module_id: str) -> str:
+    """The partial a module's header widget is drawn from.
+
+    Derived from the id rather than declared, because every module's
+    templates directory is searched by one flat Jinja loader
+    (``app/renderer/render.py:_build_environment``): two modules shipping a
+    ``header.html`` would shadow each other, and the winner would be
+    whichever directory came first in the search order.
+    """
+    return f"{module_id}_header.html"
+
 
 @dataclass(frozen=True)
 class ModuleContext:
@@ -184,6 +207,31 @@ class PageSpec:
 
 
 @dataclass(frozen=True)
+class HeaderSpec:
+    """A module's own cell in the shared header.
+
+    The header's left group carries the day numeral, a vertical rule and
+    then one module's widget; which module that is, is settings plus the
+    registry, resolved per page (``app/view.py:resolve_header_widget``).
+
+    ``context`` is a :data:`PageContextFn`, the same shape as a page's: the
+    state and the hub settings in, a plain dict out. Core merges that dict
+    under ``header.widget`` together with the module's id and the partial's
+    name, so the widget reads its own values as ``header.widget.<key>``.
+
+    ``templates_dir`` holds the partial, which is always
+    ``<module id>_header.html`` (:func:`header_template_name`).
+    :func:`validate_module` refuses a module whose widget file is not there.
+
+    The partial's root element must fit :data:`HEADER_WIDGET_WIDTH_PX` by
+    :data:`HEADER_WIDGET_HEIGHT_PX`; see docs/MODULES.md, "Header widget".
+    """
+
+    context: PageContextFn
+    templates_dir: Path
+
+
+@dataclass(frozen=True)
 class Module:
     """A module's whole manifest, exposed as ``MODULE`` by its package.
 
@@ -206,6 +254,7 @@ class Module:
     settings_section: str | None = None
     datasets: tuple[DatasetSpec, ...] = ()
     page: PageSpec | None = None
+    header: HeaderSpec | None = None
     routes: Callable[[ModuleContext], APIRouter] | None = None
     default_order: int = 100
     default_enabled: bool = True
@@ -214,6 +263,11 @@ class Module:
     def section(self) -> str:
         """The settings section this module's own model is stored under."""
         return self.settings_section or self.id
+
+    @property
+    def header_template(self) -> str | None:
+        """The header widget's partial, or ``None`` when it has no widget."""
+        return None if self.header is None else header_template_name(self.id)
 
 
 class ModuleError(ValueError):
@@ -256,6 +310,21 @@ def validate_module(module: Module) -> None:
                 f"{dataset.block_model.__name__}"
             )
 
+    header = module.header
+    if header is not None:
+        # The name is derived from the id rather than declared, so the
+        # prefix is enforced by construction; what is checked here is that
+        # the file a module promised really is in the directory it named.
+        # Otherwise the first page to resolve to this widget dies mid-render
+        # with a Jinja TemplateNotFound, on the device, long after load.
+        name = header_template_name(module.id)
+        partial = header.templates_dir / name
+        if not partial.is_file():
+            raise ModuleError(
+                f"module {module.id!r}: header widget partial {name!r} is not in "
+                f"{header.templates_dir}"
+            )
+
     page = module.page
     if page is None:
         return
@@ -292,12 +361,15 @@ def _check_id(value: Any, what: str, *, reserved: bool = True) -> None:
 
 
 __all__ = [
+    "HEADER_WIDGET_HEIGHT_PX",
+    "HEADER_WIDGET_WIDTH_PX",
     "MAX_ID_LENGTH",
     "MODULE_ID_RE",
     "PUSHED_DATASETS",
     "RESERVED_IDS",
     "RESERVED_SECTIONS",
     "DatasetSpec",
+    "HeaderSpec",
     "Module",
     "ModuleContext",
     "ModuleError",
@@ -305,5 +377,6 @@ __all__ = [
     "PageFlagFn",
     "PageSpec",
     "ScreenshotFn",
+    "header_template_name",
     "validate_module",
 ]
