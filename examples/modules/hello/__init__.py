@@ -3,7 +3,9 @@
 This is the running example for docs/MODULES.md. It shows the smallest
 module that draws a real page: no dataset, no push route, one settings
 field (its greeting, ``settings.py:HelloSettings``), a page whose context
-comes straight off ``DashboardState`` plus that one section.
+comes straight off ``DashboardState`` plus that one section, and a header
+widget (``templates/hello_header.html``) for the slot core keeps in the
+header of every page.
 
 To install it on a real hub without packaging anything, copy this whole
 ``hello/`` directory to ``DATA_DIR/modules/hello/`` (see
@@ -22,7 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.modules import Module, PageSpec
+from app.modules import HeaderSpec, Module, PageSpec
 
 from .settings import HelloSettings
 
@@ -68,6 +70,34 @@ def hello_context(state: DashboardState, settings: HubSettings) -> dict[str, Any
     }
 
 
+#: How many characters of the greeting the header's slot has room for at
+#: 20 px weight 500. The slot is 380 px wide and this widget prints nothing
+#: else, so the budget is the whole of it over the measured per-character
+#: width the built-in pages use for this size and weight (10.5 px). A real
+#: widget with more than one thing in it subtracts the rest first; see
+#: ``app/modules/agenda/page.py:AGENDA_HEADER_TITLE_MAX_CHARS``.
+HEADER_GREETING_MAX_CHARS = 36
+
+
+def hello_header(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
+    """This module's header widget: the same greeting, in the header's slot.
+
+    A widget is a ``HeaderSpec``: this function plus the directory holding
+    ``hello_header.html`` (the name is always ``<module id>_header.html``,
+    and core refuses to load a module whose partial is not there). Core
+    resolves which module fills the slot on which page from the General and
+    Modules settings sections, merges whatever this returns under
+    ``header.widget``, and includes the partial; see docs/MODULES.md,
+    "Header widget", for the 380 x 40 px budget it has to fit.
+
+    Clipped here, in Python, rather than left to the browser: a value that
+    would overflow the slot is the module's problem to solve, and core's
+    clamp is the backstop, not the plan.
+    """
+    own = settings.section("hello", HelloSettings)
+    return {"greeting": own.greeting[:HEADER_GREETING_MAX_CHARS]}
+
+
 def hello_flag(state: DashboardState, settings: HubSettings) -> bool:
     """Whether the footer should mark this page with "!" right now.
 
@@ -97,7 +127,8 @@ MODULE = Module(
         demo_datasets=(),
         flag=hello_flag,
     ),
+    header=HeaderSpec(context=hello_header, templates_dir=HERE / "templates"),
     default_order=100,
 )
 
-__all__ = ["MODULE"]
+__all__ = ["HEADER_GREETING_MAX_CHARS", "MODULE"]

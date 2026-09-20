@@ -49,9 +49,9 @@ Everything a module hands core is data, not behaviour: one frozen
 package (`app/modules/__init__.py:11-17`). `app/modules/registry.py` is
 what finds those, validates them, and puts them in order.
 
-## The `Module` / `DatasetSpec` / `PageSpec` / `ModuleContext` fields
+## The `Module` / `DatasetSpec` / `PageSpec` / `HeaderSpec` / `ModuleContext` fields
 
-These four are defined in `app/modules/__init__.py`; the field-by-field
+These five are defined in `app/modules/__init__.py`; the field-by-field
 meaning below is the same the docstrings there give, with a pointer to
 where each one is used.
 
@@ -67,6 +67,7 @@ where each one is used.
 | `settings_section` | The settings key the model above is stored under, defaulting to `id` (`Module.section` property, `app/modules/__init__.py:194-197`). Set it when a module's dataset reads a section that predates the module, the way the built-in `system` module reads the core `device` section. |
 | `datasets` | A tuple of `DatasetSpec`. |
 | `page` | One `PageSpec`, or `None`. |
+| `header` | One `HeaderSpec`, or `None`: the module's cell in the shared header. Independent of `page` -- a module may have a widget and no page (the built-in `ai_usage`), a page and no widget (`today`, `brief`), both, or neither. See "Header widget" below. |
 | `routes` | A callable `(ModuleContext) -> APIRouter`, or `None`. See "Push routes" below. |
 | `default_order` | Where the page sits in the window list when the `modules` settings section has no row for this module. |
 | `default_enabled` | Whether the module is on when the `modules` settings section has no row for it. |
@@ -96,6 +97,20 @@ where each one is used.
 | `demo_datasets` | Which of this page's datasets, when on `fixture`, should print the footer's DEMO mark. May only name a dataset in `PUSHED_DATASETS` (`tasks`, `ai_usage`, `brief`); a fetched dataset (weather, calendar) never prints DEMO even when it falls back to fixture data (`app/view.py:page_shows_demo_data`). Validated at registry load (`app/modules/__init__.py:244-249`). |
 | `flag` | `(DashboardState, HubSettings) -> bool`: whether the footer marks this page's window with `!` right now. `None` means never. |
 | `screenshot` | `(Browser, DashboardState, HubSettings) -> Image`, for a page drawn by a renderer of its own instead of a template. Exactly one of `template` or `screenshot` is set, never both, never neither (checked at registry load). No built-in page uses this yet; it is what phase 3's Home Assistant dashboard module needs. |
+
+### `HeaderSpec`
+
+| Field | Meaning |
+| --- | --- |
+| `context` | `(DashboardState, HubSettings) -> dict`, the same `PageContextFn` a page's `context` is. What it returns is merged under `header.widget`, so the partial reads its own values as `header.widget.<key>`. |
+| `templates_dir` | The directory holding the partial. May be the same directory as the page's; `Registry.templates_dirs` collects both, so a module with a widget and no page still gets its directory searched. |
+
+The partial's name is not a field: it is always `<module id>_header.html`
+(`app/modules/__init__.py:header_template_name`), and `validate_module`
+refuses a module whose partial is not in the directory it named. The id
+prefix matters because every module's templates directory is searched by
+one flat Jinja loader: two modules shipping a `header.html` would shadow
+each other, and the winner would be whichever directory came first.
 
 ### `ModuleContext` (`app/modules/__init__.py:84-99`)
 
@@ -152,6 +167,95 @@ extends `base.html` and fills the `content` block; see "Templates" in
 `examples/modules/hello/templates/hello.html` for how that pans out on
 the page itself, and "Design expectations for a page" below for the
 frame `base.html` draws.
+
+## Header widget
+
+The header's left group is the day numeral over its weekday, month and
+year, then a 2 px vertical rule, then one module's widget. The right
+group (the overdue chip, Wi-Fi, the battery pill and the clock) is core's
+and stays core's. The widget slot is the one part of the frame a module
+may fill.
+
+**Declaring one.** Add a `HeaderSpec` to the module and put
+`<module id>_header.html` in the directory it names:
+
+```python
+def hello_header(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
+    own = settings.section("hello", HelloSettings)
+    return {"greeting": own.greeting[:HEADER_GREETING_MAX_CHARS]}
+
+
+MODULE = Module(
+    id="hello",
+    ...,
+    header=HeaderSpec(context=hello_header, templates_dir=HERE / "templates"),
+)
+```
+
+and `examples/modules/hello/templates/hello_header.html`:
+
+```jinja
+<style>
+.hdr-hello { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.hdr-hello-text { font-size: 20px; font-weight: 500; max-width: 380px; }
+</style>
+<div class="hdr-widget hdr-hello">
+<span class="hdr-hello-text clip">{{ header.widget.greeting }}</span>
+</div>
+```
+
+The partial is a fragment, not a page: it does not extend `base.html` and
+it has no `content` block. Its CSS goes in a `<style>` element inside the
+partial, because a module cannot edit core's template; prefix the class
+names with the module id, for the same reason the partial is prefixed.
+Core's own shared classes are available: `.num` for a tabular numeral,
+`.i` for a Nerd Font glyph, `.telltale`, `.hatch`, `.chip`, `.label`, and
+`.clip` (overflow hidden, ellipsis, nowrap) for variable text.
+
+**The budget: 380 x 40 px.** That is what the header's left group has left
+once the day stack carries its year line and the right cluster is at its
+widest, measured, not guessed. Core clamps the root element to it
+(`.hdr-widget` in `app/templates/base.html`, and the constants
+`HEADER_WIDGET_WIDTH_PX` / `HEADER_WIDGET_HEIGHT_PX`), so a widget that
+wants more is clipped rather than allowed to push the clock off the panel.
+The clamp is the backstop, not the plan: clip variable text in Python to a
+measured character budget the way `app/modules/agenda/page.py`
+(`AGENDA_HEADER_TITLE_MAX_CHARS`) does, and carry `.clip` as well for a
+string with no word boundary to break on.
+
+**What core decides, and what the module decides.** The module decides
+what its widget reads and how it draws. Core decides which module fills
+the slot on which page, from two settings fields and the registry
+(`app/view.py:resolve_header_widget`):
+
+1. the page's own override, the `header_widget` column of that module's
+   row in the Modules section: `default`, `none`, or a widget id;
+2. the General section's `header_widget` when the override is `default`:
+   a widget id, or `none`;
+3. `none` at either level draws no widget and no vertical rule;
+4. an id that names no enabled widget here falls back to the first
+   enabled widget in module order, so a hub restored from a backup taken
+   on another hub still draws something;
+5. no widget installed at all leaves the slot empty.
+
+Neither field is validated against the registry by its pydantic model: a
+backup restore and the one-time legacy import both validate those models
+with no registry in reach. The settings page builds both selects from the
+live registry and refuses a save naming a widget this hub does not have
+(`app/settings_pages.py`); the render falls back rather than failing.
+
+**No clock in it.** The rendered PNG is cached per page and its ETag is
+keyed by a state fingerprint, so a widget that changed with the time of
+day would be served stale for a whole page TTL. A widget must be a pure
+function of state, settings, registry and page. The per-page override is
+what gives variety instead: agenda's page can show the next event while
+brief's shows nothing.
+
+**The built-ins.** `weather` (the reading the header always drew, and the
+default), `agenda` (`next_event`: when the next event starts and what it
+is), `system` (the desk's temperature and humidity) and `ai_usage` (the
+used percent of the tightest capacity window). `ai_usage` draws no page at
+all, which is the proof that a widget does not need one.
 
 ## `flag` and `demo_datasets`
 
@@ -233,11 +337,19 @@ Every page template extends the same base the built-ins use:
 ```
 
 `base.html` (`app/templates/base.html`) draws the 800x480 white canvas,
-the header (day, weather, wifi, battery, clock) and the footer (window
-list, DEMO mark) from the `header` and `footer` context keys core fills
-in; a module template only ever fills `content` (and, if it needs its
-own CSS classes, `style`). See `examples/modules/hello/templates/hello.html`
-for a complete, working instance of this.
+the header (day stack, the widget slot, wifi, battery, clock) and the
+footer (window list, DEMO mark) from the `header` and `footer` context
+keys core fills in; a module template only ever fills `content` (and, if
+it needs its own CSS classes, `style`). See
+`examples/modules/hello/templates/hello.html` for a complete, working
+instance of this.
+
+A header widget's partial is the exception to all of the above: it is a
+fragment core `{% include %}`s into the header, so it neither extends
+`base.html` nor fills a block. Its file name is fixed
+(`<module id>_header.html`) and its directory comes from the `HeaderSpec`
+rather than the `PageSpec`, which is what lets a module with no page ship
+one. See "Header widget".
 
 ## The three ways to install a module
 

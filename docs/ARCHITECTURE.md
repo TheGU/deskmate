@@ -271,12 +271,21 @@ top band, which is itself the state and is allowed to fill the whole region.
 `view.py` decides every accent; the templates only print the class name.
 
 - A 64 px header (`.hdr`), closed off by a 2 px rule: on the left the day
-  numeral (56 px) and a weekday/month stack, a vertical rule, then the
-  weather reading (a 40 px temperature, its icon, and a state line that
-  carries a tell-tale dot when it has one, or a hatch box when the reading is
-  unavailable); on the right an overdue chip (red, shown only on pages that
-  do not already list the task), the Wi-Fi glyph, the battery reading (a red
-  or yellow chip only below 20 percent, otherwise plain), and the clock.
+  numeral (56 px) and a three-line 16 px stack beside it (weekday, month,
+  year), a vertical rule, then one module's header widget in a 380 x 40 px
+  slot; on the right an overdue chip (red, shown only on pages that do not
+  already list the task), the Wi-Fi glyph, the battery reading (a red or
+  yellow chip only below 20 percent, otherwise plain), and the clock. The
+  right group is core's. The widget slot is not: which module fills it is
+  the General section's `header_widget` and each page's own override in the
+  Modules section, resolved per page in `app/view.py:resolve_header_widget`
+  (page override, then the default, then the first installed widget, then
+  nothing), and the partial a module ships is included as-is. The built-in
+  widgets are `weather` (the default, a 40 px temperature with its icon and
+  a state line carrying a tell-tale dot, or a hatch box when the reading is
+  unavailable), `agenda`, `system` and `ai_usage`; `none` at either level
+  leaves the slot and its rule undrawn. See docs/MODULES.md, "Header
+  widget".
 - A 372 px body, closed off from the header and footer by 2 px rules and
   split internally by 2 px vertical and horizontal rules, never a boxed
   tile. Today, Agenda, Weather and Brief give the left column a fixed 456 px
@@ -368,10 +377,11 @@ reading `GET /api/state` to write a brief.
 Every panel page and the dataset behind it is a module: a Python package
 that exposes one frozen `Module` dataclass as `MODULE`
 (`app/modules/__init__.py`), providing zero or more `DatasetSpec`s (a named
-block plus the adapter that produces it) and at most one `PageSpec` (drawn
+block plus the adapter that produces it), at most one `PageSpec` (drawn
 by a Jinja template, or by a `screenshot` callable instead - see
-"Rendering pipeline" above), plus its own settings section and push routes
-if it wants either. Core keeps the frame (header, footer, the render
+"Rendering pipeline" above) and at most one `HeaderSpec` (its cell in the
+shared header, independent of whether it has a page), plus its own settings
+section and push routes if it wants either. Core keeps the frame (header, footer, the render
 engine, the alert page and API, auth, the settings machinery, the device
 routes and telemetry); `alert` is reserved and can never be a module's id.
 

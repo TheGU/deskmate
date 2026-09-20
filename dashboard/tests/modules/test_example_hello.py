@@ -5,7 +5,9 @@ into the test, the way ``tests/test_modules.py``'s inline ``HELLO_PACKAGE``
 does) into a temp ``DATA_DIR/modules/``, boots a hub over it and checks the
 three things a developer following the doc would expect: the module is
 installed, its page is in the footer window list, and it renders a real
-800x480 PNG.
+800x480 PNG. Then the fourth, added with the header widget in R.3: the
+module's own widget draws into the header of a page core owns once the
+General section picks it.
 """
 
 from __future__ import annotations
@@ -88,6 +90,29 @@ def test_the_example_module_renders_an_800x480_png(
     image = Image.open(io.BytesIO(png.content))
     image.verify()
     assert Image.open(io.BytesIO(png.content)).size == DISPLAY_SIZE
+
+
+def test_the_example_widget_fills_the_header_when_it_is_selected(
+    hello_client: TestClient, hello_token: str
+) -> None:
+    """The example's HeaderSpec (examples/modules/hello/__init__.py:
+    hello_header plus templates/hello_header.html), picked as the hub's
+    default header widget the way docs/MODULES.md's "Header widget" section
+    says: it draws into the header of a page core owns, not only its own."""
+    hub = hello_client.app.state.hub
+    assert "hello" in [module.id for module in hub.registry.installed_header_widgets()]
+    before = hub.settings_store.load("general")
+    try:
+        hub.settings_store.save(
+            "general", before.model_copy(update={"header_widget": "hello"})
+        )
+        asyncio.run(hub.reload())
+        page = hello_client.get("/preview/today.html", headers=auth(hello_token))
+        assert page.status_code == 200
+        assert 'class="hdr-widget hdr-hello"' in page.text
+    finally:
+        hub.settings_store.save("general", before)
+        asyncio.run(hub.reload())
 
 
 def test_the_hello_section_renders_on_the_settings_page(
