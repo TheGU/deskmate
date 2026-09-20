@@ -36,7 +36,7 @@ uv sync --all-groups
 uv run playwright install chromium
 
 # run the server, then open http://127.0.0.1:8080/setup in a browser
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8080
+uv run uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8080
 ```
 
 The wizard claims the hub, shows the bearer token and device key once, and
