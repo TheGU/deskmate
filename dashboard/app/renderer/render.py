@@ -237,7 +237,7 @@ class Renderer:
         if page not in self.pages:
             raise KeyError(f"unknown page {page!r}")
         context: dict[str, Any] = build_context(
-            page, state, self.hub_settings, self._registry.pages()
+            page, state, self.hub_settings, self._registry
         )
         context["font_css"] = font_css(str(self._env.static_dir / "fonts"), embed_fonts)
         context["embed_fonts"] = embed_fonts

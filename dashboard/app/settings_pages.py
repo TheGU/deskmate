@@ -22,6 +22,7 @@ serves it.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from datetime import datetime, timezone as dt_timezone
@@ -46,7 +47,11 @@ from app.backup import (
 )
 from app.config import Env
 from app.forms import (
+    FieldView,
     FormErrors,
+    ListView,
+    Option,
+    RowView,
     SectionForm,
     errors_from_parse,
     form_errors,
@@ -66,7 +71,9 @@ from app.hub_config import (
 from app.httputil import _cap_form_body, _cap_restore_length, _stream_upload_to
 from app.logging_setup import log
 from app.models import AdapterStatus
+from app.modules.general.settings import HEADER_WIDGET_NONE
 from app.modules.registry import ModulesSettings
+from app.view import HEADER_WIDGET_DEFAULT
 
 if TYPE_CHECKING:
     from app.main import Hub
@@ -91,6 +98,17 @@ TESTABLE_SECTIONS: tuple[str, ...] = (
 #: an enable box and an order, which is what the window list and
 #: ``/display/{n}.png`` are built from.
 MODULES_SECTION = "modules"
+
+#: The hub's own section, which carries the header widget's default.
+GENERAL_SECTION = "general"
+
+#: The field both sections spell the same, and which this file turns into a
+#: select built from the live registry
+#: (:func:`_with_header_widget_choices`) and checks against it before a save
+#: (:func:`_unknown_header_widgets`). Neither check can be a pydantic
+#: validator: a backup restore and the one-time legacy import both validate
+#: these models with no registry in reach.
+HEADER_WIDGET_FIELD = "header_widget"
 
 #: The setup wizard's steps, in the plan's order. Every step is optional and
 #: the last one's "next" is the settings page. The other five sections are
@@ -158,6 +176,7 @@ def _section_form(
         and section in TESTABLE_SECTIONS
         and section in hub.state_service.adapters
     )
+    form = _with_header_widget_choices(form, hub)
     if section == MODULES_SECTION:
         form.warnings = _modules_section_warnings(hub)
     if section == "weather":
@@ -165,6 +184,144 @@ def _section_form(
         # name into the latitude and longitude that section stores.
         form.search = search if search is not None else PlaceSearch(url=search_url)
     return form
+
+
+def _header_widget_ids(hub: "Hub") -> tuple[str, ...]:
+    """The widget ids this hub can offer, in module order.
+
+    Every *installed* module with a widget, not only the enabled ones: a
+    widget whose module is turned off is still a legitimate choice (the
+    render falls back to the first enabled one meanwhile,
+    ``app/view.py:resolve_header_widget``), and dropping it from the list
+    would mean the General section could not be saved at all while the
+    weather module happened to be off.
+    """
+    return tuple(module.id for module in hub.registry.installed_header_widgets())
+
+
+def _widget_select(cell: FieldView, choices: tuple[str, ...]) -> FieldView:
+    """``cell`` as a select over ``choices``, plus whatever it already holds.
+
+    A value that is not among the choices - a foreign id from a backup made
+    on another hub - is kept as an option and stays selected, so the page
+    shows what is actually stored and the save is what refuses it
+    (:func:`_unknown_header_widgets`), rather than the browser quietly
+    rewriting it to the first option.
+    """
+    values = choices if cell.value in choices or not cell.value else (*choices, cell.value)
+    return dataclasses.replace(
+        cell,
+        kind="select",
+        options=tuple(
+            Option(value=choice, label=choice, selected=choice == cell.value)
+            for choice in values
+        ),
+    )
+
+
+def _modules_rows_with_widget_choices(
+    item: ListView, hub: "Hub", choices: tuple[str, ...]
+) -> ListView:
+    """The Modules table with a header widget select on every page module's
+    row, and none at all on a dataset-only module's.
+
+    A module that draws no page has no header of its own to override - the
+    slot is resolved per page - so its cell becomes a hidden input carrying
+    what is stored. Hidden rather than absent because every row posts every
+    one of its cells: a cell that vanished would come back blank and fail
+    the row's own validation.
+    """
+    rows: list[RowView] = []
+    for row in item.rows:
+        module = next(
+            (
+                candidate
+                for candidate in hub.registry.modules
+                if candidate.id == _row_cell(row, item.name, "id").value
+            ),
+            None,
+        )
+        cells = tuple(
+            cell
+            if not cell.name.endswith(f"-{HEADER_WIDGET_FIELD}")
+            else (
+                dataclasses.replace(cell, kind="hidden")
+                if module is not None and module.page is None
+                else _widget_select(cell, choices)
+            )
+            for cell in row.cells
+        )
+        rows.append(dataclasses.replace(row, cells=cells))
+    return dataclasses.replace(item, rows=tuple(rows))
+
+
+def _row_cell(row: RowView, field: str, sub: str) -> FieldView:
+    """One cell of a generated list row, by its sub-field name."""
+    name = f"{field}-{row.index}-{sub}"
+    return next(cell for cell in row.cells if cell.name == name)
+
+
+def _with_header_widget_choices(form: SectionForm, hub: "Hub") -> SectionForm:
+    """``form`` with its ``header_widget`` field turned into a live select.
+
+    ``app/forms.py`` renders a ``str`` field as a text box, and it is right
+    to: the two models store a plain string on purpose, because what is a
+    legal widget id depends on what is installed *here* and a settings model
+    is validated in places where no registry exists. This is where the live
+    registry gets folded in, on the page, once per render.
+    """
+    if form.section == GENERAL_SECTION:
+        choices = (HEADER_WIDGET_NONE, *_header_widget_ids(hub))
+        form.items = tuple(
+            _widget_select(item, choices)
+            if isinstance(item, FieldView) and item.name == HEADER_WIDGET_FIELD
+            else item
+            for item in form.items
+        )
+        return form
+    if form.section == MODULES_SECTION:
+        choices = (HEADER_WIDGET_DEFAULT, HEADER_WIDGET_NONE, *_header_widget_ids(hub))
+        form.items = tuple(
+            _modules_rows_with_widget_choices(item, hub, choices)
+            if isinstance(item, ListView)
+            else item
+            for item in form.items
+        )
+    return form
+
+
+def _unknown_header_widgets(hub: "Hub", section: str, value: BaseModel) -> dict[str, str]:
+    """Header widget choices in ``value`` that name nothing on this hub.
+
+    Keyed like :attr:`app.forms.FormErrors.fields`, so the message lands
+    against the select that carries the id. Mirrors ``_no_page_left``: a
+    submission that cannot mean what it says is refused while it is still a
+    form, rather than written and silently fallen back from on every render
+    afterwards.
+    """
+    known = _header_widget_ids(hub)
+    if section == GENERAL_SECTION:
+        chosen = getattr(value, HEADER_WIDGET_FIELD, HEADER_WIDGET_NONE)
+        if chosen == HEADER_WIDGET_NONE or chosen in known:
+            return {}
+        return {HEADER_WIDGET_FIELD: _unknown_widget_message(chosen, known)}
+    if section != MODULES_SECTION:
+        return {}
+    problems: dict[str, str] = {}
+    for index, row in enumerate(cast(ModulesSettings, value).items):
+        chosen = row.header_widget
+        if chosen in (HEADER_WIDGET_DEFAULT, HEADER_WIDGET_NONE) or chosen in known:
+            continue
+        problems[f"items-{index}-{HEADER_WIDGET_FIELD}"] = _unknown_widget_message(chosen, known)
+    return problems
+
+
+def _unknown_widget_message(chosen: str, known: tuple[str, ...]) -> str:
+    offer = ", ".join(known) if known else "none"
+    return (
+        f"no module installed here draws a header widget called {chosen!r}. "
+        f"Install it, or pick one of: {offer}."
+    )
 
 
 def _settings_forms(hub: "Hub", *, replace: SectionForm | None = None) -> list[SectionForm]:
@@ -304,6 +461,15 @@ async def _save_section(
             section,
             values=parsed.data,
             errors=form_errors(model, exc),
+            search_url=search_url,
+        )
+    widget_problems = _unknown_header_widgets(hub, section, value)
+    if widget_problems:
+        return _section_form(
+            hub,
+            section,
+            values=parsed.data,
+            errors=FormErrors(fields=widget_problems),
             search_url=search_url,
         )
     if section == MODULES_SECTION and _no_page_left(hub, value):

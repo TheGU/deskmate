@@ -28,6 +28,8 @@
       <option value="{{ option.value }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
       {% endfor %}
     </select>
+  {%- elif item.kind == "hidden" -%}
+    <input type="hidden" name="{{ item.name }}" value="{{ item.value }}">
   {%- elif item.kind == "password" -%}
     <input type="password" id="{{ prefix }}-{{ item.name }}" name="{{ item.name }}" value=""
            autocomplete="new-password">

@@ -13,8 +13,8 @@ from pathlib import Path
 from app import __version__
 from app.adapters.weather import build_weather_adapter
 from app.models import WeatherBlock
-from app.modules import DatasetSpec, Module, PageSpec
-from app.modules.weather.page import weather_context, weather_flag
+from app.modules import DatasetSpec, HeaderSpec, Module, PageSpec
+from app.modules.weather.page import weather_context, weather_flag, weather_header
 from app.modules.weather.settings import SECTION, WeatherSettings
 from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
@@ -50,6 +50,13 @@ MODULE = Module(
         needs=("weather",),
         demo_datasets=PAGE_PUSH_DATASETS["weather"],
         flag=weather_flag,
+    ),
+    # The header widget every hub starts with: ``GeneralSettings.
+    # header_widget`` defaults to "weather", which is the reading the header
+    # drew from the day the panel existed.
+    header=HeaderSpec(
+        context=weather_header,
+        templates_dir=Path(__file__).parent / "templates",
     ),
     default_order=30,
 )

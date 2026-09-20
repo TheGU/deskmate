@@ -173,17 +173,14 @@ html, body {
   text-transform: uppercase; letter-spacing: 0.08em; line-height: 1.2;
 }
 
-.hdr-weather { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.hdr-wx-temp {
-  font-size: 40px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
-}
-.hdr-wx-unit { font-size: 16px; font-weight: 600; position: relative; top: -18px; margin-left: 1px; }
-.hdr-wx-icon { font-size: 32px; }
-.hdr-wx-state {
-  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
-  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-}
-.hdr-wx-hatch { width: 32px; height: 18px; }
+/* The header's second cell: one module's widget, whichever the settings
+   and the registry resolve to (app/view.py:resolve_header_widget). Core
+   owns the slot and nothing inside it; 380 x 40 px is what the left group
+   has left once the day stack carries its year line and the right cluster
+   is at its widest (docs/MODULES.md, "Header widget"). Hard bounds, because
+   a widget is a module's own markup inside core's frame: one that wants
+   more is clipped rather than allowed to push the clock off the panel. */
+.hdr-widget { max-width: 380px; max-height: 40px; overflow: hidden; }
 
 .hdr-pill { padding: 2px 6px 3px; }
 .hdr-plain { display: inline-flex; align-items: baseline; gap: 4px; }
@@ -231,19 +228,10 @@ its provenance.
         <span class="hdr-day-num num">{{ header.day }}</span>
         <span class="hdr-day-stack"><span>{{ header.weekday }}</span><span>{{ header.month }}</span></span>
       </div>
+      {% if header.widget %}
       <div class="rule-v"></div>
-      <div class="hdr-weather">
-        {% if header.weather.available %}
-        <span class="hdr-wx-temp num">{{ header.weather.temp }}<span class="hdr-wx-unit">C</span></span>
-        <span class="i hdr-wx-icon">{{ header.weather.icon }}</span>
-        <span class="hdr-wx-state{% if header.weather.color %} t-{{ header.weather.color }}{% endif %}">
-          {% if header.weather.dot %}<span class="telltale {{ header.weather.dot }}"></span>{% endif %}{{ header.weather.label }}
-        </span>
-        {% else %}
-        <span class="hatch hdr-wx-hatch"></span>
-        <span class="hdr-wx-state">UNAVAILABLE</span>
-        {% endif %}
-      </div>
+      {% include header.widget.template %}
+      {% endif %}
     </div>
     <div class="hdr-right">
       {% if header.show_overdue_chip %}

@@ -8,6 +8,13 @@ defaults are all read off it here. Adding a field to a model is the whole
 change; forgetting to add it to a template is not a failure mode this code
 allows.
 
+One widget is not reachable from an annotation at all: ``hidden``. It is
+what a caller downgrades an already-generated field to when that particular
+row has nothing to choose from - the Modules section does it to the
+``header_widget`` cell of a module that draws no page
+(``app/settings_pages.py``) - so the stored value still round-trips through
+the form instead of coming back blank and failing validation.
+
 Supported annotations, and the widget each one becomes:
 
 ===================== ==================================================
@@ -93,8 +100,10 @@ _ROW_NAME = re.compile(r"^(?P<field>[a-z][a-z0-9_]*)-(?P<index>\d+)-(?P<sub>[a-z
 _TRUE_VALUES = frozenset({"1", "true", "on", "yes"})
 
 #: Widgets that send a value even when nobody touched them, and so cannot
-#: tell a filled list row from a spare one (see :func:`parse_section`).
-_ALWAYS_SUBMITTED = frozenset({"select", "checkbox"})
+#: tell a filled list row from a spare one (see :func:`parse_section`). A
+#: hidden input is here for the same reason a select is: it always posts,
+#: and it posts a value nobody chose.
+_ALWAYS_SUBMITTED = frozenset({"select", "checkbox", "hidden"})
 
 
 class UnsupportedField(TypeError):
@@ -585,7 +594,14 @@ def parse_section(
                     # hidden 0 whether or not anyone touched the row, so
                     # neither can be evidence that this row was filled in.
                     continue
-                filled.append(parsed not in (None, ""))
+                # Nor is a cell still carrying the row model's own default,
+                # which is exactly what a spare row shows (:func:`_blank_value`).
+                # A text field with a non-blank default - the Modules
+                # section's ``header_widget`` - would otherwise make every
+                # spare row look filled and fail the section on the id it
+                # does not have.
+                blank = _text_value(_blank_value(item_model.model_fields[sub_name]))
+                filled.append(parsed not in (None, "") and parsed != blank)
             if filled and not any(filled):
                 # One of the three spare rows, left untouched.
                 continue

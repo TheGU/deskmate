@@ -1,9 +1,15 @@
-"""The Weather page's own context builder and the helpers only it needs.
+"""The Weather page's own context builder, its header widget, and the
+helpers only they need.
 
 Moved out of ``app/view.py`` in 2.2 (docs/plan/2026-09-19-settings-modules-
 provisioning.md): everything here is read by no other page. Shared helpers
-(formatting, header, footer, base context, ``is_heat``, which the header also
-uses) stay in ``app/view.py`` and are imported from there.
+(formatting, header, footer, base context, ``is_heat``, which the widget
+also uses) stay in ``app/view.py`` and are imported from there.
+
+R.3 (docs/plan/2026-09-20-owner-feedback-round.md) moved the header's
+weather reading here too, as :func:`weather_header`: the header's second
+cell is a module's now, and weather is simply the module that fills it by
+default.
 """
 
 from __future__ import annotations
@@ -19,13 +25,45 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     from app.settings import HubSettings
 
 
+def weather_header(state: DashboardState, settings: "HubSettings") -> dict[str, Any]:
+    """This module's header widget: a numeral, a glyph, and one state label.
+
+    Was ``app/view.py:header_weather`` and is unchanged, markup included
+    (``templates/weather_header.html``): the header slot became a module's
+    in R.3 and weather is what fills it by default, so the pixels it draws
+    had to stay exactly what they were.
+
+    Heat outranks rain (a 40 degree feel is the thing to know first); a dry,
+    cool reading gets the plain condition word with no dot and no colour.
+
+    ``settings`` is unread: the reading is the block's, and the unit system
+    is not yet a thing any page honours.
+    """
+    weather = state.block("weather", WeatherBlock).weather
+    if not state.block("weather", WeatherBlock).usable or weather is None:
+        return {"available": False}
+    if is_heat(weather):
+        color, label = "red", "HEAT"
+    elif weather.rain_from:
+        color, label = "blue", f"RAIN {weather.rain_from}"
+    else:
+        color, label = "", weather.condition.upper()
+    return {
+        "available": True,
+        "temp": fmt_number(weather.temperature_c),
+        "icon": icons.weather_icon(weather.condition),
+        "color": color,
+        "dot": color,
+        "label": label,
+    }
+
+
 def weather_summary(weather: Weather | None) -> dict[str, Any]:
     """The hero reading: temperature, glyph, condition word, feels-like, and
     the one tell-tale the owner needs before reading anything else.
 
-    Heat outranks rain, same ordering as :func:`app.view.header_weather`: a
-    40 degree feel is the thing to know first. A dry, cool day gets no dot at
-    all.
+    Heat outranks rain, same ordering as :func:`weather_header`: a 40 degree
+    feel is the thing to know first. A dry, cool day gets no dot at all.
     """
     if weather is None:
         return {"available": False}
@@ -222,6 +260,7 @@ __all__ = [
     "weather_context",
     "weather_daily_rows",
     "weather_flag",
+    "weather_header",
     "weather_hourly_plates",
     "weather_readings",
     "weather_summary",

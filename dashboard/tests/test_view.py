@@ -55,7 +55,6 @@ from app.view import (
     due_label,
     footer_context,
     header_context,
-    header_weather,
     meter_cells,
     page_shows_demo_data,
     stale_info,
@@ -93,7 +92,8 @@ def test_pages_render_context_when_everything_is_unavailable(hub_settings: HubSe
         assert context["page"] == page
     today = build_context("today", state, hub_settings)
     assert today["priorities"] == []
-    assert today["header"]["weather"]["available"] is False
+    assert today["header"]["widget"]["module"] == "weather"
+    assert today["header"]["widget"]["available"] is False
     assert "unavailable" in today["ai_note"]["text"]
     weather = build_context("weather", state, hub_settings)
     assert weather["hero"]["available"] is False
@@ -142,69 +142,6 @@ def test_due_labels_use_weekday_not_tomorrow() -> None:
     assert due_label(TODAY - timedelta(days=1), TODAY) == "1D LATE"
     assert due_label(TODAY - timedelta(days=3), TODAY) == "3D LATE"
     assert due_label(TODAY + timedelta(days=5), TODAY) == "DUE 09 SEP"
-
-
-def test_header_weather_without_data_is_the_hatch_flag() -> None:
-    state = empty_state()
-    assert header_weather(state) == {"available": False}
-
-
-def test_header_weather_marks_a_stale_block_as_unavailable() -> None:
-    state = empty_state()
-    state.blocks["weather"] = WeatherBlock(status=AdapterStatus.STALE, weather=None)
-    assert header_weather(state)["available"] is False
-
-
-def test_header_weather_rain_gives_blue_and_the_rain_label() -> None:
-    tz = zone("Asia/Bangkok")
-    state = make_state(
-        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
-        timezone="Asia/Bangkok",
-        weather=WeatherBlock(
-            status=AdapterStatus.OK,
-            weather=Weather(condition="Showers", temperature_c=29.0, rain_from="15:00"),
-        ),
-    )
-    reading = header_weather(state)
-    assert reading["available"] is True
-    assert reading["color"] == "blue"
-    assert reading["dot"] == "blue"
-    assert reading["label"] == "RAIN 15:00"
-    assert reading["temp"] == "29"
-
-
-def test_header_weather_heat_outranks_rain_and_gives_red() -> None:
-    tz = zone("Asia/Bangkok")
-    state = make_state(
-        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
-        timezone="Asia/Bangkok",
-        weather=WeatherBlock(
-            status=AdapterStatus.OK,
-            weather=Weather(
-                condition="Sunny", temperature_c=37.0, rain_from="15:00"
-            ),
-        ),
-    )
-    reading = header_weather(state)
-    assert reading["color"] == "red"
-    assert reading["dot"] == "red"
-    assert reading["label"] == "HEAT"
-
-
-def test_header_weather_plain_condition_has_no_dot() -> None:
-    tz = zone("Asia/Bangkok")
-    state = make_state(
-        generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz),
-        timezone="Asia/Bangkok",
-        weather=WeatherBlock(
-            status=AdapterStatus.OK,
-            weather=Weather(condition="Cloudy", temperature_c=28.0),
-        ),
-    )
-    reading = header_weather(state)
-    assert reading["color"] == ""
-    assert reading["dot"] == ""
-    assert reading["label"] == "CLOUDY"
 
 
 def test_wifi_level_thresholds() -> None:
@@ -256,7 +193,8 @@ def test_every_page_carries_the_header_and_the_window_list(hub_settings: HubSett
         assert active == ([] if page == "alert" else [page.upper()])
         # Nothing to report is not the same as reporting zero.
         assert context["header"]["overdue_count"] == 0
-        assert context["header"]["weather"]["available"] is False
+        assert context["header"]["widget"]["module"] == "weather"
+        assert context["header"]["widget"]["available"] is False
         assert context["header"]["battery"]["chip_accent"] == ""
 
 
@@ -435,7 +373,7 @@ def test_header_battery_shows_the_plug_icon_on_usb(hub_settings: HubSettings) ->
             timezone="Asia/Bangkok",
             device=DeviceBlock(status=AdapterStatus.OK, device=device),
         )
-        return header_context(state, now.date(), now, "today")
+        return header_context(state, hub_settings, now.date(), now, "today")
 
     plugged_in = _header(True)
     assert plugged_in["battery"]["icon"] == icons.POWER_PLUG
@@ -446,11 +384,13 @@ def test_header_battery_shows_the_plug_icon_on_usb(hub_settings: HubSettings) ->
     unreported = _header(None)
     assert unreported["battery"]["icon"] == icons.battery_icon(80.0)
 
-    no_device = header_context(empty_state(), now.date(), now, "today")
+    no_device = header_context(empty_state(), hub_settings, now.date(), now, "today")
     assert no_device["battery"]["icon"] == icons.battery_icon(None)
 
 
-def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere() -> None:
+def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere(
+    hub_settings: HubSettings,
+) -> None:
     """Today and Brief already show the overdue task in their own red 1D
     LATE chip; the header's own chip is only for the pages that do not."""
     tz = zone("Asia/Bangkok")
@@ -464,18 +404,18 @@ def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere() -> None
         ),
     )
     today_date = reference.date()
-    assert header_context(state, today_date, reference, "today")["show_overdue_chip"] is False
-    assert header_context(state, today_date, reference, "brief")["show_overdue_chip"] is False
+    assert header_context(state, hub_settings, today_date, reference, "today")["show_overdue_chip"] is False
+    assert header_context(state, hub_settings, today_date, reference, "brief")["show_overdue_chip"] is False
     assert PAGES_WITH_OWN_OVERDUE_CHIP == {"today", "brief"}
     for page in ("agenda", "weather", "system", "alert"):
-        assert header_context(state, today_date, reference, page)["show_overdue_chip"] is True
+        assert header_context(state, hub_settings, today_date, reference, page)["show_overdue_chip"] is True
 
 
-def test_header_overdue_chip_hidden_when_nothing_is_overdue() -> None:
+def test_header_overdue_chip_hidden_when_nothing_is_overdue(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
     state = make_state(generated_at=reference, timezone="Asia/Bangkok")
-    assert header_context(state, reference.date(), reference, "agenda")["show_overdue_chip"] is False
+    assert header_context(state, hub_settings, reference.date(), reference, "agenda")["show_overdue_chip"] is False
 
 
 def _tasks_state(titles: list[str]) -> DashboardState:

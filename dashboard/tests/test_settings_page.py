@@ -110,9 +110,7 @@ def state_at(hour: int = 9) -> Any:
 
 def window_names(admin: AdminHub) -> list[str]:
     """The footer's window list, as the panel would print it."""
-    context = build_context(
-        "today", state_at(), admin.hub.hub_settings, admin.hub.registry.pages()
-    )
+    context = build_context("today", state_at(), admin.hub.hub_settings, admin.hub.registry)
     return [window["name"] for window in context["footer"]["windows"]]
 
 
@@ -121,6 +119,7 @@ def modules_form(
     *,
     disable: frozenset[str] = frozenset(),
     extra_rows: tuple[str, ...] = (),
+    widgets: dict[str, str] | None = None,
 ) -> dict[str, list[str]]:
     """The modules section exactly as the browser posts it.
 
@@ -129,15 +128,26 @@ def modules_form(
     why the enabled fields carry two values - from the rows the page is
     showing, so this is a round trip through the page rather than through a
     hand-made payload.
+
+    ``widgets`` overrides one or more rows' header widget choice, keyed by
+    module id, exactly as picking one from that row's select would.
     """
+    chosen = widgets or {}
     items: dict[str, list[str]] = {}
-    rows = [(row.id, row.enabled, row.order) for row in admin.hub.registry.toggle_rows()]
-    rows.extend((module_id, True, None) for module_id in extra_rows)
-    for index, (module_id, enabled, order) in enumerate(rows):
+    rows = [
+        (row.id, row.enabled, row.order, row.header_widget)
+        for row in admin.hub.registry.toggle_rows()
+    ]
+    rows.extend((module_id, True, None, "default") for module_id in extra_rows)
+    for index, (module_id, enabled, order, widget) in enumerate(rows):
         items[f"items-{index}-id"] = [module_id]
         ticked = enabled and module_id not in disable
         items[f"items-{index}-enabled"] = ["0", "1"] if ticked else ["0"]
         items[f"items-{index}-order"] = ["" if order is None else str(order)]
+        # Every row posts its header widget choice, whether the page drew it
+        # as a select or as a hidden input
+        # (app/settings_pages.py:_modules_rows_with_widget_choices).
+        items[f"items-{index}-header_widget"] = [chosen.get(module_id, widget)]
     items["action"] = ["save"]
     return items
 
@@ -194,7 +204,12 @@ def test_saving_a_section_stores_it_reloads_the_hub_and_says_so(admin: AdminHub)
     response = admin.client.post(
         "/settings/general",
         headers=admin.auth,
-        data={"timezone": "Europe/Berlin", "units": "imperial", "action": "save"},
+        data={
+            "timezone": "Europe/Berlin",
+            "units": "imperial",
+            "header_widget": "weather",
+            "action": "save",
+        },
         follow_redirects=False,
     )
 
@@ -515,7 +530,12 @@ def test_a_wizard_step_saves_like_the_settings_page_and_moves_on(admin: AdminHub
     response = admin.client.post(
         "/setup/general",
         headers=admin.auth,
-        data={"timezone": "Europe/Berlin", "units": "metric", "action": "save"},
+        data={
+            "timezone": "Europe/Berlin",
+            "units": "metric",
+            "header_widget": "weather",
+            "action": "save",
+        },
         follow_redirects=False,
     )
 
