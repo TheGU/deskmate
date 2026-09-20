@@ -105,6 +105,25 @@ _HEADER_GEOMETRY = """(() => {
   return { weatherEnd: round(weather.right), rightStart: round(right.left) };
 })()"""
 
+#: The day stack and the two boxes the year line must not move: the header's
+#: own 64 px and the top of the body under it.
+_DAY_STACK_GEOMETRY = """(() => {
+  const round = value => Math.round(value * 10) / 10;
+  const header = document.querySelector('.hdr').getBoundingClientRect();
+  const body = document.querySelector('.body').getBoundingClientRect();
+  const lines = Array.from(document.querySelectorAll('.hdr-day-stack span'));
+  return {
+    headerHeight: round(header.height),
+    headerBottom: round(header.bottom),
+    bodyTop: round(body.top),
+    lines: lines.map(line => ({
+      text: line.textContent.trim(),
+      size: getComputedStyle(line).fontSize,
+      bottom: round(line.getBoundingClientRect().bottom),
+    })),
+  };
+})()"""
+
 _FOOTER_GEOMETRY = """(() => {
   const wins = Array.from(document.querySelectorAll('.win'));
   const list = document.querySelector('.win-list').getBoundingClientRect();
@@ -114,6 +133,27 @@ _FOOTER_GEOMETRY = """(() => {
     listRight: Math.round(list.right * 10) / 10,
   };
 })()"""
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_header_day_stack_is_three_16_px_lines_inside_the_64_px_header(
+    renderer: Renderer, state: DashboardState, page: str
+) -> None:
+    """The year line (R.3, docs/plan/2026-09-20-owner-feedback-round.md,
+    finding 10a) is a third 16 px line in the same stack, not a taller
+    header: three lines at line-height 1.2 are 57.6 px, which still fits the
+    64 px box, so the body below starts exactly where it always did and only
+    the numeral beside the stack moves (down 1.6 px, as the stack recentres).
+    """
+    geometry = run(renderer.probe(page, _widest_header_state(state), _DAY_STACK_GEOMETRY))
+    assert geometry["headerHeight"] == 64.0, geometry
+    assert geometry["bodyTop"] == 66.0, geometry
+    lines = geometry["lines"]
+    assert len(lines) == 3, lines
+    assert [line["size"] for line in lines] == ["16px"] * 3, lines
+    assert lines[2]["text"].isdigit() and len(lines[2]["text"]) == 4, lines
+    for line in lines:
+        assert line["bottom"] <= geometry["headerBottom"] + 0.5, geometry
 
 
 def _widest_header_state(state: DashboardState) -> DashboardState:

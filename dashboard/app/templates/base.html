@@ -213,8 +213,8 @@ yellow, green, blue that appear only for a state, 45 degree hatch for the
 unavailable.
 STORY: The owner reads the numerals first, the labels explain, a tell-tale
 pulls the eye only when something needs it, the footer names the pages.
-FIRST VIEWPORT: 64 px header (day numeral, weather reading, device
-tell-tales, clock); left 456 px priorities and the agenda list; right AI
+FIRST VIEWPORT: 64 px header (day numeral over weekday, month and year, a
+module's widget, device tell-tales, clock); left 456 px priorities and the agenda list; right AI
 readings and the note; 40 px footer window list.
 FORM: Braun Panel, candidate 6 of 7, seed 7a009fe2.
 FINISH: unreviewed and undocumented is unfinished; this build ends with the
@@ -226,7 +226,7 @@ its provenance.
     <div class="hdr-left">
       <div class="hdr-day">
         <span class="hdr-day-num num">{{ header.day }}</span>
-        <span class="hdr-day-stack"><span>{{ header.weekday }}</span><span>{{ header.month }}</span></span>
+        <span class="hdr-day-stack"><span>{{ header.weekday }}</span><span>{{ header.month }}</span><span>{{ header.year }}</span></span>
       </div>
       {% if header.widget %}
       <div class="rule-v"></div>

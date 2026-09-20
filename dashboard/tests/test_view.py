@@ -411,6 +411,20 @@ def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere(
         assert header_context(state, hub_settings, today_date, reference, page)["show_overdue_chip"] is True
 
 
+def test_header_day_stack_carries_the_year(hub_settings: HubSettings) -> None:
+    """Finding 10a: the stack is weekday over month over year, all three
+    from the same reference moment the numeral and the clock come from."""
+    reference = datetime(2026, 9, 4, 8, 0, tzinfo=zone("Asia/Bangkok"))
+    state = make_state(generated_at=reference, timezone="Asia/Bangkok")
+    header = header_context(state, hub_settings, reference.date(), reference, "today")
+    assert (header["day"], header["weekday"], header["month"], header["year"]) == (
+        "04",
+        "FRI",
+        "SEP",
+        "2026",
+    )
+
+
 def test_header_overdue_chip_hidden_when_nothing_is_overdue(hub_settings: HubSettings) -> None:
     tz = zone("Asia/Bangkok")
     reference = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
