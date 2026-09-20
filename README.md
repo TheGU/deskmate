@@ -1,7 +1,10 @@
 # deskmate
 
-A local-first desk dashboard for the Seeed Studio reTerminal E1002
-(ESP32-S3, 800x480 six-color e-paper).
+A local-first desk dashboard for any ESPHome device that fetches an 800x480
+six-color PNG and posts telemetry back. `firmware/e1002.yaml` is the
+reference firmware, built for the Seeed Studio reTerminal E1002 (ESP32-S3).
+Other display sizes are not supported today: every page template is laid
+out in fixed pixel budgets (see DESIGN.md).
 
 All the logic lives in a small server called **dashboard-hub**: it fetches
 calendar, weather and Home Assistant state itself, accepts AI quota, an
@@ -13,7 +16,7 @@ shows it.
 
 ```
 Data sources -> dashboard-hub (FastAPI + Jinja2 + Chromium at 4x + Lanczos + Pillow)
-             -> 800x480 six-color PNG over HTTP -> reTerminal E1002 (ESPHome)
+             -> 800x480 six-color PNG over HTTP -> ESPHome device (reference: reTerminal E1002)
 ```
 
 Pages: `today`, `agenda`, `weather`, `brief`, `system`, `alert`.
