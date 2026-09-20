@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import re
 import sqlite3
 import time
@@ -48,10 +49,11 @@ from app.modules.brief.settings import BriefSettings
 from app.modules.calendar.settings import CalendarSettings
 from app.modules.device.settings import DeviceSettings
 from app.modules.home.settings import HomeSettings
+from app.modules.registry import ModulesSettings, ModuleToggle, builtin_registry
 from app.modules.tasks.settings import TasksSettings
 from app.modules.weather.settings import WeatherSettings
 from app.renderer.render import Renderer
-from app.settings import HubSettings
+from app.settings import HubSettings, SettingsStore
 from tests.conftest import run
 
 BACKUP_NAME = re.compile(r'attachment; filename="deskmate-backup-\d{8}-\d{6}\.sqlite"')
@@ -140,6 +142,37 @@ def other_backup(data_dir: Path, name: str = "restored") -> tuple[Path, ClaimedS
             existing=None, name=name, base_url="http://other.lan:8080"
         )
         write_hub_config(database, config)
+        target = backup_temp_path(data_dir)
+        database.backup_to(target)
+    finally:
+        database.close()
+    return target, ClaimedSecrets(token=token, device_key=device_key)
+
+
+def other_backup_with_no_pages(data_dir: Path, name: str = "no-pages") -> tuple[Path, ClaimedSecrets]:
+    """A backup like :func:`other_backup`, but its ``modules`` section
+    disables every built-in page module - the shape a restore of a hub
+    provisioned for a different set of modules can actually have, which
+    :meth:`Registry.pages` (through :func:`_no_page_left`) only ever guards
+    against for a save made *through this settings page*, never for a
+    database swapped in whole by a restore.
+    """
+    database = Database(data_dir / "deskmate.sqlite")
+    try:
+        database.migrate()
+        config, token, device_key = claim_hub(
+            existing=None, name=name, base_url="http://other.lan:8080"
+        )
+        write_hub_config(database, config)
+        SettingsStore(database).save(
+            "modules",
+            ModulesSettings(
+                items=[
+                    ModuleToggle(id=page_id, enabled=False)
+                    for page_id in builtin_registry().page_ids()
+                ]
+            ),
+        )
         target = backup_temp_path(data_dir)
         database.backup_to(target)
     finally:
@@ -490,6 +523,36 @@ def test_the_login_page_shows_the_restore_notices(hub: ClaimedHub) -> None:
     notified = hub.client.get("/login?restored=1&device_key_changed=1")
     assert "restored from a backup" in notified.text
     assert "different device key" in notified.text
+
+
+def test_a_restore_that_leaves_no_page_enabled_logs_a_warning(
+    hub: ClaimedHub, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``_no_page_left`` only ever guards a save made through this settings
+    page (``_save_section``); a restore swaps the whole database in and
+    cannot check that against a hub row it is about to replace. It has to
+    say so afterwards instead of leaving a blank panel with no explanation
+    anywhere but the device's own 404s."""
+    backup, restored = other_backup_with_no_pages(tmp_path / "no-pages")
+
+    with caplog.at_level(logging.WARNING, logger="app.settings_pages"):
+        response = hub.client.post(
+            "/settings/restore",
+            headers=auth(hub.token),
+            follow_redirects=False,
+            **upload(backup),
+        )
+
+    assert response.status_code == 303
+    assert not hub.hub.registry.pages()
+    assert any(
+        "no page" in record.getMessage().lower()
+        for record in caplog.records
+        if record.name == "app.settings_pages"
+    )
+
+    display = hub.client.get("/display/0.png", headers=auth(restored.token))
+    assert display.status_code == 404
 
 
 def test_restore_while_a_render_is_in_flight(

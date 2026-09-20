@@ -159,7 +159,7 @@ def _section_form(
         and section in hub.state_service.adapters
     )
     if section == MODULES_SECTION:
-        form.warnings = _missing_module_warnings(hub)
+        form.warnings = _modules_section_warnings(hub)
     if section == "weather":
         # The place search exists only for weather: it is what turns a place
         # name into the latitude and longitude that section stores.
@@ -202,23 +202,42 @@ def _settings_html(
     return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
-def _missing_module_warnings(hub: "Hub") -> tuple[str, ...]:
-    """One line per id the modules section holds that is not installed.
+def _modules_section_warnings(hub: "Hub") -> tuple[str, ...]:
+    """Lines the Modules section shows above its rows: never an error, since
+    the form itself is fine, but something about what is or is not enabled
+    that the owner would otherwise only discover from a blank panel.
 
-    An id in the database is the owner's intent and a module can come back
-    after an upgrade, so the row is kept (``registry.missing_ids``). What it
-    must not do is sit there silently: the page says which ids answer for
+    One line per id the modules section holds that is not installed. An id
+    in the database is the owner's intent and a module can come back after
+    an upgrade, so the row is kept (``registry.missing_ids``). What it must
+    not do is sit there silently: the page says which ids answer for
     nothing on this hub.
+
+    Then, if it applies, one line saying no enabled module draws a page at
+    all: a hub can reach this state either through this very form (blocked
+    by ``_no_page_left`` before it is ever saved) or through a restore
+    whose modules section disables every page module installed here
+    (``post_settings_restore``, which cannot check before the fact - the
+    database it would check against is the one being replaced). Either way
+    the settings page is where an admin would come looking for why the
+    panel is blank, so the warning belongs here next to the missing-module
+    one, not only in the log.
     """
+    warnings: list[str] = []
     missing = hub.registry.missing_ids()
-    if not missing:
-        return ()
-    return (
-        "Not installed on this hub: "
-        + ", ".join(missing)
-        + ". The rows are kept in case the module comes back; nothing on the "
-        "panel uses them meanwhile.",
-    )
+    if missing:
+        warnings.append(
+            "Not installed on this hub: "
+            + ", ".join(missing)
+            + ". The rows are kept in case the module comes back; nothing on the "
+            "panel uses them meanwhile."
+        )
+    if not hub.registry.pages():
+        warnings.append(
+            "No enabled module draws a page: the panel has nothing to show. "
+            "Turn at least one page module back on below."
+        )
+    return tuple(warnings)
 
 
 def _no_page_left(hub: "Hub", value: BaseModel) -> bool:
@@ -517,6 +536,20 @@ def register(app: FastAPI, env: Env) -> None:
                 logging.WARNING,
                 "the restored backup carries a different device key: the flashed device "
                 "stops fetching until its hub key is set to the one from this backup",
+            )
+        if not hub.registry.pages():
+            # A restored backup's own modules section can disable every page
+            # module installed here (it was written by, and for, a different
+            # set of installed modules): _no_page_left only guards a save
+            # made through this settings page, and a restore is not one. The
+            # device still gets a plain 404 from /display/{n}.png either way;
+            # this is what tells whoever is watching the log why, without
+            # them having to notice a blank panel first.
+            log(
+                logger,
+                logging.WARNING,
+                "the restored backup leaves no page module enabled: "
+                "/display/<n>.png answers 404 until one is turned back on",
             )
         # The query is what login.html turns into a notice: the two hashes are
         # only knowable after the upload, so the warning cannot sit on the

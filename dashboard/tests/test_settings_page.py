@@ -836,6 +836,28 @@ def test_an_id_that_is_not_installed_is_kept_and_warned_about(admin: AdminHub) -
     assert 'value="ghost"' in page.text
 
 
+def test_settings_warns_when_no_page_is_enabled(admin: AdminHub) -> None:
+    """The settings page's own form save always refuses to leave no page
+    enabled (see ``test_disabling_every_page_is_refused_with_a_field_error``
+    below), but a restore can still put the hub in that state (it swaps the
+    whole database in, after the fact). Writing the row directly, the way a
+    restore effectively does, is what proves the warning is not only wired
+    to the save route's own refusal path."""
+    admin.hub.settings_store.save(
+        "modules",
+        ModulesSettings(
+            items=[ModuleToggle(id=page_id, enabled=False) for page_id in admin.hub.registry.page_ids()]
+        ),
+    )
+    asyncio.run(admin.hub.reload())
+    assert not admin.hub.registry.pages()
+
+    page = admin.client.get("/settings", headers=admin.auth)
+    assert page.status_code == 200
+    body = page.text[page.text.index('id="modules"') :]
+    assert "No enabled module draws a page" in body[: body.index("</section>")]
+
+
 def test_disabling_every_page_is_refused_with_a_field_error(admin: AdminHub) -> None:
     """The panel has to have something to draw: a device asking for
     /display/0.png on a hub with no page would get a 404 forever."""
