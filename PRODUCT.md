@@ -32,9 +32,10 @@ no logic and no credentials on the device.
 - The device is deliberately dumb. Every integration, parser, credential and
   render decision lives on the hub, so the display can be replaced, moved or
   re-flashed without losing anything.
-- It reads the owner's own working context: an Obsidian vault, an ICS calendar,
-  Home Assistant, and data only the owner's PC can produce (AI session quota,
-  AI-written briefs). A stock SenseCraft dashboard cannot see any of that.
+- It reads the owner's own working context: tasks a local agent pushes, an
+  ICS calendar, Home Assistant, and data only the owner's PC can produce (AI
+  session quota, AI-written briefs). A stock SenseCraft dashboard cannot see
+  any of that.
 - It is built for six-color e-paper, not adapted from an LCD design, and it can
   leave the desk: on battery it wakes on a fixed schedule and on button press.
 
@@ -52,7 +53,7 @@ no logic and no credentials on the device.
   hold = back to Today. Page order: Today, Agenda, Weather, Brief, System. The
   Alert page is shown on demand and the previous page is restored after it.
 - Hub: runs as a Docker container on a home server.
-- Sources that will be live on the desk: Obsidian vault tasks (read only), an
+- Sources that will be live on the desk: tasks pushed by a local agent, an
   ICS calendar feed, Open-Meteo weather, Home Assistant (state on the System
   page, alerts pushed from HA automations to the hub's alert API), and device
   telemetry pushed by the E1002 itself.

@@ -5,7 +5,7 @@ Spectra 6 e-paper) into a thin desk display. All logic lives in a server
 called **dashboard-hub**; the device only downloads PNGs and shows them.
 
 ```
-Data sources (fixtures, Obsidian vault, Open-Meteo, brief files, HA)
+Data sources (fixtures, the push API, Open-Meteo, brief files, HA)
         |
         v
 dashboard-hub (FastAPI, Python 3.12, Docker)
@@ -318,7 +318,7 @@ demo data.
 
 | Section | Sources | Default |
 | --- | --- | --- |
-| tasks | `push`, `obsidian`, `fixture` | `push` |
+| tasks | `push`, `fixture` | `push` |
 | calendar | `ics`, `fixture` | `ics` |
 | weather | `open_meteo`, `fixture` | `open_meteo` |
 | ai_usage | `push`, `fixture` | `push` |
@@ -342,8 +342,6 @@ numbers off as real. Weather, calendar, home and device never print DEMO:
 the hub fetches them itself, or (device) the E1002 firmware pushes them, so
 there is nothing there for a remote agent's push to represent. See
 "Staleness" below.
-
-Obsidian access is read only. The vault is mounted read-only in Docker.
 
 ### State
 

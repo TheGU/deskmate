@@ -72,9 +72,6 @@ Volumes (already wired in `docker-compose.yml`):
   demo fixtures need no volume: they ship inside each built-in module's own
   package (`app/modules/<id>/fixtures/`) and are baked into the image with
   the rest of `app/`.
-- an optional Obsidian vault, read only, if `OBSIDIAN_VAULT_PATH` is set in
-  `.env` and the tasks section's source is set to `obsidian` on
-  `/settings`.
 - an optional bind mount under `/data/modules/<name>/` for a module
   installed by directory drop (docs/MODULES.md): whatever you mount there
   runs as the hub's own code, with the hub's database, data directory and
@@ -88,7 +85,7 @@ and fill in its Dashboard url and Token fields on `/settings`. See
 and building a view that survives six-ink quantization.
 
 `.env` holds only what is left outside the database: `HUB_PORT`, `PUID`,
-`PGID`, `OBSIDIAN_VAULT_PATH`, `LOG_LEVEL` and a few process knobs - see
+`PGID`, `LOG_LEVEL` and a few process knobs - see
 `.env.example`. Every dataset's source, credentials and cache TTLs are set
 on `/settings` (see docs/SETTINGS.md) after the hub is claimed; a freshly
 claimed hub with nothing configured there shows an honest `unavailable` on

@@ -91,8 +91,8 @@ If host port 80 is already in use, or needs no privileges, set `HUB_PORT` in
 in the device's `hub_base_url`.
 
 The compose service mounts `./data` read-write (the hub's own database,
-`deskmate.sqlite`), and optionally an Obsidian vault read-only at `/vault`;
-the demo fixtures are baked into the image, no volume needed.
+`deskmate.sqlite`); the demo fixtures are baked into the image, no volume
+needed.
 
 ### Setup
 
@@ -220,7 +220,7 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
   firmware dump.
 - [docs/FLASHING.md](docs/FLASHING.md) - flashing procedure.
 - [.env.example](.env.example) - what is left outside the settings page:
-  `HUB_PORT`, `PUID`, `PGID`, the Obsidian bind mount, a few process knobs.
+  `HUB_PORT`, `PUID`, `PGID`, a few process knobs.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - dev setup, tests and checks, writing
   and design rules, how to propose a change.
 - [docs/plan/](docs/plan/) - design plans for work that spans more than one

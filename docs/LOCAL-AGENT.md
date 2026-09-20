@@ -32,10 +32,9 @@ whatever the last push said.
 - **AI usage / quota.** Either the quota hook (`docs/HOOKS.md`) or a
   scheduled agent pushes this, never both. If you install the hook, it owns
   ai-usage from then on.
-- **Tasks.** Pick exactly one task source: an agent that reads your real
-  task manager and pushes, or the tasks section's `obsidian` source reading
-  a vault directly. Two agents both pushing tasks will fight over the whole
-  list on every push (see section 6).
+- **Tasks.** Pick exactly one process that reads your real task manager and
+  pushes. Two agents both pushing tasks will fight over the whole list on
+  every push (see section 6).
 - **Brief.** Pick exactly one writer for the brief, per mode. Two writers
   pushing the same mode in the same window means whichever runs last wins
   and the other's content is gone.
@@ -48,10 +47,8 @@ whatever the last push said.
 - Each section the agent will push to (ai_usage, brief, tasks) has its
   source set to `push` on `/settings` (the default for all three), never
   `fixture` - a push to a section pinned to `fixture` is stored but never
-  shown, and the push response says so with a `warning`. The tasks section
-  must also not be set to `obsidian` if the agent itself is the one pushing
-  tasks (see section 6 for why Obsidian usually cannot be read by the hub
-  directly). See docs/SETTINGS.md for where these live.
+  shown, and the push response says so with a `warning`. See
+  docs/SETTINGS.md for where these live.
 - An HTTP client on the agent machine that can send an `Authorization:
   Bearer <token>` header and a JSON body: `curl`, or the agent's own HTTP
   library.
@@ -149,16 +146,15 @@ have. Keep in mind the Brief page only has room for 9 lines total (each
 section title and each item is one line), and a headline over about 30
 characters renders smaller.
 
-**Tasks.** If your real task list lives in an Obsidian vault on your own
-PC, and the hub runs on a separate homelab server, the hub cannot mount
-that vault - setting the tasks section's source to `obsidian` only works
-when the vault is on the same machine (or reachable by bind mount) as the
-hub container. In that case a local agent on the PC reads the vault and
-pushes the tasks over HTTP instead; the tasks section on the server stays
-`push`. Every push replaces the whole list (there is no merge by id), so
-push the whole current list every time, including a `{"tasks": []}` push on a day with
-nothing open - pushing nothing at all just leaves the previous list on the
-panel. If you generate each task's `id` yourself, base it on the source
+**Tasks.** If your real task list lives in an Obsidian vault (or any other
+local task manager) on your own PC, and the hub runs on a separate homelab
+server, a local agent on the PC reads the vault and pushes the tasks over
+HTTP; the hub itself never reads a vault, so the tasks section on the
+server stays `push`. Every push replaces the whole list (there is no merge
+by id), so push the whole current list every time, including a
+`{"tasks": []}` push on a day with nothing open - pushing nothing at all
+just leaves the previous list on the panel. If you generate each task's
+`id` yourself, base it on the source
 path plus the title (or your own tool's stable id), not a line number,
 since editing the source file would otherwise make an unrelated task look
 brand new. `due` is a bare date compared against the hub's own local today,
@@ -238,7 +234,7 @@ change.
 | `422` | Body rejected. Check for a naive datetime first (every timestamp needs a UTC offset) before other field problems. |
 | `503` | The hub itself is not set up yet, or its database is unreadable; an owner step, not an agent one (see `docs/DEPLOY.md`). |
 | Connection refused / DNS failure | Wrong `DESKMATE_URL`, the hub container is down, or a network path is missing between the agent machine and the server. |
-| `source` stays `fixture` or `obsidian` | The section's source on `/settings` (ai_usage, brief, or tasks) is pinned away from `push`; change it there (see docs/SETTINGS.md). |
+| `source` stays `fixture` | The section's source on `/settings` (ai_usage, brief, or tasks) is pinned away from `push`; change it there (see docs/SETTINGS.md). |
 | A stale flag will not clear | The pushed `generated_at` / `collected_at` is old, or an agent keeps re-pushing an old timestamp instead of the real one; push current content with its true timestamp. |
 | The task or brief list keeps changing unexpectedly | More than one writer is pushing the same dataset; revisit section 2 and settle on one. |
 
