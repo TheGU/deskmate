@@ -486,7 +486,7 @@ groups.
 | 1.6 | done | SETTINGS.md, .env.example cut, docs rewritten, render-all.py fixed |
 | 2.1a | done | module API, registry, seven built-ins, DashboardState schema 2; push field renamed to source; main.py split into settings_pages.py and httputil.py; 686 tests |
 | 2.1b | done | /display/{n}.png, telemetry page_count/pages and page_index, HubSettings.extra with section() accessor, SettingsStore over the live section map, Modules section with missing-id warning and no-page guard; 722 tests |
-| 2.2 | planned | |
+| 2.2 | done | fixtures, templates, context builders and tests live in app/modules/<id>/; fixtures/ and FIXTURES_DIR gone; view.py 699 lines of shared helpers; gate green without regeneration |
 | 2.3 | done | CONTRIBUTING.md, docs/MODULES.md, examples/modules/hello/ with an install test |
 | 2.4 | done | page_count/page_names globals, index URLs, page_index in telemetry; compiled; not flashed |
 | 3.1 | done | ha_dashboard built-in (off by default), screenshot renderer bounded to 8 s, error frames, token never logged, docs/HA-DASHBOARD.md; 729 tests |
