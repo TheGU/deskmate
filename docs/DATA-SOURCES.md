@@ -371,11 +371,20 @@ Content-Type: application/json
 
 The three power fields are all optional and default to null, so a payload from
 older firmware with none of them is still accepted. The DESK panel on the
-System page turns them into one power label next to WIFI: "ON USB, CHARGING"
-when `usb_present` is true and `charge_state` is `charging`, "ON USB, CHARGED"
-when `charge_state` is `charged`, "ON BATTERY" when `usb_present` is false, and
-nothing at all for any other combination (including a payload that never sent
-the fields).
+System page and the header both turn them into a plug glyph and a power word:
+`usb_present` true with `charge_state` `charging` or `pre_charge` prints
+CHARGING, any other `charge_state` while `usb_present` is true prints USB,
+`usb_present` false prints BATTERY, and `usb_present` null (a payload that
+never sent the field) prints nothing and keeps the plain battery glyph.
+
+`usb_present` is not always a clean read of the charger. When the charger chip
+answers on neither I2C bus, `check_power` in `firmware/e1002.yaml` assumes USB
+is present rather than guessing the device just lost its charger entirely, and
+reports `charge_state` as `unknown` for that sample; and the very first
+telemetry push after boot can report `usb_present: true` before `check_power`
+has run even once, because that global defaults to true until the first real
+reading comes in. Both read as "on USB, USB" on the panel even when the device
+may actually be on battery.
 
 Every numeric field may be `null`: on a cold boot the sensors are not ready
 yet, and the firmware reports the hole rather than a made up reading. A hole is

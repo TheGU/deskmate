@@ -481,7 +481,7 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
     has_device = state.block("device", DeviceBlock).usable and device is not None and device.has_reading
     level = device.battery_level if has_device else None
     rssi = device.wifi_rssi if has_device else None
-    charging = has_device and device.charge_state == "charging"
+    usb_present = device.usb_present if has_device else None
     overdue_count = len(overdue_tasks(state, today))
     return {
         "day": reference.strftime("%d"),
@@ -492,7 +492,7 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
         "show_overdue_chip": overdue_count > 0 and page not in PAGES_WITH_OWN_OVERDUE_CHIP,
         "wifi_icon": icons.wifi_icon(rssi),
         "battery": {
-            "icon": icons.battery_icon(level, charging),
+            "icon": icons.battery_icon(level, usb_present),
             "percent": fmt_number(level, digits=0),
             "chip_accent": header_battery_chip(level),
         },
