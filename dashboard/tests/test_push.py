@@ -168,7 +168,7 @@ def test_post_ai_usage_valid_writes_the_dataset_row_and_reaches_state(
     body = response.json()
     assert body["stored"] == "ai_usage"
     assert body["count"] == 1
-    assert body["effective_source"] == "push"
+    assert body["source"] == "push"
     assert "warning" not in body
 
     database = get_database(data_dir / "deskmate.sqlite")
@@ -237,7 +237,7 @@ def test_post_brief_valid_writes_the_dataset_row_and_reaches_state(
     body = response.json()
     assert body["stored"] == "brief"
     assert body["count"] == 1
-    assert body["effective_source"] == "push"
+    assert body["source"] == "push"
 
     database = get_database(data_dir / "deskmate.sqlite")
     found = read_dataset(database, "brief")
@@ -279,7 +279,7 @@ def test_post_tasks_valid_writes_the_dataset_row_and_reaches_state(
     body = response.json()
     assert body["stored"] == "tasks"
     assert body["count"] == 1
-    assert body["effective_source"] == "push"
+    assert body["source"] == "push"
 
     database = get_database(data_dir / "deskmate.sqlite")
     found = read_dataset(database, "tasks")
@@ -324,16 +324,16 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
     assert ai_usage.json()["warning"] == "ai_usage.source is fixture; the panel will not show this push"
     assert brief.json()["warning"] == "brief.source is fixture; the panel will not show this push"
     assert tasks.json()["warning"] == "tasks.source is fixture; the panel will not show this push"
-    assert ai_usage.json()["effective_source"] == "fixture"
-    assert brief.json()["effective_source"] == "fixture"
-    assert tasks.json()["effective_source"] == "fixture"
+    assert ai_usage.json()["source"] == "fixture"
+    assert brief.json()["source"] == "fixture"
+    assert tasks.json()["source"] == "fixture"
 
 
 def test_push_tasks_warns_and_reports_obsidian_when_that_is_the_selector(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """Pushing tasks.json while the tasks source is obsidian does not change
-    what the panel shows (it still reads the vault): effective_source names
+    what the panel shows (it still reads the vault): source names
     the selector verbatim ("obsidian", not "fixture"), and the warning does
     too."""
     data_dir = tmp_path_factory.mktemp("push-obsidian")
@@ -349,5 +349,5 @@ def test_push_tasks_warns_and_reports_obsidian_when_that_is_the_selector(
         obsidian_token = _claim(client)
         response = client.post("/api/tasks", json={"tasks": []}, headers=auth(obsidian_token))
     body = response.json()
-    assert body["effective_source"] == "obsidian"
+    assert body["source"] == "obsidian"
     assert body["warning"] == "tasks.source is obsidian; the panel will not show this push"
