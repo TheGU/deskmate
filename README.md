@@ -194,6 +194,9 @@ Assistant can call `esphome.reterminal_e1002_show_alert` with `duration` and
 - [docs/DATA-SOURCES.md](docs/DATA-SOURCES.md) - how to configure each
   section's source, the push endpoints, the alert API and a Home Assistant
   example.
+- [docs/MODULES.md](docs/MODULES.md) - writing a module: the page and
+  dataset contract, how to install one, and the minimal example at
+  `examples/modules/hello/`.
 - [skills/deskmate/SKILL.md](skills/deskmate/SKILL.md) - how a remote agent
   pushes AI usage, a brief and tasks to the hub.
 - [docs/HOOKS.md](docs/HOOKS.md) - a POSIX sh hook that pushes AI quota

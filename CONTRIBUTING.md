@@ -14,6 +14,7 @@ plan that spans more than one commit.
 | Path | Purpose |
 | --- | --- |
 | `dashboard/` | The dashboard-hub server: its own `pyproject.toml`, Dockerfile and tests |
+| `examples/` | Copyable examples for extending the hub, e.g. `examples/modules/hello/`, a minimal third-party module (see [docs/MODULES.md](docs/MODULES.md)) |
 | `firmware/` | ESPHome YAML for the E1002, secrets example, its own venv |
 | `fixtures/` | Demo data used when no integration is enabled. Moving into per-module fixtures in phase 2 (see docs/plan/) |
 | `docs/` | Architecture, data sources, deploy, hooks, flashing, factory restore |
@@ -138,11 +139,13 @@ device you do not own.
 ## Modules
 
 Panel pages and the datasets behind them are moving to a module system
-(see docs/plan/2026-09-19-settings-modules-provisioning.md): a module is
-a package that brings its own settings, adapter, template and fixture.
-Once phase 2 of that plan lands, [docs/MODULES.md](docs/MODULES.md) is
-the module authoring guide, with a complete minimal example at
-`examples/modules/hello/`.
+(see docs/plan/2026-09-19-settings-modules-provisioning.md, phase 2): a
+module is a package that brings its own settings, adapter, template and
+fixture. [docs/MODULES.md](docs/MODULES.md) is the module authoring
+guide, with a complete minimal example at `examples/modules/hello/`. A
+few pieces phase 2 still has in progress (a bespoke Modules section on
+`/settings`, moving each built-in's template and fixture into its own
+package) are called out in that doc where they matter.
 
 ## License
 
