@@ -46,7 +46,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app import __version__
@@ -206,6 +206,28 @@ def _seed_missing_sections(store: SettingsStore, seed: HubSettings) -> None:
             store.save(section, seed.section(section, model))
 
 
+@dataclass(slots=True)
+class _RebuiltSettings:
+    """What :meth:`Hub._rebuild` computes, handed back rather than assigned
+    onto ``self`` from inside it.
+
+    ``_rebuild`` runs in a threadpool (``reload`` awaits it): if it assigned
+    ``self.registry``/``self.sections``/``self.settings_store``/
+    ``self.hub_settings`` itself, a request running concurrently on the event
+    loop could read the *new* registry off ``self`` while ``self.renderer``
+    and ``self.state_service`` - only rebuilt after the threadpool call
+    returns - were still built from the *old* one (a just-enabled page's
+    dataset missing from the old state service is a ``KeyError``, a 500).
+    Returning the four together is what lets the caller publish them in one
+    synchronous block instead.
+    """
+
+    registry: Registry
+    sections: dict[str, type[BaseModel]]
+    settings_store: SettingsStore
+    hub_settings: HubSettings
+
+
 class Hub:
     """Everything the request handlers need, built once at startup."""
 
@@ -232,7 +254,11 @@ class Hub:
         # Registry, section map, settings store and snapshot, in that order
         # and for that reason (see :meth:`_rebuild`). Every one of them is
         # rebuilt on reload, which is how a settings save takes effect.
-        self._rebuild(hub_settings)
+        rebuilt = self._rebuild(hub_settings)
+        self.registry = rebuilt.registry
+        self.sections = rebuilt.sections
+        self.settings_store = rebuilt.settings_store
+        self.hub_settings = rebuilt.hub_settings
         self.alerts = AlertStore(self.db, self.hub_settings.general.timezone)
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
         self.state_service = StateService(
@@ -272,11 +298,28 @@ class Hub:
         ``AlertStore.set_timezone``), and the render cache is dropped under
         ``_cache_lock`` so a render already in flight finishes on the old
         service while the next request sees the new one.
+
+        ``_rebuild`` runs in a threadpool and only *returns* the new
+        registry/sections/settings_store/hub_settings rather than assigning
+        them onto ``self`` itself, and everything below that publishes them
+        - the four assignments, the telemetry store, the state service, and
+        the renderer's own two attributes - is one synchronous stretch with
+        no ``await`` in it. A concurrent request reads ``self`` from the
+        event loop, never mid-threadpool-call, so the only two states it can
+        ever observe are "every one of these is still the old snapshot" or
+        "every one of these is the new snapshot together"; a just-enabled
+        page's dataset missing from an old state service paired with a new
+        registry (a ``KeyError``, a 500) is the inconsistent state this
+        forecloses.
         """
         identity = await run_in_threadpool(HubIdentity, self.db)
         self.identity = identity
         await run_in_threadpool(self.alerts.load)
-        await run_in_threadpool(self._rebuild)
+        rebuilt = await run_in_threadpool(self._rebuild)
+        self.registry = rebuilt.registry
+        self.sections = rebuilt.sections
+        self.settings_store = rebuilt.settings_store
+        self.hub_settings = rebuilt.hub_settings
         self.alerts.set_timezone(self.hub_settings.general.timezone)
         # TelemetryStore owns no connection of its own (see __init__), but it
         # does carry retention_days as a plain attribute read by the
@@ -292,8 +335,8 @@ class Hub:
             self._cache.clear()
         log(logger, logging.INFO, "hub reloaded", configured=self.identity.configured)
 
-    def _rebuild(self, seed: HubSettings | None = None) -> None:
-        """Re-read the registry, the section map, the store and the snapshot.
+    def _rebuild(self, seed: HubSettings | None = None) -> _RebuiltSettings:
+        """Compute the registry, the section map, the store and the snapshot.
 
         The order is forced and looks circular until you follow it: the
         registry decides which settings sections exist, and the ``modules``
@@ -316,18 +359,33 @@ class Hub:
         4. the real store over that map, seeded again for whatever the
            bootstrap store had no section for, and its snapshot.
 
+        Returns the four instead of assigning them onto ``self``: this runs
+        in a threadpool from :meth:`reload`, on a database that never
+        changes underneath it mid-call, but ``self`` is read concurrently
+        from the event loop the whole time. Assigning here, one at a time,
+        would let a request see a new registry paired with an old state
+        service and renderer (see :meth:`reload`'s own docstring); the
+        caller publishes all four together instead, synchronously, with
+        nothing in between them for a request to land in.
+
         Plain synchronous I/O throughout, like the store itself:
         :meth:`reload` calls it in a threadpool.
         """
         bootstrap = SettingsStore(self.db)
         if seed is not None:
             _seed_missing_sections(bootstrap, seed)
-        self.registry = load_registry(bootstrap.modules(), self.env.data_dir)
-        self.sections = sections_for(self.registry)
-        self.settings_store = SettingsStore(self.db, self.sections)
+        registry = load_registry(bootstrap.modules(), self.env.data_dir)
+        sections = sections_for(registry)
+        settings_store = SettingsStore(self.db, sections)
         if seed is not None:
-            _seed_missing_sections(self.settings_store, seed)
-        self.hub_settings = self.settings_store.snapshot()
+            _seed_missing_sections(settings_store, seed)
+        hub_settings = settings_store.snapshot()
+        return _RebuiltSettings(
+            registry=registry,
+            sections=sections,
+            settings_store=settings_store,
+            hub_settings=hub_settings,
+        )
 
     def module_context(self, module: Module) -> ModuleContext:
         """What this hub hands ``module`` when it builds a router."""

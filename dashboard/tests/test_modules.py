@@ -13,9 +13,11 @@ import asyncio
 import logging
 import sys
 import textwrap
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -27,7 +29,7 @@ from starlette.datastructures import FormData
 from app.config import Env
 from app.db import get_database
 from app.forms import parse_section, render_section
-from app.main import create_app
+from app.main import Hub, create_app
 from app.models import TasksBlock
 from app.modules import (
     DatasetSpec,
@@ -816,6 +818,95 @@ def test_an_ordinary_module_route_still_mounts_and_answers(tmp_path: Path) -> No
         assert response.json() == {"ok": True}
     finally:
         app.state.hub.db.close()
+
+
+# ---------------------------------------------------------------------------
+# reload publishes registry, state_service and renderer together
+# (app/main.py:Hub.reload)
+# ---------------------------------------------------------------------------
+def _same_generation(hub: "Hub") -> bool:
+    """Whether ``hub.registry``, its state service's own registry and its
+    renderer's own registry are literally the same object.
+
+    ``Hub._rebuild`` used to assign ``self.registry`` from inside the
+    threadpool call ``reload`` awaits it through, while ``state_service`` and
+    ``renderer`` were only rebuilt after that call returned: a request
+    landing on the event loop in that window read a new registry paired with
+    an old state service, so a page a settings save had just enabled was a
+    KeyError there instead of a render. Identity (``is``), not equality: two
+    separately-built registries over the same settings could compare equal
+    without being the one object every reader is holding.
+    """
+    return (
+        hub.registry is hub.state_service._registry  # noqa: SLF001 - the whole point of this check
+        and hub.registry is hub.renderer.registry
+    )
+
+
+def test_reload_leaves_registry_state_service_and_renderer_in_step(tmp_path: Path) -> None:
+    env = Env(_env_file=None, DATA_DIR=tmp_path / "reload-step", LOG_LEVEL="WARNING")
+    hub = Hub(env)
+    try:
+        assert _same_generation(hub)
+        before = hub.registry
+
+        hub.settings_store.save(
+            "modules", ModulesSettings(items=[ModuleToggle(id="weather", enabled=False)])
+        )
+        run(hub.reload())
+
+        assert _same_generation(hub)
+        # And it really did rebuild, not just re-check the same objects.
+        assert hub.registry is not before
+    finally:
+        hub.db.close()
+
+
+def test_reload_never_publishes_a_torn_pair_under_a_slow_rebuild(tmp_path: Path) -> None:
+    """The regression this closes: a concurrent reader on the event loop
+    must never see a new registry paired with an old state service or
+    renderer while ``_rebuild`` is still running in its threadpool.
+
+    ``_rebuild`` is monkeypatched to sleep *after* doing its real work but
+    *before* returning, which is exactly the window the old code's
+    assignment of ``self.registry`` from inside that call would have opened:
+    if this were still assigning eagerly, ``hub.registry`` would already be
+    the new one here while ``hub.state_service``/``hub.renderer`` were still
+    the old ones. A background task samples ``_same_generation`` on every
+    loop iteration for the duration of the sleep; the assertion is that
+    every single sample agreed, not just the ones before and after.
+    """
+    env = Env(_env_file=None, DATA_DIR=tmp_path / "reload-torn", LOG_LEVEL="WARNING")
+    hub = Hub(env)
+    try:
+        real_rebuild = Hub._rebuild
+
+        def slow_rebuild(self: Hub, seed: HubSettings | None = None) -> Any:
+            result = real_rebuild(self, seed)
+            time.sleep(0.2)
+            return result
+
+        async def scenario() -> list[bool]:
+            samples: list[bool] = []
+
+            async def sample_while_reloading() -> None:
+                for _ in range(50):
+                    samples.append(_same_generation(hub))
+                    await asyncio.sleep(0.005)
+
+            hub.settings_store.save(
+                "modules", ModulesSettings(items=[ModuleToggle(id="weather", enabled=False)])
+            )
+            with mock.patch.object(Hub, "_rebuild", slow_rebuild):
+                await asyncio.gather(hub.reload(), sample_while_reloading())
+            return samples
+
+        samples = run(scenario())
+        assert samples, "the sampler never got a chance to run"
+        assert all(samples)
+        assert _same_generation(hub)
+    finally:
+        hub.db.close()
 
 
 # ---------------------------------------------------------------------------
