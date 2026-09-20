@@ -10,12 +10,12 @@ database has that file imported once by ``app/legacy.py``.
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 from datetime import datetime, timedelta
 
-from app.db import Database, utc_now_iso
+from app.datasets import read_dataset, write_dataset
+from app.db import Database
 from app.logging_setup import log
 from app.models import Alert, AlertRequest
 from app.timeutil import now_local, to_local
@@ -42,37 +42,33 @@ class AlertStore:
         ``Hub.reload()``, which must never reset what the panel is showing.
         """
         try:
-            with self._db.reading() as connection:
-                row = connection.execute(
-                    "SELECT payload_json FROM datasets WHERE name = ?", (DATASET_NAME,)
-                ).fetchone()
+            found = read_dataset(self._db, DATASET_NAME)
         except sqlite3.Error as exc:
             log(logger, logging.WARNING, "cannot read stored alert", error=str(exc))
             self._alert = None
             return
-        if row is None:
+        except (ValueError, TypeError) as exc:
+            # payload_json is not valid JSON, or received_at cannot be parsed.
+            log(logger, logging.WARNING, "unreadable stored alert", error=str(exc))
             self._alert = None
             return
+        if found is None:
+            self._alert = None
+            return
+        payload, _received_at = found
         try:
-            self._alert = Alert.model_validate(json.loads(str(row["payload_json"])))
+            self._alert = Alert.model_validate(payload)
         except Exception as exc:  # noqa: BLE001 - a bad row must not block startup
             log(logger, logging.WARNING, "unreadable stored alert", error=str(exc))
             self._alert = None
 
     def _persist(self) -> None:
         try:
-            with self._db.writing() as connection:
-                if self._alert is None:
+            if self._alert is None:
+                with self._db.writing() as connection:
                     connection.execute("DELETE FROM datasets WHERE name = ?", (DATASET_NAME,))
-                    return
-                connection.execute(
-                    "INSERT INTO datasets (name, payload_json, received_at)"
-                    " VALUES (?, ?, ?)"
-                    " ON CONFLICT(name) DO UPDATE SET"
-                    " payload_json = excluded.payload_json,"
-                    " received_at = excluded.received_at",
-                    (DATASET_NAME, self._alert.model_dump_json(), utc_now_iso()),
-                )
+                return
+            write_dataset(self._db, DATASET_NAME, self._alert.model_dump(mode="json"))
         except sqlite3.Error as exc:
             log(logger, logging.WARNING, "cannot persist alert", error=str(exc))
 

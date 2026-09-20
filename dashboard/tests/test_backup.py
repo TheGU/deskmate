@@ -327,17 +327,19 @@ def test_restore_over_the_cap_is_413(
     assert MAX_RESTORE_BYTES == 64 * 1024 * 1024
 
 
-def test_restore_with_no_declared_length_is_still_capped(
-    hub: ClaimedHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_restore_with_no_declared_length_is_refused_with_411(
+    hub: ClaimedHub, tmp_path: Path
 ) -> None:
-    """A chunked upload carries no Content-Length, so the fast refusal never
-    fires: the cap still has to hold, and the answer still has to be 413
-    rather than whatever the multipart parser would have raised."""
-    monkeypatch.setattr("app.main.MAX_RESTORE_BYTES", 4096)
+    """A chunked upload carries no Content-Length, so the fast refusal that
+    reads that header can never fire, and ``request.form()`` no longer
+    carries ``max_part_size=MAX_RESTORE_BYTES`` (starlette 1.6 spools a file
+    part to disk with no size check of its own): without a declared length
+    there would be nothing to stop the whole body landing on disk before the
+    byte counter in ``_stream_upload_to`` ever ran. So the route refuses the
+    request outright, before the multipart parser reads a byte."""
     backup, _ = other_backup(tmp_path / "chunked")
     boundary = "----deskmate-restore-test"
     payload = backup.read_bytes()
-    assert len(payload) > 4096
 
     def chunks() -> Iterator[bytes]:
         yield (
@@ -359,7 +361,29 @@ def test_restore_with_no_declared_length_is_still_capped(
         content=chunks(),
     )
 
-    assert response.status_code == 413
+    assert response.status_code == 411
+    assert response.json()["detail"] == "restore needs a Content-Length"
+    assert hub.hub.identity.verify_token(hub.token) is True
+    assert sorted(p.name for p in hub.env.data_dir.glob("*.sqlite-tmp")) == []
+
+
+def test_restore_refuses_an_oversized_text_field(hub: ClaimedHub, tmp_path: Path) -> None:
+    """Starlette's own default part cap (1 MiB) is what a text field is
+    bounded by now that this route no longer raises ``max_part_size`` to
+    ``MAX_RESTORE_BYTES`` (that only ever affected text fields, never the
+    file part - see the 411 test above). A field that blows past it must
+    come back as neither a 200 nor a 500: whichever of 413/422 the existing
+    ``MultiPartException`` handler produces is fine."""
+    backup, _ = other_backup(tmp_path / "oversized-field")
+
+    response = hub.client.post(
+        "/settings/restore",
+        headers=auth(hub.token),
+        data={"confirm": "on", "padding": "x" * (4 * 1024 * 1024)},
+        files={"file": (backup.name, backup.read_bytes(), "application/vnd.sqlite3")},
+    )
+
+    assert response.status_code not in (200, 500)
     assert hub.hub.identity.verify_token(hub.token) is True
     assert sorted(p.name for p in hub.env.data_dir.glob("*.sqlite-tmp")) == []
 

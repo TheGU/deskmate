@@ -175,6 +175,20 @@ def test_alert_default_duration_is_used_when_a_post_omits_its_own(admin: AdminHu
     assert state["alert"]["duration_seconds"] == 150
 
 
+def test_alert_default_duration_out_of_bounds_is_422(admin: AdminHub) -> None:
+    """``default_duration_seconds`` has to stay inside the same window as
+    ``AlertRequest.duration_seconds`` (models.py, ge=5, le=600): main.py
+    injects this value with ``model_copy``, which skips re-validation."""
+    response = admin.client.post(
+        "/settings/alert",
+        headers=admin.auth,
+        data={"default_duration_seconds": "0", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    assert admin.hub.hub_settings.alert.default_duration_seconds == 90
+
+
 def test_a_bad_timezone_comes_back_on_the_field_and_saves_nothing(admin: AdminHub) -> None:
     response = admin.client.post(
         "/settings/general",
@@ -189,6 +203,37 @@ def test_a_bad_timezone_comes_back_on_the_field_and_saves_nothing(admin: AdminHu
     assert 'value="Mars/Olympus"' in response.text[:field_error]
     assert "unknown timezone" in response.text[field_error : field_error + 200]
     assert admin.hub.settings_store.load("general").timezone == "Asia/Bangkok"
+    assert admin.hub.hub_settings.general.timezone == "Asia/Bangkok"
+
+
+def test_a_too_long_timezone_is_422_not_a_500(admin: AdminHub) -> None:
+    """``ZoneInfo()`` looks a name up on the filesystem, and a name over 255
+    bytes is not a legal filename: this used to escape as a 500."""
+    response = admin.client.post(
+        "/settings/general",
+        headers=admin.auth,
+        data={"timezone": "a" * 300, "units": "metric", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    assert 'class="field-error"' in response.text
+    assert admin.hub.hub_settings.general.timezone == "Asia/Bangkok"
+
+
+def test_a_timezone_with_an_illegal_filename_character_is_422_not_a_500(
+    admin: AdminHub,
+) -> None:
+    """"<" is not a legal Windows filename character: ``ZoneInfo()`` raises
+    ``OSError`` rather than ``ZoneInfoNotFoundError`` for it."""
+    response = admin.client.post(
+        "/settings/general",
+        headers=admin.auth,
+        data={"timezone": "<script>", "units": "metric", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    field_error = response.text.index('class="field-error"')
+    assert "unknown timezone" in response.text[field_error : field_error + 200]
     assert admin.hub.hub_settings.general.timezone == "Asia/Bangkok"
 
 
@@ -227,6 +272,38 @@ def test_a_secret_left_blank_survives_a_save_of_its_section(admin: AdminHub) -> 
     # And the page never echoes it back.
     page = admin.client.get("/settings", headers=admin.auth)
     assert "ha-token-value" not in page.text
+
+
+def test_a_nan_ttl_is_422(admin: AdminHub) -> None:
+    """Every ``float`` settings field is ``allow_inf_nan=False``: a NaN TTL
+    would otherwise sail through validation and wreck any comparison the
+    caching code does against it."""
+    response = admin.client.post(
+        "/settings/weather",
+        headers=admin.auth,
+        data={
+            "source": "open_meteo",
+            "latitude": "",
+            "longitude": "",
+            "location_name": "",
+            "ttl_seconds": "nan",
+            "action": "save",
+        },
+    )
+
+    assert response.status_code == 422
+    assert admin.hub.hub_settings.weather.ttl_seconds != float("nan")
+
+
+def test_agenda_days_of_zero_is_422(admin: AdminHub) -> None:
+    response = admin.client.post(
+        "/settings/calendar",
+        headers=admin.auth,
+        data={"source": "ics", "agenda_days": "0", "ttl_seconds": "300", "action": "save"},
+    )
+
+    assert response.status_code == 422
+    assert admin.hub.hub_settings.calendar.agenda_days == 7
 
 
 def test_an_unknown_section_is_404(admin: AdminHub) -> None:

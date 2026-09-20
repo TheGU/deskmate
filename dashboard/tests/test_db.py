@@ -24,6 +24,7 @@ from app.db import (
 from app.hub_config import HubIdentity, claim_hub, write_hub_config
 from app.main import create_app
 from app.models import AlertRequest
+from app.modules.device.settings import DeviceSettings
 from app.modules.general.settings import GeneralSettings
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
@@ -268,6 +269,39 @@ def test_reload_keeps_the_alert_and_drops_the_render_cache(tmp_path: Path) -> No
         assert hub.alerts.current is not None
         assert hub.alerts.current.title == "Someone is at the door"
         assert hub._cache == {}  # noqa: SLF001
+    finally:
+        close_databases()
+
+
+def test_reload_rebuilds_the_telemetry_store_with_the_saved_retention(
+    tmp_path: Path,
+) -> None:
+    """``TelemetryStore`` owns no connection (it only carries
+    ``retention_days`` as a plain attribute), so ``Hub.reload()`` has to
+    rebuild it after a ``device.retention_days`` save or the running store
+    and the ``/api/device/telemetry`` summary it feeds both keep the old
+    value forever."""
+    env = make_env(tmp_path)
+    app = create_app(env)
+    try:
+        with TestClient(app) as client:
+            hub = client.app.state.hub
+            assert hub.telemetry.retention_days != 7
+            secrets = asyncio.run(
+                hub.identity.claim(name="deskmate", base_url="http://dashboard-hub.lan:8080")
+            )
+
+            hub.settings_store.save("device", DeviceSettings(retention_days=7))
+            asyncio.run(hub.reload())
+
+            assert hub.telemetry.retention_days == 7
+
+            summary = client.get(
+                "/api/device/telemetry",
+                headers={"Authorization": f"Bearer {secrets.token}"},
+            )
+            assert summary.status_code == 200
+            assert summary.json()["summary"]["retention_days"] == 7
     finally:
         close_databases()
 

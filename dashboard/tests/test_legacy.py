@@ -431,6 +431,66 @@ def test_a_non_empty_telemetry_table_is_left_alone(
     assert len(rows(database, "SELECT * FROM telemetry")) == 1
 
 
+def test_an_unreadable_tasks_json_leaves_the_gate_open_and_is_retried(
+    tmp_path: Path, database: Database, clean_env: None
+) -> None:
+    """A broken pushed file must not be lost quietly for good: the gate has
+    to stay open so a second start, with the file fixed, still imports it -
+    and it must not cost the other pushed files their own import either."""
+    data_dir = tmp_path / "data"
+    pushed = write_pushed_files(data_dir)
+    pushed["tasks"].write_text("{ not json", encoding="utf-8")
+
+    assert import_legacy(database, empty_env(), data_dir) is True
+    assert database.meta_get(LEGACY_IMPORTED_KEY) is None
+
+    datasets = {str(row["name"]) for row in rows(database, "SELECT name FROM datasets")}
+    assert "tasks" not in datasets
+    assert {"ai_usage", "brief", "alert"} <= datasets
+
+    # Fixed and retried on a second start: the gate closes.
+    pushed["tasks"].write_text(
+        json.dumps({"received_at": "2026-09-18T07:00:00+00:00", "items": [{"title": "Ship"}]}),
+        encoding="utf-8",
+    )
+    assert import_legacy(database, empty_env(), data_dir) is True
+    assert database.meta_get(LEGACY_IMPORTED_KEY) is not None
+    datasets_after = {str(row["name"]) for row in rows(database, "SELECT name FROM datasets")}
+    assert "tasks" in datasets_after
+
+
+def test_an_unreadable_telemetry_file_leaves_the_gate_open_and_is_retried(
+    tmp_path: Path, database: Database, clean_env: None
+) -> None:
+    """Same rule for the telemetry copy: an ATTACH or copy failure must not
+    close the gate behind the history it lost."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    telemetry_path = data_dir / "telemetry.sqlite"
+    telemetry_path.write_text("this is not a database", encoding="utf-8")
+
+    assert import_legacy(database, empty_env(), data_dir) is True
+    assert database.meta_get(LEGACY_IMPORTED_KEY) is None
+    assert rows(database, "SELECT * FROM telemetry") == []
+
+    telemetry_path.unlink()
+    write_legacy_telemetry(data_dir, rows=2)
+    assert import_legacy(database, empty_env(), data_dir) is True
+    assert database.meta_get(LEGACY_IMPORTED_KEY) is not None
+    assert len(rows(database, "SELECT * FROM telemetry")) == 2
+
+
+def test_a_fully_absent_legacy_set_closes_the_gate(
+    tmp_path: Path, database: Database, clean_env: None
+) -> None:
+    """Nothing to import at all is success, not incompleteness: the gate
+    closes on the first start, as it always has."""
+    data_dir = tmp_path / "data"
+
+    assert import_legacy(database, empty_env(), data_dir) is True
+    assert database.meta_get(LEGACY_IMPORTED_KEY) is not None
+
+
 def test_an_unreadable_hub_json_stops_the_import(
     tmp_path: Path, database: Database, clean_env: None
 ) -> None:

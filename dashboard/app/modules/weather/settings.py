@@ -25,10 +25,16 @@ class WeatherSettings(BaseModel):
     )
     latitude: float | None = Field(
         default=None,
+        ge=-90,
+        le=90,
+        allow_inf_nan=False,
         description="Latitude of the location to fetch weather for.",
     )
     longitude: float | None = Field(
         default=None,
+        ge=-180,
+        le=180,
+        allow_inf_nan=False,
         description="Longitude of the location to fetch weather for.",
     )
     location_name: str = Field(
@@ -37,6 +43,9 @@ class WeatherSettings(BaseModel):
     )
     ttl_seconds: float = Field(
         default=900.0,
+        ge=0,
+        le=86400 * 7,
+        allow_inf_nan=False,
         description="How long a fetched forecast is cached before it is fetched again.",
     )
 
