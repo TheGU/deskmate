@@ -54,7 +54,7 @@ Root `pyproject.toml` only holds hardware tooling (esptool, esphome).
 | POST | `/settings/rotate` | admin | Mint a fresh token, device key and session secret |
 | GET | `/api/hub` | reader | Hub name, base URL, configured, sources |
 | GET | `/api/state` | reader | Normalized state JSON that pages render from |
-| GET | `/display/{page}.png` | reader | `page` is one of the current pages (see README.md's Pages line) |
+| GET | `/display/{page}.png` | reader | `page` is an enabled page's id, or its 0-based index in the window list |
 | GET | `/preview` | reader | Browser page: switch between pages, shows PNG and HTML; an unauthenticated browser is redirected to `/login` |
 | GET | `/preview/{page}.html` | reader | Raw HTML at 800x480, for CSS work in a browser; same redirect |
 | POST | `/api/ai-usage` | token | Push AI quota; see docs/DATA-SOURCES.md |
@@ -82,6 +82,11 @@ secrets.
 
 `/display/{page}.png`:
 
+- `page` is either an enabled page's id (`today`, `alert`) or an integer,
+  which is that page's 0-based position in the window list. The index is
+  resolved to the id before anything else happens, so the cache key, the
+  `ETag` and the `X-Deskmate-Page` header are the id either way, and an
+  index past the last enabled page is `404`. `alert` is never an index.
 - Renders on demand. Result is cached in memory keyed by page and a
   content hash of the state that page uses, with a page-specific TTL.
 - Query `?t=<anything>` bypasses the server-side cache (cache busting

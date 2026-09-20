@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -102,6 +103,35 @@ DEFAULT_PORT = 8080
 #: or a "https://host:port" base URL, short enough that a hostile Host
 #: header cannot grow the row without bound.
 TELEMETRY_ORIGIN_MAX_LEN = 200
+
+#: What ``/display/{page}.png`` reads as a page index rather than a page id.
+#: ASCII digits only (``str.isdigit`` would also accept Arabic-Indic digits,
+#: which ``int()`` parses and no page id could ever be), and bounded so a
+#: pathological segment never reaches ``int()`` at all. A module id can never
+#: collide with this: ``MODULE_ID_RE`` demands a leading letter and
+#: ``validate_module`` refuses an all-digit id besides.
+PAGE_INDEX_RE = re.compile(r"^[0-9]{1,9}$")
+
+
+def resolve_page(registry: Registry, segment: str, known: bool) -> str | None:
+    """The module id ``segment`` names, or ``None`` when nothing serves it.
+
+    The device walks the pages by number, so ``/display/2.png`` is the third
+    enabled page. Resolving here, before the render cache is consulted,
+    is what keeps the cache key and the ``X-Deskmate-Page`` header the page's
+    id: two devices sitting on different indices of the same page must share
+    one cached PNG, and the telemetry the device posts back names the page it
+    was told it is showing.
+
+    ``known`` is the caller's own "this hub serves that id" answer
+    (``Hub.has_page``), which covers ``alert`` as well as the module pages.
+    ``alert`` is never an index: it is not in the registry's page list, and
+    it is not digits.
+    """
+    if PAGE_INDEX_RE.match(segment):
+        module = registry.page_by_index(int(segment))
+        return None if module is None else module.id
+    return segment if known else None
 
 
 @dataclass(slots=True)
@@ -655,12 +685,18 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     # -- display ---------------------------------------------------------
     @app.get("/display/{page}.png", dependencies=[Depends(require_reader)])
     async def display(page: str, request: Request) -> Response:
+        """One page as a PNG, by id (``today``) or by index (``0``).
+
+        The index is resolved to the id first (:func:`resolve_page`), so
+        everything past this line - the render cache key, the ETag, the
+        ``X-Deskmate-Page`` header and the log line - is the id, whichever
+        form the device asked with.
+        """
         hub: Hub = app.state.hub
-        # 2.1b adds /display/{n}.png, which resolves an integer n to the
-        # n-th enabled page's id (registry.page_by_index) before the render
-        # cache, so the cache key and the X-Deskmate-Page header stay the id.
-        if not hub.has_page(page):
+        resolved = resolve_page(hub.registry, page, hub.has_page(page))
+        if resolved is None:
             return JSONResponse({"error": f"unknown page {page}"}, status_code=404)
+        page = resolved
         force = "t" in request.query_params
         state = await hub.state(force=force)
         entry = await hub.png(page, state, force=force)

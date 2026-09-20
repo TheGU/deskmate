@@ -91,6 +91,11 @@ class _ReaderClient:
         self._client = client
         self._token = token
 
+    @property
+    def client(self) -> TestClient:
+        """The wrapped client, for a test that needs ``app.state.hub``."""
+        return self._client
+
     def get(self, url: str, **kwargs: Any) -> Any:
         headers = {**auth(self._token), **kwargs.pop("headers", {})}
         return self._client.get(url, headers=headers, **kwargs)
@@ -492,6 +497,37 @@ def test_display_returns_a_png_of_the_right_size(reader: _ReaderClient, page: st
 
 def test_display_rejects_an_unknown_page(reader: _ReaderClient) -> None:
     assert reader.get("/display/nope.png").status_code == 404
+
+
+def test_display_by_index_serves_the_nth_enabled_page(reader: _ReaderClient) -> None:
+    """The device walks the pages by number; 0 is the first enabled page."""
+    registry = reader.client.app.state.hub.registry
+    for index, page_id in enumerate(registry.page_ids()):
+        response = reader.get(f"/display/{index}.png")
+        assert response.status_code == 200
+        # The header is the id, never the index: the cache key is the id, and
+        # the telemetry the device posts back names the page it is showing.
+        assert response.headers["x-deskmate-page"] == page_id
+
+
+def test_display_by_index_shares_the_cache_entry_with_the_id(reader: _ReaderClient) -> None:
+    by_id = reader.get("/display/today.png")
+    by_index = reader.get("/display/0.png")
+    assert by_index.headers["etag"] == by_id.headers["etag"]
+    assert by_index.content == by_id.content
+
+
+def test_display_by_index_past_the_last_page_is_404(reader: _ReaderClient) -> None:
+    count = len(reader.client.app.state.hub.registry.page_ids())
+    assert reader.get(f"/display/{count}.png").status_code == 404
+    assert reader.get("/display/999.png").status_code == 404
+
+
+def test_alert_is_never_an_index(reader: _ReaderClient) -> None:
+    """``alert`` interrupts and hands the page back; it takes no slot."""
+    registry = reader.client.app.state.hub.registry
+    assert "alert" not in registry.page_ids()
+    assert reader.get("/display/alert.png").headers["x-deskmate-page"] == "alert"
 
 
 def test_display_requires_a_reader_credential(client: TestClient) -> None:
