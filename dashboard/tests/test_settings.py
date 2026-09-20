@@ -111,6 +111,7 @@ def test_sections_are_registered_in_wizard_order() -> None:
         "device",
         "alert",
         "modules",
+        "ha_dashboard",
     ]
 
 

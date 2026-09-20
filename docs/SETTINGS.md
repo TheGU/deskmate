@@ -195,16 +195,33 @@ nothing configured shows every block's honest empty state, never demo data.
 `fixture` is always available as an explicit choice for development or a
 live demo.
 
+**HA Dashboard** (`ha_dashboard`, off by default)
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| Dashboard url | (blank) | A full Lovelace view URL, for example `http://192.168.1.50:8123/lovelace-kiosk/0?kiosk`. Must start with `http://` or `https://` when set. |
+| Token | (blank, secret) | Long-lived access token for that Home Assistant instance. |
+| Settle ms | `2000` | How long to wait after the page loads before it is screenshotted. 0-4000. |
+| Ttl seconds | `300` | How long a rendered screenshot is cached before it is taken again. |
+
+This page has no dataset of its own and no Source field: it screenshots the
+configured URL directly instead of drawing a template from fetched data (see
+docs/HA-DASHBOARD.md), so there is no "Save and test" button for it either -
+saving the section is the only way to see whether it works, on the panel or
+through `/display/ha_dashboard.png`. It is off by default because an
+unconfigured or wrong dashboard URL is a page that has nothing honest to
+show; enable it once the URL and token are set.
+
 ### Save and test
 
 Every section with a Source field (tasks, calendar, weather, ai_usage,
-brief, home, device - not general or alert) has a "Save and test" button
-next to "Save": it saves the section exactly like "Save" does, then runs
-one live fetch through that section's adapter and prints the result on the
-page - the adapter's status (`ok`, `error`, `unavailable`, ...) and its
-error text, if any. That is what tells you an ICS URL or a Home Assistant
-token is wrong before you leave the page, rather than after the fact on the
-rendered panel.
+brief, home, device - not general, alert or ha_dashboard) has a "Save and
+test" button next to "Save": it saves the section exactly like "Save" does,
+then runs one live fetch through that section's adapter and prints the
+result on the page - the adapter's status (`ok`, `error`, `unavailable`,
+...) and its error text, if any. That is what tells you an ICS URL or a
+Home Assistant token is wrong before you leave the page, rather than after
+the fact on the rendered panel.
 
 ### The location search
 
