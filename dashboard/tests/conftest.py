@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.alerts import AlertStore
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.db import close_databases, get_database
 from app.main import create_app
 from app.models import Alert, Block, DashboardState
@@ -33,8 +33,6 @@ from app.modules.weather.settings import WeatherSettings
 from app.renderer.render import Renderer
 from app.settings import HubSettings
 from app.state import StateService
-
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 T = TypeVar("T")
 
@@ -64,7 +62,6 @@ def env(tmp_path_factory: pytest.TempPathFactory) -> Env:
     return Env(
         _env_file=None,
         DATA_DIR=data_dir,
-        FIXTURES_DIR=FIXTURES_DIR,
         LOG_LEVEL="WARNING",
     )
 

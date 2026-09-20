@@ -18,7 +18,7 @@ from app.adapters.ai_brief import PushBriefAdapter
 from app.adapters.ai_usage import PushAIUsageAdapter
 from app.adapters.tasks import PushTasksAdapter
 from app.alerts import AlertStore
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.db import LEGACY_IMPORTED_KEY, Database, close_databases, get_database
 from app.hub_config import HubConfigUnreadable, HubIdentity, claim_hub
 from app.legacy import (
@@ -36,8 +36,6 @@ from app.modules.ai_usage.settings import AIUsageSettings
 from app.modules.brief.settings import BriefSettings
 from app.modules.general.settings import GeneralSettings
 from app.modules.tasks.settings import TasksSettings
-
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 #: Every variable the section table keys off, cleared before a LegacyEnv is
 #: built so these tests prove the mapping and not a developer's shell.
@@ -328,7 +326,7 @@ def test_a_legacy_imported_row_loads_through_the_push_adapters(
         json.dumps({"headline": "From before the database"}), encoding="utf-8"
     )
 
-    env = Env(_env_file=None, DATA_DIR=data_dir, FIXTURES_DIR=FIXTURES_DIR, LOG_LEVEL="WARNING")
+    env = Env(_env_file=None, DATA_DIR=data_dir, LOG_LEVEL="WARNING")
     database = get_database(env.hub_db_file)
     database.migrate()
     assert import_legacy(database, empty_env(), data_dir) is True
@@ -561,7 +559,6 @@ def test_a_started_hub_comes_up_claimed_from_the_old_files(
     write_legacy_telemetry(data_dir, rows=2)
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )

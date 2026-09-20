@@ -35,7 +35,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.db import Database
 from app.hub_config import ADMIN_SESSION_MAX_AGE_SECONDS, COOKIE_NAME, ClaimedSecrets, session_role
 from app.httputil import MAX_OPEN_BODY_BYTES
@@ -43,8 +43,6 @@ from app.main import create_app, etag_matches
 from app.renderer.palette import DISPLAY_SIZE
 from app.renderer.render import PAGES
 from tests.conftest import open_png
-
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 
 def auth(token: str) -> dict[str, str]:
@@ -115,7 +113,6 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
     data_dir = tmp_path
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )
@@ -189,7 +186,6 @@ def test_setup_flow_end_to_end(tmp_path: Path) -> None:
 def test_post_setup_rejects_a_non_private_client(tmp_path: Path) -> None:
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -214,7 +210,6 @@ def test_get_setup_prefill_uses_the_first_forwarded_proto(tmp_path: Path) -> Non
     raw header."""
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -229,7 +224,6 @@ def test_get_setup_prefill_uses_the_first_forwarded_proto(tmp_path: Path) -> Non
 def test_reads_and_device_telemetry_503_while_unconfigured(tmp_path: Path) -> None:
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -247,7 +241,6 @@ def test_reads_and_device_telemetry_503_while_unconfigured(tmp_path: Path) -> No
 def test_preview_and_root_redirect_to_setup_while_unconfigured(tmp_path: Path) -> None:
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -270,7 +263,6 @@ def test_login_redirects_to_setup_with_a_get_not_a_repost_while_unconfigured(
     browser's next request to /setup is a GET."""
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -289,7 +281,6 @@ def test_login_redirects_to_setup_with_a_get_not_a_repost_while_unconfigured(
 def test_healthz_minimal_body_while_unconfigured(tmp_path: Path) -> None:
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -304,7 +295,6 @@ def test_post_setup_rejects_a_form_over_the_cap(tmp_path: Path) -> None:
     request.form() ever reads it."""
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -335,7 +325,6 @@ def test_a_corrupt_hub_config_503s_setup_and_writes_but_the_panel_keeps_working(
     seed.close()
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -392,7 +381,6 @@ def test_data_dir_that_is_a_file_fails_fast_at_startup(tmp_path: Path) -> None:
     blocked.write_text("not a directory", encoding="utf-8")
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=blocked,
         LOG_LEVEL="WARNING",
     )
@@ -442,7 +430,6 @@ def test_healthz_before_any_state_build_is_unknown_and_disconnected(tmp_path: Pa
     """
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -776,7 +763,6 @@ def test_device_telemetry_post_accepts_the_device_key_bearer_on_a_claimed_hub(
     """
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )

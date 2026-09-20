@@ -13,19 +13,17 @@ from pathlib import Path
 import pytest
 
 from app.alerts import AlertStore
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.db import get_database
 from app.renderer.render import PAGES
 from app.settings import HubSettings
 from app.state import StateService
 from app.view import build_context
 
-FIXTURES_DIR = REPO_ROOT / "fixtures"
-
 
 @pytest.fixture()
 def env_with_no_sources_configured(tmp_path: Path) -> Env:
-    return Env(_env_file=None, FIXTURES_DIR=FIXTURES_DIR, DATA_DIR=tmp_path)
+    return Env(_env_file=None, DATA_DIR=tmp_path)
 
 
 def test_defaults_against_an_empty_data_dir_render_every_page_all_unavailable(

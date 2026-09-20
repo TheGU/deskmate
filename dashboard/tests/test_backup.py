@@ -38,7 +38,7 @@ from app.backup import (
     backup_temp_path,
     inspect_backup,
 )
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.db import DB_SCHEMA_VERSION, Database, get_database
 from app.hub_config import COOKIE_NAME, ClaimedSecrets, claim_hub, session_role, write_hub_config
 from app.httputil import _stream_upload_to
@@ -54,8 +54,6 @@ from app.renderer.render import Renderer
 from app.settings import HubSettings
 from tests.conftest import run
 
-FIXTURES_DIR = REPO_ROOT / "fixtures"
-
 BACKUP_NAME = re.compile(r'attachment; filename="deskmate-backup-\d{8}-\d{6}\.sqlite"')
 
 
@@ -66,7 +64,6 @@ def auth(token: str) -> dict[str, str]:
 def hub_env(data_dir: Path) -> Env:
     return Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )
