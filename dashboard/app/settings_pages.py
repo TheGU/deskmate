@@ -65,6 +65,7 @@ from app.hub_config import (
 )
 from app.httputil import _cap_form_body, _cap_restore_length, _stream_upload_to
 from app.logging_setup import log
+from app.models import AdapterStatus
 from app.modules.registry import ModulesSettings
 
 if TYPE_CHECKING:
@@ -147,8 +148,16 @@ def _section_form(
     # render_section only knows whether the model has a "source" field; it
     # does not know TESTABLE_SECTIONS, so a third-party section that happens
     # to declare its own "source" field would otherwise get a "Save and
-    # test" button with no adapter behind it.
-    form.has_source = form.has_source and section in TESTABLE_SECTIONS
+    # test" button with no adapter behind it. A testable section whose
+    # owning module is currently disabled has no adapter in
+    # ``state_service.adapters`` either (Registry.datasets() only counts
+    # enabled modules), so the button is hidden then too rather than posting
+    # to a test that cannot run.
+    form.has_source = (
+        form.has_source
+        and section in TESTABLE_SECTIONS
+        and section in hub.state_service.adapters
+    )
     if section == MODULES_SECTION:
         form.warnings = _missing_module_warnings(hub)
     if section == "weather":
@@ -305,9 +314,27 @@ async def _tested_section_form(hub: "Hub", section: str, *, search_url: str) -> 
     That is what "Save and test" is for: the Outcome's status and error
     string (``adapters/base.py:Outcome``) are what tell the owner an ICS URL
     or a Home Assistant token is wrong, on the page, before they move on.
+
+    A section stays in ``TESTABLE_SECTIONS`` even while the module that
+    provides its dataset is disabled through the Modules section (the row is
+    still there to edit and re-enable later), but ``state_service.adapters``
+    then has no entry for it: there is nothing to force-fetch. That is a
+    message on the form, in the same Outcome shape a real test uses, not a
+    500 from indexing an adapter that is not there.
     """
     form = _section_form(hub, section, search_url=search_url)
-    adapter = hub.state_service.adapters[section]
+    adapter = hub.state_service.adapters.get(section)
+    if adapter is None:
+        form.test_status = AdapterStatus.UNAVAILABLE.value
+        form.test_error = "the module that provides this dataset is disabled"
+        log(
+            logger,
+            logging.INFO,
+            "settings section tested",
+            section=section,
+            status=form.test_status,
+        )
+        return form
     outcome = await adapter.get(force=True)
     form.test_status = outcome.status.value
     form.test_error = outcome.error or ""
