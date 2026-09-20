@@ -484,9 +484,9 @@ groups.
 | 1.5 | done | backup POST, restore close-replace-reopen, rotate with session secret |
 | 1.6 | done | SETTINGS.md, .env.example cut, docs rewritten, render-all.py fixed |
 | 2.1a | done | module API, registry, seven built-ins, DashboardState schema 2; push field renamed to source; main.py split into settings_pages.py and httputil.py; 686 tests |
-| 2.1b | planned | |
+| 2.1b | done | /display/{n}.png, telemetry page_count/pages and page_index, HubSettings.extra with section() accessor, SettingsStore over the live section map, Modules section with missing-id warning and no-page guard; 722 tests |
 | 2.2 | planned | |
-| 2.3 | in progress | CONTRIBUTING.md merged; MODULES.md and the example module follow 2.1a |
+| 2.3 | done | CONTRIBUTING.md, docs/MODULES.md, examples/modules/hello/ with an install test |
 | 2.4 | done | page_count/page_names globals, index URLs, page_index in telemetry; compiled; not flashed |
 | 3.1 | planned | |
 | 3.3 | planned | |
