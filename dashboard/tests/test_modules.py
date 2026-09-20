@@ -10,6 +10,7 @@ docs/plan/2026-09-19-settings-modules-provisioning.md (phase 2) holds.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import textwrap
 from datetime import datetime
@@ -19,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from pydantic import BaseModel
 from starlette.datastructures import FormData
 
@@ -41,9 +43,11 @@ from app.modules.registry import (
     builtin_registry,
     directory_modules,
 )
+from app.renderer.palette import DISPLAY_SIZE
+from app.renderer.render import Renderer
 from app.settings import SECTIONS, HubSettings
 from app.settings_pages import TESTABLE_SECTIONS
-from tests.conftest import make_state
+from tests.conftest import make_state, run
 from tests.test_forms import submission
 from tests.test_settings_page import AdminHub
 
@@ -437,6 +441,46 @@ def test_a_third_party_module_claiming_a_builtin_section_refuses_to_load() -> No
     ]
     with pytest.raises(ModuleError, match="both own the settings section 'weather'"):
         Registry(modules)
+
+
+# ---------------------------------------------------------------------------
+# a module's own screenshot renderer (app/renderer/render.py)
+# ---------------------------------------------------------------------------
+async def _oversized_screenshot(browser: Any, state: Any, settings: Any) -> Image.Image:
+    """A ``ScreenshotFn`` that ignores everything it is handed and returns an
+    image the wrong size, the way a careless third-party module might."""
+    return Image.new("RGB", (1024, 600), "white")
+
+
+def test_a_module_screenshot_the_wrong_size_is_forced_to_the_display_size(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The template path always hands back exactly ``DISPLAY_SIZE``
+    (Chromium's own clip guarantees it, and a mismatch there is already a
+    warning); a module's ``ScreenshotFn`` is arbitrary code with no such
+    guarantee and used to be trusted after nothing but ``convert("RGB")``.
+    It must not silently misdraw the panel - it gets resized, loudly."""
+    module = _module(
+        id="oversized",
+        page=_page(template=None, screenshot=_oversized_screenshot),
+    )
+    renderer = Renderer(env, HubSettings(), Registry([module]))
+    state = make_state(
+        generated_at=datetime(2026, 9, 20, 9, 0, tzinfo=ZoneInfo("Asia/Bangkok"))
+    )
+    try:
+        run(renderer.start())
+        with caplog.at_level(logging.WARNING, logger="app.render"):
+            image = run(renderer.render_rgb("oversized", state))
+    finally:
+        run(renderer.close())
+
+    assert image.size == DISPLAY_SIZE
+    assert any(
+        getattr(record, "fields", {}).get("page") == "oversized"
+        and getattr(record, "fields", {}).get("actual") == (1024, 600)
+        for record in caplog.records
+    )
 
 
 def test_the_built_in_pages_keep_their_ids_and_their_order() -> None:

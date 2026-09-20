@@ -303,7 +303,25 @@ class Renderer:
             async with self._lock:
                 browser = await self._ensure_browser()
                 image = await screenshot(browser, state, self.hub_settings)
-            return image.convert("RGB")
+            image = image.convert("RGB")
+            # The template path always hands back exactly DISPLAY_SIZE
+            # (Chromium's own clip guarantees it, checked above); a module's
+            # ScreenshotFn is arbitrary code with no such guarantee, so it
+            # gets the same size check and forced resize the template path
+            # would have failed loudly without: the six-ink snap and the
+            # device both assume 800x480, and a module that draws something
+            # else must not silently misdraw the panel.
+            if image.size != DISPLAY_SIZE:
+                log(
+                    logger,
+                    logging.WARNING,
+                    "module screenshot size did not match the display",
+                    page=page,
+                    expected=DISPLAY_SIZE,
+                    actual=image.size,
+                )
+                image = image.resize(DISPLAY_SIZE, Image.LANCZOS)
+            return image
 
         html = self.render_html(page, state, embed_fonts=True)
         async with self._lock:
