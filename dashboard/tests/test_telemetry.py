@@ -38,6 +38,7 @@ from app.models import (
     DeviceTelemetry,
 )
 from app.modules.device.settings import DeviceSettings
+from app.modules.system import DEVICE_FIXTURE
 from app.renderer.chart import build_chart
 from app.settings import HubSettings
 from app.view import device_panel, power_label, system_context
@@ -48,7 +49,7 @@ from app.telemetry import (
     parse_utc,
     utc_iso,
 )
-from tests.conftest import FIXTURES_DIR, make_state, run
+from tests.conftest import make_state, run
 
 #: The exact payload firmware/e1002.yaml posts.
 DEVICE_PAYLOAD: dict[str, object] = {
@@ -100,7 +101,6 @@ def device_env(tmp_path: Path) -> Iterator[Env]:
     than leaving a handle on a temp directory."""
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )
@@ -471,7 +471,7 @@ def test_store_adapter_carries_the_telemetry_origin(
 def test_fixture_adapter_fills_an_empty_store(
     device_hub_settings: HubSettings, device_env: Env
 ) -> None:
-    state = run(FixtureDeviceAdapter(device_hub_settings.device, device_env).fetch())
+    state = run(FixtureDeviceAdapter(device_hub_settings.device, device_env, DEVICE_FIXTURE).fetch())
     assert state.status is DeviceStatus.OK
     assert state.device == "reterminal-e1002"
     assert state.sample_count == 288
@@ -484,7 +484,7 @@ def test_fixture_adapter_fills_an_empty_store(
 
 def test_fixture_file_holds_a_day_of_five_minute_samples() -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
-    samples = load_device_fixture(FIXTURES_DIR / "device.json", now=now)
+    samples = load_device_fixture(DEVICE_FIXTURE, now=now)
     assert len(samples) == 288
     assert samples[-1].received_at == now
     assert (samples[-1].received_at - samples[0].received_at) == timedelta(minutes=1435)
@@ -499,7 +499,7 @@ def test_fixture_file_holds_a_day_of_five_minute_samples() -> None:
 # ---------------------------------------------------------------------------
 def test_chart_points_stay_inside_the_plot_box() -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
-    samples = load_device_fixture(FIXTURES_DIR / "device.json", now=now)
+    samples = load_device_fixture(DEVICE_FIXTURE, now=now)
     chart = build_chart(bucket_points(samples), "Asia/Bangkok")
     assert chart.has_data is True
     assert {series.key for series in chart.series} == {"temperature", "humidity"}
@@ -549,7 +549,7 @@ def test_chart_without_enough_history_has_no_data() -> None:
 
 def test_chart_uses_only_panel_colors() -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
-    samples = load_device_fixture(FIXTURES_DIR / "device.json", now=now)
+    samples = load_device_fixture(DEVICE_FIXTURE, now=now)
     chart = build_chart(bucket_points(samples), "Asia/Bangkok")
     # Black temperature, blue humidity: the panel has no gray, so the two
     # series are told apart by color alone, never red.
@@ -562,7 +562,7 @@ def test_chart_uses_only_panel_colors() -> None:
 
 def test_chart_annotates_temperature_min_and_max_inside_the_box() -> None:
     now = datetime(2026, 9, 5, 12, 0, tzinfo=dt_timezone.utc)
-    samples = load_device_fixture(FIXTURES_DIR / "device.json", now=now)
+    samples = load_device_fixture(DEVICE_FIXTURE, now=now)
     chart = build_chart(bucket_points(samples), "Asia/Bangkok")
     # One leader and one value label for the minimum, one for the maximum.
     assert len(chart.leaders) == 2

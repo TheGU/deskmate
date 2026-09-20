@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from app.adapters.base import AdapterUnavailable
@@ -38,15 +39,16 @@ def current_mode(brief: BriefSettings, general: GeneralSettings) -> BriefMode:
 
 
 class FixtureBriefAdapter:
-    """Brief from ``fixtures/brief.json`` (holds both modes)."""
+    """Brief from the module's own ``fixtures/brief.json`` (holds both modes)."""
 
     name = "brief"
     source = "fixture"
 
-    def __init__(self, brief: BriefSettings, general: GeneralSettings, env: Env) -> None:
+    def __init__(self, brief: BriefSettings, general: GeneralSettings, env: Env, fixture: Path) -> None:
         self._brief = brief
         self._general = general
         self._env = env
+        self._fixture = fixture
 
     def resolve(self) -> str:
         return self.source
@@ -54,7 +56,7 @@ class FixtureBriefAdapter:
     async def fetch(self) -> Brief:
         env = self._env
         timezone_name = self._general.timezone
-        payload = load_fixture(env.fixtures_dir / "brief.json")
+        payload = load_fixture(self._fixture)
         delta = day_delta(
             payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
@@ -110,8 +112,8 @@ class PushBriefAdapter:
 
 
 def build_brief_adapter(
-    brief: BriefSettings, general: GeneralSettings, env: Env
+    brief: BriefSettings, general: GeneralSettings, env: Env, fixture: Path
 ) -> FixtureBriefAdapter | PushBriefAdapter:
     if brief.source == "push":
         return PushBriefAdapter(brief, general, env)
-    return FixtureBriefAdapter(brief, general, env)
+    return FixtureBriefAdapter(brief, general, env, fixture)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Final
 
 import httpx
@@ -109,20 +110,23 @@ def rain_window(
 
 
 class FixtureWeatherAdapter:
-    """Weather from ``fixtures/weather.json``."""
+    """Weather from the module's own ``fixtures/weather.json``."""
 
     name = "weather"
     source = "fixture"
 
-    def __init__(self, weather: WeatherSettings, general: GeneralSettings, env: Env) -> None:
+    def __init__(
+        self, weather: WeatherSettings, general: GeneralSettings, env: Env, fixture: Path
+    ) -> None:
         self._weather = weather
         self._general = general
         self._env = env
+        self._fixture = fixture
 
     async def fetch(self) -> Weather:
         env = self._env
         timezone_name = self._general.timezone
-        payload = load_fixture(env.fixtures_dir / "weather.json")
+        payload = load_fixture(self._fixture)
         delta = day_delta(
             payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
@@ -283,8 +287,8 @@ def _as_int(value: Any) -> int | None:
 
 
 def build_weather_adapter(
-    weather: WeatherSettings, general: GeneralSettings, env: Env
+    weather: WeatherSettings, general: GeneralSettings, env: Env, fixture: Path
 ) -> FixtureWeatherAdapter | OpenMeteoWeatherAdapter:
     if weather.source == "open_meteo":
         return OpenMeteoWeatherAdapter(weather, general, env)
-    return FixtureWeatherAdapter(weather, general, env)
+    return FixtureWeatherAdapter(weather, general, env, fixture)

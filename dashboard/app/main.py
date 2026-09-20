@@ -477,7 +477,6 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
             "dashboard-hub starting",
             version=__version__,
             timezone=hub.hub_settings.general.timezone,
-            fixtures=str(hub.env.fixtures_dir),
             tasks=hub.hub_settings.tasks.source,
             calendar=hub.hub_settings.calendar.source,
             weather=hub.hub_settings.weather.source,

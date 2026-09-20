@@ -10,6 +10,8 @@ a live row to make it match would be a migration for no gain.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app import __version__
 from app.adapters.calendar import build_calendar_adapter
 from app.config import APP_DIR
@@ -17,6 +19,9 @@ from app.models import CalendarBlock
 from app.modules import DatasetSpec, Module, PageSpec
 from app.modules.calendar.settings import SECTION as CALENDAR_SECTION, CalendarSettings
 from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, agenda_context, agenda_flag
+
+#: The demo data this module falls back to on ``source: fixture``.
+FIXTURE: Path = Path(__file__).parent / "fixtures" / "calendar.json"
 
 MODULE = Module(
     id="agenda",
@@ -32,9 +37,10 @@ MODULE = Module(
             value_field="items",
             section=CALENDAR_SECTION,
             build_adapter=lambda calendar, general, context: build_calendar_adapter(
-                calendar, general, context.env
+                calendar, general, context.env, FIXTURE
             ),
             ttl_seconds=lambda calendar: calendar.ttl_seconds,
+            fixture=FIXTURE,
         ),
     ),
     page=PageSpec(
@@ -50,4 +56,4 @@ MODULE = Module(
     default_order=20,
 )
 
-__all__ = ["MODULE"]
+__all__ = ["FIXTURE", "MODULE"]

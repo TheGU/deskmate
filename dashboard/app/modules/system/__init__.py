@@ -10,6 +10,8 @@ showing that section when this module is turned off.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app import __version__
 from app.adapters.device import build_device_adapter
 from app.adapters.home_assistant import build_home_adapter
@@ -19,6 +21,10 @@ from app.modules import DatasetSpec, Module, PageSpec
 from app.modules.device.settings import SECTION as DEVICE_SECTION
 from app.modules.home.settings import SECTION as HOME_SECTION, HomeSettings
 from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, system_context, system_flag
+
+#: The demo data ``home`` and ``device`` fall back to on ``source: fixture``.
+HOME_FIXTURE: Path = Path(__file__).parent / "fixtures" / "home.json"
+DEVICE_FIXTURE: Path = Path(__file__).parent / "fixtures" / "device.json"
 
 MODULE = Module(
     id="system",
@@ -33,8 +39,11 @@ MODULE = Module(
             block_model=HomeBlock,
             value_field="home",
             section=HOME_SECTION,
-            build_adapter=lambda home, general, context: build_home_adapter(home, context.env),
+            build_adapter=lambda home, general, context: build_home_adapter(
+                home, context.env, HOME_FIXTURE
+            ),
             ttl_seconds=lambda home: home.ttl_seconds,
+            fixture=HOME_FIXTURE,
         ),
         DatasetSpec(
             name="device",
@@ -42,9 +51,10 @@ MODULE = Module(
             value_field="device",
             section=DEVICE_SECTION,
             build_adapter=lambda device, general, context: build_device_adapter(
-                device, context.env
+                device, context.env, DEVICE_FIXTURE
             ),
             ttl_seconds=lambda device: device.ttl_seconds,
+            fixture=DEVICE_FIXTURE,
         ),
     ),
     page=PageSpec(
@@ -60,4 +70,4 @@ MODULE = Module(
     default_order=50,
 )
 
-__all__ = ["MODULE"]
+__all__ = ["DEVICE_FIXTURE", "HOME_FIXTURE", "MODULE"]

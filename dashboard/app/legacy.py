@@ -113,7 +113,6 @@ class LegacyEnv(BaseSettings):
     units: Literal["metric", "imperial"] = Field(default="metric", alias="UNITS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    fixtures_dir: Path = Field(default=REPO_ROOT / "fixtures", alias="FIXTURES_DIR")
     data_dir: Path = Field(default=REPO_ROOT / "data", alias="DATA_DIR")
 
     fixture_relative_dates: bool = Field(default=True, alias="FIXTURE_RELATIVE_DATES")
