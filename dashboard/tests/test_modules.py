@@ -356,6 +356,35 @@ def test_an_id_in_settings_that_is_not_installed_is_reported_not_dropped() -> No
     assert builtin_registry(settings).missing_ids() == ("ghost",)
 
 
+def test_toggle_rows_show_the_manifest_defaults_for_a_module_with_no_row() -> None:
+    """The settings form lists what is in force, not what is stored: a
+    module nobody has touched still shows its own enabled state and order."""
+    rows = {row.id: row for row in builtin_registry().toggle_rows()}
+    assert rows["today"].enabled is True
+    assert rows["today"].order == 10
+
+
+def test_toggle_rows_keep_a_row_for_a_module_that_is_not_installed() -> None:
+    """Dropping it from the form would delete it on the next save."""
+    settings = ModulesSettings(items=[ModuleToggle(id="ghost", enabled=False, order=7)])
+    rows = builtin_registry(settings).toggle_rows()
+    ghost = [row for row in rows if row.id == "ghost"]
+    assert ghost == [ModuleToggle(id="ghost", enabled=False, order=7)]
+    # Last, after every installed module.
+    assert rows[-1].id == "ghost"
+
+
+def test_with_settings_applies_a_submission_without_saving_it() -> None:
+    """What the settings page checks a modules save against before writing."""
+    registry = builtin_registry()
+    disabled = ModulesSettings(
+        items=[ModuleToggle(id=page_id, enabled=False) for page_id in registry.page_ids()]
+    )
+    assert registry.with_settings(disabled).pages() == ()
+    # The registry it was asked of is untouched.
+    assert registry.page_ids()
+
+
 def test_page_by_index_resolves_to_the_id_and_stops_at_the_end() -> None:
     registry = builtin_registry()
     first = registry.page_by_index(0)

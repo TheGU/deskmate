@@ -18,8 +18,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -30,8 +32,12 @@ from app.config import REPO_ROOT, Env
 from app.geocode import GEOCODING_URL, MAX_QUERY_LENGTH, RESULT_COUNT, SEARCH_FAILED
 from app.hub_config import COOKIE_NAME, ClaimedSecrets
 from app.main import create_app
+from app.models import AdapterStatus, TasksBlock
+from app.modules.registry import ModulesSettings, ModuleToggle
 from app.settings import SECTIONS, HubSettings
 from app.settings_pages import WIZARD_STEPS
+from app.view import build_context
+from tests.conftest import make_state
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 
@@ -91,6 +97,61 @@ def admin(tmp_path: Path) -> Iterator[AdminHub]:
     hub = AdminHub(tmp_path / "live")
     yield hub
     hub.hub.db.close()
+
+
+def state_at(hour: int = 9) -> Any:
+    """A state with no blocks at all: every page draws placeholders.
+
+    Enough for the footer and the "unavailable" rules below, and it never
+    runs an adapter, so these tests neither reach the network nor depend on
+    what a fixture happens to hold.
+    """
+    return make_state(
+        generated_at=datetime(2026, 9, 20, hour, 0, tzinfo=ZoneInfo("Asia/Bangkok"))
+    )
+
+
+def window_names(admin: AdminHub) -> list[str]:
+    """The footer's window list, as the panel would print it."""
+    context = build_context(
+        "today", state_at(), admin.hub.hub_settings, admin.hub.registry.pages()
+    )
+    return [window["name"] for window in context["footer"]["windows"]]
+
+
+def modules_form(
+    admin: AdminHub,
+    *,
+    disable: frozenset[str] = frozenset(),
+    extra_rows: tuple[str, ...] = (),
+) -> dict[str, list[str]]:
+    """The modules section exactly as the browser posts it.
+
+    Built the way ``_section_form.html`` builds the HTML - a hidden ``0``
+    before every checkbox, a ticked box adding its ``1`` after it, which is
+    why the enabled fields carry two values - from the rows the page is
+    showing, so this is a round trip through the page rather than through a
+    hand-made payload.
+    """
+    items: dict[str, list[str]] = {}
+    rows = [(row.id, row.enabled, row.order) for row in admin.hub.registry.toggle_rows()]
+    rows.extend((module_id, True, None) for module_id in extra_rows)
+    for index, (module_id, enabled, order) in enumerate(rows):
+        items[f"items-{index}-id"] = [module_id]
+        ticked = enabled and module_id not in disable
+        items[f"items-{index}-enabled"] = ["0", "1"] if ticked else ["0"]
+        items[f"items-{index}-order"] = ["" if order is None else str(order)]
+    items["action"] = ["save"]
+    return items
+
+
+def save_modules(admin: AdminHub, **kwargs: Any) -> Any:
+    return admin.client.post(
+        "/settings/modules",
+        data=modules_form(admin, **kwargs),
+        headers=admin.auth,
+        follow_redirects=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -643,3 +704,100 @@ def test_the_search_is_admin_only(admin: AdminHub) -> None:
     redirect = reader.get("/settings/geocode", params={"q": "bangkok"}, follow_redirects=False)
     assert redirect.status_code == 303
     assert redirect.headers["location"].startswith("/login")
+
+
+# ---------------------------------------------------------------------------
+# the modules section
+# ---------------------------------------------------------------------------
+def test_the_modules_section_lists_every_installed_module(admin: AdminHub) -> None:
+    """Including the ones with no row in the database yet: those show their
+    manifest defaults, so installing a module is enough to see it here."""
+    assert admin.hub.settings_store.load("modules") == ModulesSettings()
+    page = admin.client.get("/settings", headers=admin.auth)
+
+    assert 'id="modules"' in page.text
+    for index, module in enumerate(admin.hub.registry.modules):
+        assert f'value="{module.id}"' in page.text
+        assert f'name="items-{index}-id"' in page.text
+        assert f'name="items-{index}-enabled"' in page.text
+        assert f'name="items-{index}-order"' in page.text
+
+
+def test_saving_the_modules_section_disables_a_page_without_a_restart(
+    admin: AdminHub,
+) -> None:
+    """The save reloads the hub, which rebuilds the registry, the renderer's
+    view of it, the state service and the render cache."""
+    assert "WEATHER" in window_names(admin)
+    before = len(admin.hub.registry.page_ids())
+
+    assert save_modules(admin, disable=frozenset({"weather"})).status_code == 303
+
+    assert "weather" not in admin.hub.registry.page_ids()
+    assert "weather" not in admin.hub.state_service.adapters
+    assert "weather" not in admin.hub.renderer.pages
+    # Gone from the footer, ...
+    assert "WEATHER" not in window_names(admin)
+    # ... from the id route, ...
+    assert admin.client.get("/display/weather.png", headers=admin.auth).status_code == 404
+    # ... and from the index route, which is one page shorter now.
+    assert admin.client.get(f"/display/{before - 1}.png", headers=admin.auth).status_code == 404
+
+
+def test_saving_the_modules_section_reorders_the_window_list(admin: AdminHub) -> None:
+    admin.hub.settings_store.save(
+        "modules", ModulesSettings(items=[ModuleToggle(id="system", order=1)])
+    )
+    asyncio.run(admin.hub.reload())
+    assert admin.hub.registry.page_ids()[0] == "system"
+    assert window_names(admin)[0] == "SYSTEM"
+
+
+def test_disabling_a_dataset_module_leaves_its_pages_unavailable(admin: AdminHub) -> None:
+    """``tasks`` draws no page of its own; the pages that read it must keep
+    rendering, saying "unavailable" rather than inventing a task list."""
+    assert save_modules(admin, disable=frozenset({"tasks"})).status_code == 303
+
+    assert "tasks" not in admin.hub.registry.datasets()
+    assert "tasks" not in admin.hub.state_service.adapters
+    # today still draws, and DashboardState.block hands it a placeholder of
+    # the right type instead of making the page None-check the dataset.
+    state = state_at()
+    assert state.block("tasks", TasksBlock).status is AdapterStatus.UNAVAILABLE
+    html = admin.hub.renderer.render_html("today", state, embed_fonts=False)
+    assert "tasks unavailable" in html
+
+
+def test_an_id_that_is_not_installed_is_kept_and_warned_about(admin: AdminHub) -> None:
+    assert save_modules(admin, extra_rows=("ghost",)).status_code == 303
+
+    assert admin.hub.registry.missing_ids() == ("ghost",)
+    page = admin.client.get("/settings", headers=admin.auth)
+    assert "Not installed on this hub: ghost" in page.text
+    # Kept, not dropped: the row is still in the database and still on the
+    # form, so a module that comes back after an upgrade comes back enabled.
+    stored = admin.hub.settings_store.load("modules")
+    assert "ghost" in [row.id for row in stored.items]
+    assert 'value="ghost"' in page.text
+
+
+def test_disabling_every_page_is_refused_with_a_field_error(admin: AdminHub) -> None:
+    """The panel has to have something to draw: a device asking for
+    /display/0.png on a hub with no page would get a 404 forever."""
+    pages = frozenset(admin.hub.registry.page_ids())
+    response = save_modules(admin, disable=pages)
+
+    assert response.status_code == 422
+    assert "at least one module with a page has to stay enabled" in response.text
+    # Nothing was written: the row is still the untouched one and every
+    # page is still there.
+    assert admin.hub.registry.page_ids()
+    assert admin.hub.settings_store.load("modules") == ModulesSettings()
+
+
+def test_today_may_be_disabled_while_another_page_stays(admin: AdminHub) -> None:
+    """The rule is "no page left", not "never today": a hub whose owner
+    wants only the agenda is allowed to say so."""
+    assert save_modules(admin, disable=frozenset({"today"})).status_code == 303
+    assert "today" not in admin.hub.registry.page_ids()
+    assert admin.hub.registry.page_ids()

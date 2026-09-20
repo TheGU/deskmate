@@ -26,11 +26,11 @@ import logging
 import time
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData, UploadFile
@@ -65,6 +65,7 @@ from app.hub_config import (
 )
 from app.httputil import _cap_form_body, _cap_restore_length, _stream_upload_to
 from app.logging_setup import log
+from app.modules.registry import ModulesSettings
 
 if TYPE_CHECKING:
     from app.main import Hub
@@ -84,6 +85,11 @@ TESTABLE_SECTIONS: tuple[str, ...] = (
     "home",
     "device",
 )
+
+#: The settings section the module registry owns: one row per module with
+#: an enable box and an order, which is what the window list and
+#: ``/display/{n}.png`` are built from.
+MODULES_SECTION = "modules"
 
 #: The setup wizard's steps, in the plan's order. Every step is optional and
 #: the last one's "next" is the settings page. The other five sections are
@@ -124,12 +130,22 @@ def _section_form(
     """
     model = hub.sections[section]
     current = hub.hub_settings.section(section, model)
+    if values is None and section == MODULES_SECTION:
+        # Not the stored rows: the rows as they are in force. Every
+        # installed module is listed whether or not the database has a row
+        # for it (a module with no row shows its manifest defaults), and a
+        # stored row for a module that is not installed here is kept and
+        # warned about rather than dropped from the form, which would delete
+        # it on the next save.
+        values = {"items": [row.model_dump() for row in hub.registry.toggle_rows()]}
     form = render_section(
         section,
         model,
         current.model_dump() if values is None else values,
         errors=errors,
     )
+    if section == MODULES_SECTION:
+        form.warnings = _missing_module_warnings(hub)
     if section == "weather":
         # The place search exists only for weather: it is what turns a place
         # name into the latitude and longitude that section stores.
@@ -170,6 +186,37 @@ def _settings_html(
         forms=_settings_forms(hub) if forms is None else forms,
     )
     return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
+def _missing_module_warnings(hub: "Hub") -> tuple[str, ...]:
+    """One line per id the modules section holds that is not installed.
+
+    An id in the database is the owner's intent and a module can come back
+    after an upgrade, so the row is kept (``registry.missing_ids``). What it
+    must not do is sit there silently: the page says which ids answer for
+    nothing on this hub.
+    """
+    missing = hub.registry.missing_ids()
+    if not missing:
+        return ()
+    return (
+        "Not installed on this hub: "
+        + ", ".join(missing)
+        + ". The rows are kept in case the module comes back; nothing on the "
+        "panel uses them meanwhile.",
+    )
+
+
+def _no_page_left(hub: "Hub", value: BaseModel) -> bool:
+    """Whether saving ``value`` as the modules section would leave no page.
+
+    The panel has to have something to draw: a device asking for
+    ``/display/0.png`` on a hub with every page module disabled would get a
+    404 and keep the last image on screen forever, with nothing on the panel
+    to say why. Checked by applying the submission to the installed modules,
+    which is the only honest way to know.
+    """
+    return not hub.registry.with_settings(cast(ModulesSettings, value)).pages()
 
 
 def _apply_place(values: dict[str, Any], form: FormData) -> None:
@@ -224,6 +271,19 @@ async def _save_section(
             section,
             values=parsed.data,
             errors=form_errors(model, exc),
+            search_url=search_url,
+        )
+    if section == MODULES_SECTION and _no_page_left(hub, value):
+        return _section_form(
+            hub,
+            section,
+            values=parsed.data,
+            errors=FormErrors(
+                fields={
+                    "items": "at least one module with a page has to stay enabled: "
+                    "the panel would have nothing to draw."
+                }
+            ),
             search_url=search_url,
         )
     await run_in_threadpool(hub.settings_store.save, section, value)
@@ -559,4 +619,4 @@ def register(app: FastAPI, env: Env) -> None:
         return RedirectResponse(_wizard_next(step), status_code=303)
 
 
-__all__ = ["TESTABLE_SECTIONS", "WIZARD_STEPS", "register"]
+__all__ = ["MODULES_SECTION", "TESTABLE_SECTIONS", "WIZARD_STEPS", "register"]

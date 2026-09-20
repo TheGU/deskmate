@@ -153,6 +153,35 @@ class Registry:
         """Ids the ``modules`` section names that are not installed here."""
         return self._missing
 
+    def toggle_rows(self) -> tuple[ModuleToggle, ...]:
+        """The ``modules`` section as the settings page shows it.
+
+        One row per installed module, in order, carrying what is actually in
+        force: the stored toggle where there is one, the module's own
+        manifest defaults where there is not, so installing a module is
+        enough to see it on the page with its real state. Then the stored
+        rows for ids that are not installed, kept exactly as they are, so
+        saving the form cannot quietly drop a module that is only missing
+        because an upgrade has not been done yet (:meth:`missing_ids` is
+        what puts the warning next to them).
+        """
+        rows = [
+            ModuleToggle(id=module.id, enabled=self.is_enabled(module), order=self.order_of(module))
+            for module in self._modules
+        ]
+        rows.extend(self._toggles[name] for name in self._missing)
+        return tuple(rows)
+
+    def with_settings(self, settings: ModulesSettings) -> Registry:
+        """The same installed modules under a different ``modules`` section.
+
+        What a settings save is checked against before it is written
+        (``app/settings_pages.py``): a submission that would leave the panel
+        with no page at all has to be refused while it is still a form, and
+        the only honest way to know is to apply it.
+        """
+        return Registry(self._modules, settings)
+
     def enabled_modules(self) -> tuple[Module, ...]:
         return tuple(module for module in self._modules if self.is_enabled(module))
 

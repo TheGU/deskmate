@@ -172,6 +172,12 @@ class SectionForm:
     #: True when the section has a ``source`` field, which is what decides
     #: whether "Save and test" means anything for it.
     has_source: bool = False
+    #: Lines the section wants shown above its inputs, in a warning box, that
+    #: are nobody's validation message: the modules section uses it to name
+    #: the ids its rows hold that are not installed on this hub
+    #: (``app/settings_pages.py``). Never an error: the form is fine, the
+    #: hub is just not what the rows expect.
+    warnings: tuple[str, ...] = ()
     #: The weather section's place search (``app/geocode.py:PlaceSearch``),
     #: set by ``main.py``. Typed loosely on purpose: this module knows how to
     #: render any section's fields and nothing about weather.
