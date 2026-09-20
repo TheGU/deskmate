@@ -74,7 +74,7 @@ class DeviceSettings(BaseModel):
     )
     wake_hours: str = Field(
         default="8, 12, 17",
-        max_length=64,
+        max_length=96,
         description=(
             "Local hours the device wakes at while running on battery, comma "
             "separated (0 to 23, any of the 24 hours, for example \"8, 12, 17\"). "
