@@ -744,6 +744,26 @@ def test_saving_the_modules_section_disables_a_page_without_a_restart(
     assert admin.client.get(f"/display/{before - 1}.png", headers=admin.auth).status_code == 404
 
 
+def test_disabling_a_page_shrinks_the_telemetry_window_list(admin: AdminHub) -> None:
+    """The device learns the list from this response and nowhere else, so a
+    module disabled here has to be gone from it on the very next post."""
+    device_auth = {"Authorization": f"Bearer {admin.secrets.device_key}"}
+    payload = {"device": "reterminal-e1002", "page": "today"}
+
+    before = admin.client.post(
+        "/api/device/telemetry", json=payload, headers=device_auth
+    ).json()
+    assert "weather" in before["pages"]
+
+    assert save_modules(admin, disable=frozenset({"weather"})).status_code == 303
+
+    after = admin.client.post(
+        "/api/device/telemetry", json=payload, headers=device_auth
+    ).json()
+    assert "weather" not in after["pages"]
+    assert after["page_count"] == before["page_count"] - 1
+
+
 def test_saving_the_modules_section_reorders_the_window_list(admin: AdminHub) -> None:
     admin.hub.settings_store.save(
         "modules", ModulesSettings(items=[ModuleToggle(id="system", order=1)])
