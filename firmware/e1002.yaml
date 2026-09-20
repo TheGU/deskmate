@@ -101,7 +101,7 @@ esphome:
             id(telemetry_tick).stop_poller();
             id(telemetry_tick).start_poller();
             uint32_t mask = id(wake_hours_mask);
-            if (mask == 0 || mask > 0xFFFFFF || __builtin_popcount(mask) > 8) {
+            if (mask == 0 || mask > 0xFFFFFF) {
               ESP_LOGW("main", "Restored wake_hours_mask 0x%06x is invalid, falling back to the compiled default", (unsigned) mask);
               id(wake_hours_mask) = 0x21100;
             }
@@ -384,8 +384,9 @@ globals:
     initial_value: "5"
   # Wake hours as a bitmask (bit h set = wake at local hour h), not an
   # array: one restorable word, ascending and de-duplicated by
-  # construction, and a single range check (non-zero, at most 8 bits,
-  # nothing above bit 23) instead of validating a whole array plus a count.
+  # construction, and a single range check (non-zero, nothing above bit 23)
+  # instead of validating a whole array plus a count. Any subset of the 24
+  # hours (bits 0 to 23) is allowed.
   # 0x21100 is bits 8, 12 and 17 set, matching the wake_hours substitution
   # above; keep them in sync if either changes.
   - id: wake_hours_mask
@@ -628,7 +629,7 @@ script:
                                   if (h < 0 || h > 23) continue;
                                   mask |= (1u << h);
                                 }
-                                if (mask != 0 && mask <= 0xFFFFFF && __builtin_popcount(mask) <= 8) {
+                                if (mask != 0 && mask <= 0xFFFFFF) {
                                   id(wake_hours_mask) = mask;
                                 } else {
                                   ESP_LOGW("main", "Telemetry response: ignoring invalid wake_hours");
