@@ -7,19 +7,8 @@ Endpoints follow docs/ARCHITECTURE.md::
     POST   /setup
     GET    /login
     POST   /login
-    GET    /settings
-    GET    /settings/geocode
-    POST   /settings/{section}
-    GET    /setup/{step}
-    POST   /setup/{step}
-    POST   /settings/backup
-    POST   /settings/restore
-    POST   /settings/rotate
     GET    /api/hub
     GET    /api/state
-    POST   /api/ai-usage
-    POST   /api/brief
-    POST   /api/tasks
     GET    /display/{page}.png
     GET    /preview
     GET    /preview/{page}.html
@@ -28,6 +17,12 @@ Endpoints follow docs/ARCHITECTURE.md::
     POST   /api/device/telemetry
     GET    /api/device/telemetry
     GET    /api/device/history
+
+Every installed module's push routes (``POST /api/<name>``, e.g. ai-usage,
+brief, tasks) are mounted here at startup from ``app/modules/<id>/routes.py``
+(see the registry loop in :func:`create_app`), and the settings page, the
+setup wizard, and backup/restore/rotate (``GET/POST /settings...``,
+``GET/POST /setup/{step}``) are registered by ``app/settings_pages.py``.
 """
 
 from __future__ import annotations
@@ -41,49 +36,23 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import FormData, UploadFile
-from starlette.formparsers import MultiPartException
 
 from app import __version__
 from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
-from app.backup import (
-    BACKUP_MEDIA_TYPE,
-    MAX_RESTORE_BYTES,
-    RestoreRejected,
-    backup_filename,
-    backup_temp_path,
-    inspect_backup,
-    restore_temp_path,
-)
 from app.config import Env
 from app.db import get_database
-from app.forms import (
-    FormErrors,
-    SectionForm,
-    errors_from_parse,
-    form_errors,
-    parse_section,
-    render_section,
-)
-from app.geocode import (
-    GeocodeFailed,
-    PlaceSearch,
-    clean_query,
-    search as geocode_search,
-)
 from app.hub_config import (
     ADMIN_SESSION_MAX_AGE_SECONDS,
     AlreadyConfigured,
@@ -98,16 +67,13 @@ from app.hub_config import (
     is_private_client_host,
     mint_session_cookie,
     reader_authenticated,
-    require_admin,
-    require_admin_html,
     require_device,
     require_reader,
     require_reader_html,
     require_token,
-    rotate_secrets,
     validate_base_url,
-    write_hub_config,
 )
+from app.httputil import _cap_form_body, _read_capped_body
 from app.legacy import LegacyEnv, import_legacy
 from app.logging_setup import configure_logging, log
 from app.models import (
@@ -120,6 +86,7 @@ from app.modules import Module, ModuleContext
 from app.modules.registry import Registry, load_registry
 from app.renderer.render import Renderer
 from app.settings import SECTIONS, HubSettings, SettingsStore
+from app.settings_pages import register as register_settings_pages
 from app.state import StateService, state_fingerprint
 from app.telemetry import TelemetryStore, TelemetrySummary, utc_now
 from app.timeutil import to_local
@@ -129,42 +96,6 @@ logger = logging.getLogger("app.main")
 #: Matches uvicorn.run's own port in ``main()`` below; there is no
 #: configurable bind host/port setting today.
 DEFAULT_PORT = 8080
-
-#: /setup and /login are the only POST routes with no bearer token: /setup
-#: because that is how the hub's first credential is minted, /login because
-#: it exchanges a credential for a session rather than requiring one
-#: already. POST /setup is further restricted to a private/loopback caller
-#: (see is_private_client_host in hub_config.py) while the hub is
-#: unconfigured; every other route, including /api/device/telemetry, is 503
-#: until then. Cap what either open POST route will buffer in memory before
-#: validation ever runs.
-MAX_OPEN_BODY_BYTES = 64 * 1024
-
-#: How much of a restore upload is copied into DATA_DIR per hop through the
-#: thread pool. Big enough that a 64 MiB file is a few hundred writes, small
-#: enough that the byte counter refuses an oversized upload long before it is
-#: all on disk.
-UPLOAD_CHUNK_BYTES = 256 * 1024
-
-#: The settings sections whose "Save and test" means something: each has a
-#: ``source`` field and an adapter of the same name on ``StateService``
-#: (state.py:StateService.adapters), which is what the test fetches. general
-#: and alert have no source and so no test.
-TESTABLE_SECTIONS: tuple[str, ...] = (
-    "tasks",
-    "calendar",
-    "weather",
-    "ai_usage",
-    "brief",
-    "home",
-    "device",
-)
-
-#: The setup wizard's steps, in the plan's order. Every step is optional and
-#: the last one's "next" is the settings page. The other five sections are
-#: edited there: the wizard asks only for what a fresh hub needs to show
-#: something real.
-WIZARD_STEPS: tuple[str, ...] = ("general", "weather", "calendar", "home")
 
 #: Cap on the two telemetry-origin strings (main.py:post_device_telemetry,
 #: telemetry.py's remote_addr/hub_host columns): plenty for an IPv6 address
@@ -381,290 +312,6 @@ def etag_matches(header: str | None, etag: str) -> bool:
     return False
 
 
-async def _read_capped_body(request: Request) -> bytes:
-    """Read ``request``'s body in chunks, rejecting it once it passes
-    ``MAX_OPEN_BODY_BYTES`` instead of buffering an arbitrarily large one.
-
-    Sets ``request._body`` on the way out (the same attribute
-    ``Request.body()`` caches), so a route that goes on to call
-    ``request.form()`` or ``request.json()`` reuses this read instead of
-    trying to consume the already-drained stream again.
-    """
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > MAX_OPEN_BODY_BYTES:
-            raise HTTPException(status_code=413, detail="body too large")
-        chunks.append(chunk)
-    body = b"".join(chunks)
-    request._body = body  # noqa: SLF001 - see docstring
-    return body
-
-
-async def _cap_form_body(request: Request) -> None:
-    """The Content-Length guard shared by POST /setup and POST /login:
-    ``request.form()`` reads ``request.stream()`` itself, so it cannot be
-    handed ``_read_capped_body``'s bytes directly. When Content-Length is
-    present, reject an oversized body before ``form()`` ever touches the
-    stream; when it is absent (e.g. chunked), read the capped body first so
-    it is cached on ``request._body``, which ``stream()`` (and so ``form()``)
-    reuses.
-    """
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            declared_length = int(content_length)
-        except ValueError:
-            declared_length = None
-        if declared_length is not None and declared_length > MAX_OPEN_BODY_BYTES:
-            raise HTTPException(status_code=413, detail="body too large")
-    else:
-        await _read_capped_body(request)
-
-
-def _cap_restore_length(request: Request) -> None:
-    """The declared-size half of the restore cap, checked before the
-    multipart parser reads a byte.
-
-    Content-Length is a claim, not a fact, so it is only ever a fast refusal:
-    :func:`_stream_upload_to`'s counter is what actually decides. A request
-    with no Content-Length (chunked, most often) is refused outright here
-    instead: ``request.form()`` no longer carries ``max_part_size=
-    MAX_RESTORE_BYTES`` (that only ever raised the *text*-field cap; a
-    starlette 1.6 file part is spooled to disk with no size check of its
-    own), so without a declared length there is nothing to stop the whole
-    body being read into a spooled temp file before the byte counter in
-    :func:`_stream_upload_to` ever sees it.
-    """
-    content_length = request.headers.get("content-length")
-    if content_length is None:
-        raise HTTPException(status_code=411, detail="restore needs a Content-Length")
-    try:
-        declared_length = int(content_length)
-    except ValueError:
-        return
-    if declared_length > MAX_RESTORE_BYTES:
-        raise HTTPException(status_code=413, detail="the uploaded file is too large")
-
-
-async def _stream_upload_to(upload: UploadFile, target: Path) -> int:
-    """Copy ``upload`` into ``target`` a chunk at a time, returning the byte
-    count and raising 413 the moment it passes :data:`MAX_RESTORE_BYTES`.
-
-    The count comes from the bytes actually written, never from
-    ``UploadFile.size`` or a Content-Length: both are the client's word for
-    it. Each write goes through the thread pool, the same rule every other
-    synchronous file write in this module follows.
-    """
-    written = 0
-    with target.open("wb") as handle:
-        while True:
-            chunk = await upload.read(UPLOAD_CHUNK_BYTES)
-            if not chunk:
-                break
-            written += len(chunk)
-            if written > MAX_RESTORE_BYTES:
-                raise HTTPException(status_code=413, detail="the uploaded file is too large")
-            await run_in_threadpool(handle.write, chunk)
-    return written
-
-
-def _delete_quietly(path: Path) -> None:
-    """Remove a temp file, logging rather than raising when it will not go:
-    it runs as a response background task, where an exception would only
-    reach the server log anyway, long after the body was sent."""
-    try:
-        path.unlink(missing_ok=True)
-    except OSError as exc:
-        log(logger, logging.WARNING, "temp file not removed", path=str(path), error=str(exc))
-
-
-def _section_form(
-    hub: "Hub",
-    section: str,
-    *,
-    values: dict[str, Any] | None = None,
-    errors: FormErrors | None = None,
-    search: PlaceSearch | None = None,
-    search_url: str = "/settings/geocode",
-) -> SectionForm:
-    """One section's form, generated from its model (``app/forms.py``).
-
-    ``values`` is what fills the inputs: the stored section by default, or a
-    rejected submission's own values when the page is being re-rendered with
-    its errors, so nobody retypes a whole form because one field was wrong.
-    """
-    model = SECTIONS[section]
-    current = getattr(hub.hub_settings, section)
-    form = render_section(
-        section,
-        model,
-        current.model_dump() if values is None else values,
-        errors=errors,
-    )
-    if section == "weather":
-        # The place search exists only for weather: it is what turns a place
-        # name into the latitude and longitude that section stores.
-        form.search = search if search is not None else PlaceSearch(url=search_url)
-    return form
-
-
-def _settings_forms(hub: "Hub", *, replace: SectionForm | None = None) -> list[SectionForm]:
-    """Every section's form in SECTIONS order, with ``replace`` swapped in for
-    its own section (the one just saved, tested or refused)."""
-    return [
-        replace
-        if replace is not None and replace.section == section
-        else _section_form(hub, section)
-        for section in SECTIONS
-    ]
-
-
-def _settings_html(
-    hub: "Hub",
-    *,
-    error: str | None = None,
-    status_code: int = 200,
-    forms: list[SectionForm] | None = None,
-) -> HTMLResponse:
-    """The settings page: one form per section, then backup, restore and the
-    danger zone, optionally carrying one error line.
-
-    Shared by GET /settings and by the POSTs that refuse a submission (a
-    browser form gets the page back with the reason, not a JSON detail).
-    """
-    config = hub.identity.config
-    assert config is not None
-    template = hub.renderer.environment.get_template("settings.html")
-    html = template.render(
-        name=config.name,
-        error=error,
-        forms=_settings_forms(hub) if forms is None else forms,
-    )
-    return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
-
-
-def _apply_place(values: dict[str, Any], form: FormData) -> None:
-    """Fold a chosen search result into the weather section's values.
-
-    The radio carries ``"<latitude>,<longitude>,<name>"``
-    (``app/geocode.py:Place.value``), split at most twice so a place name with
-    a comma in it survives. A malformed value is ignored rather than raised
-    on: it can only come from a hand-made request, and the three fields it
-    would have filled are right there to type into.
-    """
-    raw = form.get("place")
-    if not isinstance(raw, str) or not raw.strip():
-        return
-    parts = raw.strip().split(",", 2)
-    if len(parts) != 3:
-        return
-    latitude, longitude, name = parts
-    values["latitude"] = latitude.strip()
-    values["longitude"] = longitude.strip()
-    values["location_name"] = name.strip()
-
-
-async def _save_section(
-    hub: "Hub", section: str, form: FormData, *, search_url: str
-) -> SectionForm | None:
-    """Validate and store one settings section, then reload the hub.
-
-    Returns ``None`` when it saved. Otherwise it returns that section's form
-    carrying what was submitted plus the messages against the inputs that
-    caused them: the caller re-renders it with a 422, so a browser sees
-    exactly which field it has to fix.
-    """
-    model = SECTIONS[section]
-    current = getattr(hub.hub_settings, section)
-    parsed = parse_section(model, form, current)
-    if section == "weather":
-        _apply_place(parsed.data, form)
-    if parsed.errors:
-        return _section_form(
-            hub,
-            section,
-            values=parsed.data,
-            errors=errors_from_parse(parsed),
-            search_url=search_url,
-        )
-    try:
-        value = model.model_validate(parsed.data)
-    except ValidationError as exc:
-        return _section_form(
-            hub,
-            section,
-            values=parsed.data,
-            errors=form_errors(model, exc),
-            search_url=search_url,
-        )
-    await run_in_threadpool(hub.settings_store.save, section, value)
-    # The snapshot every adapter, page and route reads is rebuilt here: that
-    # is what makes the next render use what was just saved.
-    await hub.reload()
-    log(logger, logging.INFO, "settings section saved", section=section)
-    return None
-
-
-async def _tested_section_form(hub: "Hub", section: str, *, search_url: str) -> SectionForm:
-    """The section's form with one forced adapter fetch reported on it.
-
-    That is what "Save and test" is for: the Outcome's status and error
-    string (``adapters/base.py:Outcome``) are what tell the owner an ICS URL
-    or a Home Assistant token is wrong, on the page, before they move on.
-    """
-    form = _section_form(hub, section, search_url=search_url)
-    adapter = hub.state_service.adapters[section]
-    outcome = await adapter.get(force=True)
-    form.test_status = outcome.status.value
-    form.test_error = outcome.error or ""
-    log(logger, logging.INFO, "settings section tested", section=section, status=form.test_status)
-    return form
-
-
-async def _place_search(hub: "Hub", raw_query: str, url: str) -> PlaceSearch:
-    """Run the weather section's place search, never raising.
-
-    An upstream failure is one line under the Find box, never a 500: the
-    search is a convenience and the coordinates can always be typed in. The
-    query itself is never logged, here or in ``app/geocode.py``.
-    """
-    query = clean_query(raw_query)
-    if not query:
-        return PlaceSearch(url=url)
-    try:
-        places = await geocode_search(query, hub.env.http_timeout_seconds)
-    except GeocodeFailed as exc:
-        return PlaceSearch(url=url, query=query, error=str(exc))
-    if not places:
-        return PlaceSearch(url=url, query=query, error="No place matched that name.")
-    return PlaceSearch(url=url, query=query, places=places)
-
-
-def _wizard_next(step: str) -> str:
-    """Where "Skip" and a saved step go: the next step, then /settings."""
-    index = WIZARD_STEPS.index(step)
-    if index + 1 < len(WIZARD_STEPS):
-        return f"/setup/{WIZARD_STEPS[index + 1]}"
-    return "/settings"
-
-
-def _wizard_html(
-    hub: "Hub", form: SectionForm, step: str, *, status_code: int = 200
-) -> HTMLResponse:
-    """One wizard step: the same section form the settings page renders,
-    alone, with "Save and continue" and a "Skip" link to the next step."""
-    template = hub.renderer.environment.get_template("wizard.html")
-    html = template.render(
-        form=form,
-        step_number=WIZARD_STEPS.index(step) + 1,
-        step_total=len(WIZARD_STEPS),
-        skip_url=_wizard_next(step),
-    )
-    return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
-
-
 def _validation_problems(error: ValidationError) -> list[dict[str, str]]:
     """Pydantic errors flattened to something JSON-safe and short."""
     return [
@@ -773,6 +420,11 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     app.state.hub = Hub(env, hub_settings)
     if env.static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(env.static_dir)), name="static")
+
+    # The settings page, the setup wizard, and backup/restore/rotate
+    # (app/settings_pages.py) close over this same env, the way every route
+    # left in this module does.
+    register_settings_pages(app, env)
 
     # -- health ----------------------------------------------------------
     #: A healthz-only word for an adapter that has never fetched yet.
@@ -1165,269 +817,6 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
             secure=config.base_url.startswith("https"),
         )
         return response
-
-    # -- settings ----------------------------------------------------------
-    @app.get(
-        "/settings", response_class=HTMLResponse, dependencies=[Depends(require_admin_html)]
-    )
-    async def settings_page(request: Request) -> HTMLResponse:
-        """Every section as its own form, then backup, restore and rotate.
-
-        ``?saved=<section>`` is what a save redirects back to (together with
-        the ``#<section>`` fragment, which is what puts the browser back
-        where it was): the notice cannot ride on the redirect any other way
-        without a session store, and this one says nothing a query string
-        should not carry.
-        """
-        hub: Hub = app.state.hub
-        forms = _settings_forms(hub)
-        saved = request.query_params.get("saved", "")
-        for form in forms:
-            if form.section == saved:
-                form.saved = True
-        return _settings_html(hub, forms=forms)
-
-    @app.get(
-        "/settings/geocode",
-        response_class=HTMLResponse,
-        dependencies=[Depends(require_admin_html)],
-    )
-    async def settings_geocode(request: Request) -> HTMLResponse:
-        """The settings page with the weather section's search results on it.
-
-        A plain GET form with one ``q`` field, so the whole flow is a link
-        and a page: no JavaScript, and nothing is saved until the admin picks
-        a result and presses Save.
-        """
-        hub: Hub = app.state.hub
-        search = await _place_search(
-            hub, request.query_params.get("q", ""), "/settings/geocode"
-        )
-        weather = _section_form(hub, "weather", search=search)
-        return _settings_html(hub, forms=_settings_forms(hub, replace=weather))
-
-    @app.post("/settings/backup", dependencies=[Depends(require_admin)])
-    async def post_settings_backup() -> Response:
-        """Download the whole hub as one SQLite file.
-
-        ``VACUUM INTO`` writes a fresh consistent copy next to the live
-        database (never a plain file copy: the live one has a WAL beside it),
-        the copy is streamed out as an attachment, and the background task
-        removes it once the body has been sent. ``no-store`` because the file
-        carries the session secret, every secret hash and any Home Assistant
-        token: it is a credential, and a proxy or a browser cache has no
-        business keeping a copy of it.
-        """
-        hub: Hub = app.state.hub
-        target = backup_temp_path(env.data_dir)
-        await run_in_threadpool(hub.db.backup_to, target)
-        filename = backup_filename(datetime.now(dt_timezone.utc))
-        log(logger, logging.INFO, "backup written", file=filename)
-        return FileResponse(
-            target,
-            media_type=BACKUP_MEDIA_TYPE,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Cache-Control": "no-store",
-            },
-            background=BackgroundTask(_delete_quietly, target),
-        )
-
-    @app.post("/settings/restore", dependencies=[Depends(require_admin)])
-    async def post_settings_restore(request: Request) -> Response:
-        """Replace the hub's database with an uploaded backup.
-
-        The upload lands in DATA_DIR under its own name and is validated
-        there (``app/backup.py``), so a file this build cannot restore is
-        refused with the live database still in place and untouched: the
-        answer is the settings page again, 422, with the reason on it.
-
-        A file that passes is swapped in under ``Hub.identity_lock``, in the
-        order ``Database.replace_file`` documents: close the connection,
-        unlink the WAL and shm sidecars, ``os.replace``, reopen, migrate.
-        Closing first is not tidiness - on Windows ``os.replace`` over a file
-        with an open sqlite connection fails outright - and it is why a
-        restore cannot be a copy over the live file. Then ``Hub.reload()``
-        rebuilds the identity from the restored ``hub`` row, and the response
-        sends the browser to /login with its cookie deleted: the session
-        secret is the backup's now, so every cookie this hub ever signed,
-        including the admin's own, is dead.
-        """
-        hub: Hub = app.state.hub
-        _cap_restore_length(request)
-        previous = hub.identity.config
-        previous_device_key = "" if previous is None else previous.device_key_sha256
-        try:
-            async with request.form() as form:
-                upload = form.get("file")
-                if not isinstance(upload, UploadFile) or not upload.filename:
-                    return _settings_html(
-                        hub, error="Choose a backup file to restore.", status_code=422
-                    )
-                if not str(form.get("confirm", "")).strip():
-                    return _settings_html(
-                        hub,
-                        error="Tick the confirmation box: a restore replaces this hub's "
-                        "database, secrets and all.",
-                        status_code=422,
-                    )
-                temp = restore_temp_path(env.data_dir)
-                try:
-                    size = await _stream_upload_to(upload, temp)
-                    facts = await run_in_threadpool(inspect_backup, temp)
-                except RestoreRejected as exc:
-                    temp.unlink(missing_ok=True)
-                    log(logger, logging.WARNING, "restore refused", reason=str(exc))
-                    return _settings_html(hub, error=str(exc), status_code=422)
-                except BaseException:
-                    temp.unlink(missing_ok=True)
-                    raise
-        except MultiPartException as exc:
-            raise HTTPException(status_code=413, detail="the uploaded file is too large") from exc
-
-        async with hub.identity_lock:
-            await run_in_threadpool(hub.db.replace_file, temp)
-            await hub.reload()
-        device_key_changed = facts.device_key_sha256 != previous_device_key
-        log(logger, logging.WARNING, "database restored", bytes=size, schema=facts.schema_version)
-        if device_key_changed:
-            log(
-                logger,
-                logging.WARNING,
-                "the restored backup carries a different device key: the flashed device "
-                "stops fetching until its hub key is set to the one from this backup",
-            )
-        # The query is what login.html turns into a notice: the two hashes are
-        # only knowable after the upload, so the warning cannot sit on the
-        # confirmation form with the other two.
-        location = "/login?restored=1" + ("&device_key_changed=1" if device_key_changed else "")
-        response = RedirectResponse(location, status_code=303)
-        response.delete_cookie(COOKIE_NAME, path="/")
-        return response
-
-    @app.post("/settings/rotate", dependencies=[Depends(require_admin)])
-    async def post_settings_rotate(request: Request) -> Response:
-        """Mint a new token, device key and session secret, shown once.
-
-        The old token and device key stop verifying as soon as the row is
-        written, and the new session secret kills every cookie this hub ever
-        signed. The response therefore carries a fresh admin cookie minted
-        with the new secret: it replaces the dead one under the same name and
-        path (which is how a cookie is deleted), so the admin reading the two
-        secrets off this page is not locked out of the page they are on.
-        """
-        hub: Hub = app.state.hub
-        await _cap_form_body(request)
-        form = await request.form()
-        if not str(form.get("confirm", "")).strip():
-            return _settings_html(
-                hub,
-                error="Tick the confirmation box: rotating replaces both secrets and "
-                "signs everyone out.",
-                status_code=422,
-            )
-        config = hub.identity.config
-        assert config is not None
-        async with hub.identity_lock:
-            replacement, token, device_key = rotate_secrets(config)
-            await run_in_threadpool(write_hub_config, hub.db, replacement)
-            await hub.reload()
-        log(logger, logging.WARNING, "hub secrets rotated", name=replacement.name)
-        template = hub.renderer.environment.get_template("rotated.html")
-        html = template.render(
-            name=replacement.name,
-            base_url=replacement.base_url,
-            token=token,
-            device_key=device_key,
-        )
-        # Both secrets, shown once: never cache or store this page.
-        response = HTMLResponse(
-            html, headers={"Cache-Control": "no-store", "Pragma": "no-cache"}
-        )
-        response.set_cookie(
-            COOKIE_NAME,
-            mint_session_cookie(replacement.session_secret, time.time(), "admin"),
-            max_age=ADMIN_SESSION_MAX_AGE_SECONDS,
-            httponly=True,
-            samesite="lax",
-            path="/",
-            secure=replacement.base_url.startswith("https"),
-        )
-        return response
-
-    @app.post("/settings/{section}", dependencies=[Depends(require_admin)])
-    async def post_settings_section(section: str, request: Request) -> Response:
-        """Save one settings section, then reload the hub.
-
-        Declared after /settings/backup, /settings/restore and
-        /settings/rotate: routes match in declaration order, so the three
-        literal paths have to be registered before this one can swallow them.
-
-        A good submission redirects (303) back to the section it came from,
-        which is what stops a reload of the page from re-posting it. A bad
-        one comes back as the same page, 422, with each message against the
-        input that caused it. "Save and test" saves the same way and then
-        runs one forced fetch of the section's adapter, so the answer to "is
-        this ICS URL right" is on the page rather than on the next render.
-        """
-        hub: Hub = app.state.hub
-        if section not in SECTIONS:
-            raise HTTPException(status_code=404, detail=f"unknown settings section {section}")
-        await _cap_form_body(request)
-        form = await request.form()
-        refused = await _save_section(hub, section, form, search_url="/settings/geocode")
-        if refused is not None:
-            return _settings_html(
-                hub, forms=_settings_forms(hub, replace=refused), status_code=422
-            )
-        if str(form.get("action", "")) == "test" and section in TESTABLE_SECTIONS:
-            tested = await _tested_section_form(hub, section, search_url="/settings/geocode")
-            return _settings_html(hub, forms=_settings_forms(hub, replace=tested))
-        return RedirectResponse(f"/settings?saved={section}#{section}", status_code=303)
-
-    # -- setup wizard ------------------------------------------------------
-    @app.get(
-        "/setup/{step}",
-        response_class=HTMLResponse,
-        dependencies=[Depends(require_admin_html)],
-    )
-    async def get_setup_step(step: str, request: Request) -> HTMLResponse:
-        """One wizard step: that section's form and nothing else.
-
-        ``require_admin_html`` is what makes an unconfigured hub send a
-        browser back to /setup (SetupRedirect) and an unauthenticated or
-        reader browser to /login: the wizard edits the same settings the
-        settings page does and is guarded exactly like it.
-        """
-        hub: Hub = app.state.hub
-        if step not in WIZARD_STEPS:
-            raise HTTPException(status_code=404, detail=f"unknown setup step {step}")
-        search = None
-        if step == "weather":
-            search = await _place_search(hub, request.query_params.get("q", ""), "/setup/weather")
-        form = _section_form(hub, step, search=search, search_url="/setup/weather")
-        return _wizard_html(hub, form, step)
-
-    @app.post("/setup/{step}", dependencies=[Depends(require_admin)])
-    async def post_setup_step(step: str, request: Request) -> Response:
-        """Save a wizard step and move to the next one.
-
-        The save is the settings page's save: same parser, same validation,
-        same row, same reload. Only where it goes afterwards differs, and
-        "Save and test" stays on the step so the result can be read.
-        """
-        hub: Hub = app.state.hub
-        if step not in WIZARD_STEPS:
-            raise HTTPException(status_code=404, detail=f"unknown setup step {step}")
-        await _cap_form_body(request)
-        form = await request.form()
-        refused = await _save_section(hub, step, form, search_url="/setup/weather")
-        if refused is not None:
-            return _wizard_html(hub, refused, step, status_code=422)
-        if str(form.get("action", "")) == "test" and step in TESTABLE_SECTIONS:
-            tested = await _tested_section_form(hub, step, search_url="/setup/weather")
-            return _wizard_html(hub, tested, step)
-        return RedirectResponse(_wizard_next(step), status_code=303)
 
     # -- preview ---------------------------------------------------------
     @app.get("/")

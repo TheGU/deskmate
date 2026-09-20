@@ -26,7 +26,8 @@ from app.adapters.device import (
 )
 from app.config import Env
 from app.db import Database, get_database
-from app.main import MAX_OPEN_BODY_BYTES, create_app
+from app.httputil import MAX_OPEN_BODY_BYTES
+from app.main import create_app
 from app.models import (
     DEVICE_STALE_AFTER_SECONDS,
     AdapterStatus,

@@ -4,9 +4,10 @@ The hub keeps everything in ``DATA_DIR/deskmate.sqlite`` (see ``app/db.py``),
 so a backup is one file to download and a restore is one file to put back.
 This module holds the parts that are pure or plain synchronous I/O - naming a
 temp file, validating an uploaded one - so a test can drive every rule with
-nothing but a temp directory. The routes in ``app/main.py`` own the HTTP
-shape, and ``Database.backup_to`` / ``Database.replace_file`` own the lock
-discipline.
+nothing but a temp directory. The routes in ``app/settings_pages.py`` own the
+HTTP shape (the restore upload's own byte-counted stream and Content-Length
+cap live in ``app/httputil.py``), and ``Database.backup_to`` /
+``Database.replace_file`` own the lock discipline.
 
 Why validate before swapping rather than after: the swap is destructive (the
 live file is replaced, not merged), and the only honest way to refuse a file

@@ -38,7 +38,8 @@ from fastapi.testclient import TestClient
 from app.config import REPO_ROOT, Env
 from app.db import Database
 from app.hub_config import ADMIN_SESSION_MAX_AGE_SECONDS, COOKIE_NAME, ClaimedSecrets, session_role
-from app.main import MAX_OPEN_BODY_BYTES, create_app, etag_matches
+from app.httputil import MAX_OPEN_BODY_BYTES
+from app.main import create_app, etag_matches
 from app.renderer.palette import DISPLAY_SIZE
 from app.renderer.render import PAGES
 from tests.conftest import open_png
