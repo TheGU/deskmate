@@ -68,27 +68,37 @@ no logic and no credentials on the device.
 
 Confirmed:
 
-- Pages: today, agenda, weather, brief, system, alert. Rendered by Jinja2 and
-  headless Chromium at 4x, downsampled, then quantized by Pillow to the six
-  panel colors with no dithering (dithering was tested on the panel on
-  2026-09-05 and rejected). Every image is exactly 800x480 and tests enforce
-  size, PNG validity and palette.
+- Pages: today, agenda, weather, brief, system, alert, each a module
+  (`app/modules/<id>/`) that brings its own settings, adapter, template and
+  fixture; a third party can add one without touching the hub's own code
+  (see docs/MODULES.md). An optional Home Assistant dashboard module
+  (`ha_dashboard`, off by default) screenshots a Lovelace view the owner
+  built straight to the panel instead of rendering a template
+  (docs/HA-DASHBOARD.md). Rendered by Jinja2 and headless Chromium at 4x,
+  downsampled, then quantized by Pillow to the six panel colors with no
+  dithering (dithering was tested on the panel on 2026-09-05 and rejected).
+  Every image is exactly 800x480 and tests enforce size, PNG validity and
+  palette.
 - Rendering is deterministic: bundled fonts only, no network at render time, no
   clock that changes every minute (a small "Updated HH:MM" instead).
 - No partial refresh, no animation, no gradients, shadows, grays or tiny text.
   The panel needs a full 32 s cycle per change, so a page is a still.
 - Data is never invented. An adapter that is unset or failing makes the page
   say "unknown" or "unavailable".
-- Hub endpoints: healthz, api/state, display/{page}.png with ETag and 304,
-  preview pages, setup and hub info, AI usage/brief/tasks push, alert set and
-  clear, device telemetry in and history out. `/setup` needs no token, only
-  a caller on this hub's own loopback or private network, and is first come
-  first served (no claim code). Reads need the bearer token, the device key,
-  or a browser session from `/login`; writes (the three pushes and the alert
-  endpoints) need the bearer token only; device telemetry needs the device
-  key or the token. Telemetry (battery, temperature, humidity, Wi-Fi, power
-  state, wake cause) is stored in SQLite with 30-day retention and charted
-  on the System page. Each POST also records who sent it and which hub URL
+- Hub endpoints: healthz, api/state, display/{page}.png (by page id or by
+  its 0-based index) with ETag and 304, preview pages, setup and hub info,
+  AI usage/brief/tasks push, alert set and clear, device telemetry in and
+  history out, plus the settings page (`/settings`, admin only) for every
+  section, the Modules section (enable, disable, order), backup, restore
+  and rotate. `/setup` needs no token, only a caller on this hub's own
+  loopback or private network, and is first come first served (no claim
+  code). Reads need the bearer token, the device key, or a browser session
+  from `/login`; writes (the three pushes, the alert endpoints and the
+  settings routes) need the bearer token or an admin session only; device
+  telemetry needs the device key or the token. One SQLite database
+  (`data/deskmate.sqlite`) holds the hub's identity, every setting, pushed
+  datasets and telemetry (battery, temperature, humidity, Wi-Fi, power
+  state, wake cause; 30-day retention, charted on the System page). Each POST also records who sent it and which hub URL
   they used (remote address, Host header); the System page's HUB column
   shows those as DEVICE IP and HUB URL, next to an age for every pushed or
   fetched dataset and the device's own last sync. Both fields also reach
@@ -99,10 +109,11 @@ Confirmed:
   Flex and Noto Sans Thai were replaced on 2026-09-05 after the owner asked
   for one font. Thai wrapping with real Thai content has not been checked on
   the panel yet.
-- Terminology: hub (server), device or paper (E1002), page, adapter, source
-  (fixture or live), fixture, battery mode, always-on, DESK panel (the device
-  section of the System page), HUB column (the System page's dataset ages and
-  device origin), alert.
+- Terminology: hub (server), device or paper (E1002), module (a page and the
+  datasets behind it, packaged together), page, adapter, source (fixture or
+  live), fixture, battery mode, always-on, DESK panel (the device section of
+  the System page), HUB column (the System page's dataset ages and device
+  origin), alert.
 
 Decided: the PC-side feed reaches the hub over three bearer-token HTTP push
 endpoints (`/api/ai-usage`, `/api/brief`, `/api/tasks`); see
