@@ -382,7 +382,8 @@ yet, and the firmware reports the hole rather than a made up reading. A hole is
 stored as `NULL` and becomes a gap in the chart, never an interpolated point.
 
 Responses: `202` with `{"accepted": true, "received_at": "<local ISO>",
-"page_count": 5, "pages": ["today", "agenda", "weather", "brief", "system"]}`,
+"page_count": 5, "pages": ["today", "agenda", "weather", "brief", "system"],
+"refresh_minutes": 30, "telemetry_minutes": 5, "wake_hours": [8, 12, 17]}`,
 or `400` with `{"accepted": false, "error": ..., "detail": [...]}` when the body
 is not JSON or fails validation.
 
@@ -394,6 +395,33 @@ URLs from them, so enabling, disabling or reordering a module on `/settings`
 reaches the panel on its next post, with no reflash. Until a session has had
 one response the device knows its index but not the id, which is why `page`
 may be null and `page_index` is there to resolve it.
+
+`refresh_minutes`, `telemetry_minutes` and `wake_hours` are the device's
+refresh schedule, read from the device section's settings of the same name
+(default 30, 5 and `[8, 12, 17]`; see docs/SETTINGS.md). Like `page_count`
+and `pages`, the device parses these out of every response into restorable
+globals (`firmware/e1002.yaml`) and applies them right away, the same
+defensive way it reads `page_count`: a field that is missing, the wrong
+type, or out of the hub's own bounds leaves the current value alone rather
+than zeroing it.
+
+`refresh_minutes` and `telemetry_minutes` become the two `interval:`
+components' update interval (`set_update_interval`). ESPHome's
+`PollingComponent::set_update_interval` only changes the value the poller
+reads on its *next* tick; picking up a shorter period immediately, instead
+of after the old one finishes, needs the poller stopped and restarted
+(`stop_poller`/`start_poller`), which resets its phase - a device that
+just started posting telemetry every 5 minutes on the hour can land on a
+different offset the moment the schedule changes.
+
+`wake_hours` is stored as a single bitmask (bit `h` set means wake at local
+hour `h`), not as a list, so it is validated as one number (non-zero, at
+most 8 bits, nothing above bit 23) and read by the battery wake slot lambda
+instead of the compiled `wake_hours` substitution, which now only seeds
+that bitmask on a fresh flash.
+
+A change on `/settings` reaches the device on its next telemetry post, with
+no reflash; see docs/FLASHING.md.
 
 ### Reading it back
 

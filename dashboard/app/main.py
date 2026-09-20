@@ -756,12 +756,22 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         # so enabling, disabling or reordering a module here reaches it on its
         # next post with no reflash. ``alert`` is never in the list.
         page_ids = hub.registry.page_ids()
+        # refresh_minutes/telemetry_minutes/wake_hours: the device's refresh
+        # schedule, moved out of firmware/e1002.yaml's compiled substitutions
+        # (docs/plan finding 11) and into this section, so a saved change
+        # reaches the device on its very next post with no reflash. The
+        # on_response lambda in firmware/e1002.yaml parses these three
+        # alongside page_count/pages.
+        device_settings = hub.hub_settings.device
         return JSONResponse(
             {
                 "accepted": True,
                 "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
                 "page_count": len(page_ids),
                 "pages": list(page_ids),
+                "refresh_minutes": device_settings.refresh_minutes,
+                "telemetry_minutes": device_settings.telemetry_minutes,
+                "wake_hours": device_settings.wake_hours_list,
             },
             status_code=202,
         )

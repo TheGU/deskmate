@@ -763,6 +763,32 @@ def test_system_page_drops_the_home_room_rows(
 
 
 # ---------------------------------------------------------------------------
+# DeviceSettings.wake_hours validator
+# ---------------------------------------------------------------------------
+def test_wake_hours_defaults_to_three_slots() -> None:
+    settings = DeviceSettings()
+    assert settings.wake_hours == "8, 12, 17"
+    assert settings.wake_hours_list == [8, 12, 17]
+
+
+def test_wake_hours_sorts_and_deduplicates() -> None:
+    settings = DeviceSettings(wake_hours="17, 8, 8, 12")
+    assert settings.wake_hours == "8, 12, 17"
+    assert settings.wake_hours_list == [8, 12, 17]
+
+
+@pytest.mark.parametrize("value", ["24", "-1", "", "a", "1,2,3,4,5,6,7,8,9"])
+def test_wake_hours_rejects_out_of_bounds_input(value: str) -> None:
+    with pytest.raises(Exception):
+        DeviceSettings(wake_hours=value)
+
+
+def test_wake_hours_accepts_the_maximum_of_eight_hours() -> None:
+    settings = DeviceSettings(wake_hours="0,1,2,3,4,5,6,7")
+    assert settings.wake_hours_list == [0, 1, 2, 3, 4, 5, 6, 7]
+
+
+# ---------------------------------------------------------------------------
 # endpoints
 # ---------------------------------------------------------------------------
 class _DeviceKeyClient:
@@ -891,6 +917,33 @@ def test_post_telemetry_without_power_fields_is_still_accepted(device_client: _D
     assert latest["battery_mode"] is None
     assert latest["usb_present"] is None
     assert latest["charge_state"] is None
+
+
+def test_post_telemetry_response_carries_the_schedule_defaults(device_client: _DeviceKeyClient) -> None:
+    """docs/plan finding 11: the response is where the device learns the
+    refresh schedule now, next to page_count/pages."""
+    body = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD).json()
+    assert body["refresh_minutes"] == 30
+    assert body["telemetry_minutes"] == 5
+    assert body["wake_hours"] == [8, 12, 17]
+
+
+def test_post_telemetry_response_reflects_a_saved_schedule(device_client: _DeviceKeyClient) -> None:
+    """Saving the device section changes the very next response, with no
+    reflash: this is the whole point of moving the schedule off compiled
+    substitutions."""
+    hub = device_client.app.state.hub
+    hub.settings_store.save(
+        "device",
+        DeviceSettings(refresh_minutes=15, telemetry_minutes=2, wake_hours="22, 6, 6, 9"),
+    )
+    asyncio.run(hub.reload())
+
+    body = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD).json()
+    assert body["refresh_minutes"] == 15
+    assert body["telemetry_minutes"] == 2
+    # sorted ascending and de-duplicated
+    assert body["wake_hours"] == [6, 9, 22]
 
 
 def test_post_telemetry_stores_and_returns_the_wake_cause(device_client: _DeviceKeyClient) -> None:

@@ -147,10 +147,22 @@ Until the first `POST /api/ai-usage`, `push` shows `unavailable`.
 | Source | `store` | `store` or `fixture`. |
 | Retention days | `30` | How many days of posted telemetry are kept. |
 | TTL seconds | `60` | How long the latest summary is cached. |
+| Refresh minutes | `30` | How often the device asks the hub for a fresh panel image. Sent to the device on its next telemetry post and applied without a reflash (5 to 240). |
+| Telemetry minutes | `5` | How often the device posts a telemetry sample. Applied the same way (1 to 60). |
+| Wake hours | `8, 12, 17` | Local hours the device wakes at on battery power, comma separated (0 to 23, 1 to 8 hours). Applied the same way. |
 
 `store` reports `unavailable` (System page: "NO DEVICE DATA YET") until the
 E1002 posts its first sample; this is the honest production setting, since
 `fixture` would otherwise hide a device that never came online.
+
+Refresh minutes, Telemetry minutes and Wake hours used to be
+`firmware/e1002.yaml` substitutions, compiled in and only changed by a
+reflash. They are now this section's settings instead: the telemetry POST
+response carries them (docs/DATA-SOURCES.md, "Device telemetry"), and the
+device stores whatever it was last told in restorable globals and applies
+it right away. The compiled substitutions still exist, as the defaults a
+freshly flashed device uses before its first telemetry post; see
+docs/FLASHING.md.
 
 **Alert** (`alert`)
 
