@@ -16,8 +16,9 @@ from app import __version__
 from app.adapters.calendar import build_calendar_adapter
 from app.models import CalendarBlock
 from app.modules import DatasetSpec, Module, PageSpec
+from app.modules.agenda.page import agenda_context, agenda_flag
 from app.modules.calendar.settings import SECTION as CALENDAR_SECTION, CalendarSettings
-from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, agenda_context, agenda_flag
+from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
 #: The demo data this module falls back to on ``source: fixture``.
 FIXTURE: Path = Path(__file__).parent / "fixtures" / "calendar.json"

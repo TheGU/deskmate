@@ -13,9 +13,10 @@ from app import __version__
 from app.adapters.ai_brief import build_brief_adapter
 from app.models import BriefBlock
 from app.modules import DatasetSpec, Module, PageSpec
+from app.modules.brief.page import brief_context, brief_flag
 from app.modules.brief.routes import build_router
 from app.modules.brief.settings import SECTION, BriefSettings
-from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, brief_context, brief_flag
+from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
 #: The demo data this module falls back to on ``source: fixture``.
 FIXTURE: Path = Path(__file__).parent / "fixtures" / "brief.json"

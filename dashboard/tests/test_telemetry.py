@@ -39,9 +39,9 @@ from app.models import (
 )
 from app.modules.device.settings import DeviceSettings
 from app.modules.system import DEVICE_FIXTURE
+from app.modules.system.page import device_panel, power_label, system_context
 from app.renderer.chart import build_chart
 from app.settings import HubSettings
-from app.view import device_panel, power_label, system_context
 from app.telemetry import (
     TelemetryStore,
     TelemetrySummary,

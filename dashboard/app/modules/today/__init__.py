@@ -15,7 +15,8 @@ from pathlib import Path
 
 from app import __version__
 from app.modules import Module, PageSpec
-from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, today_context, today_flag
+from app.modules.today.page import today_context, today_flag
+from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
 MODULE = Module(
     id="today",

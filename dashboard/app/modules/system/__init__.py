@@ -19,7 +19,8 @@ from app.models import DeviceBlock, HomeBlock
 from app.modules import DatasetSpec, Module, PageSpec
 from app.modules.device.settings import SECTION as DEVICE_SECTION
 from app.modules.home.settings import SECTION as HOME_SECTION, HomeSettings
-from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, system_context, system_flag
+from app.modules.system.page import system_context, system_flag
+from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
 #: The demo data ``home`` and ``device`` fall back to on ``source: fixture``.
 HOME_FIXTURE: Path = Path(__file__).parent / "fixtures" / "home.json"
