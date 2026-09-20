@@ -779,15 +779,23 @@ def test_wake_hours_sorts_and_deduplicates() -> None:
     assert settings.wake_hours_list == [8, 12, 17]
 
 
-@pytest.mark.parametrize("value", ["24", "-1", "", "a", "1,2,3,4,5,6,7,8,9"])
+@pytest.mark.parametrize("value", ["24", "-1", "", "a"])
 def test_wake_hours_rejects_out_of_bounds_input(value: str) -> None:
     with pytest.raises(Exception):
         DeviceSettings(wake_hours=value)
 
 
-def test_wake_hours_accepts_the_maximum_of_eight_hours() -> None:
-    settings = DeviceSettings(wake_hours="0,1,2,3,4,5,6,7")
-    assert settings.wake_hours_list == [0, 1, 2, 3, 4, 5, 6, 7]
+def test_wake_hours_accepts_all_twenty_four_hours() -> None:
+    settings = DeviceSettings(
+        wake_hours="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+    )
+    assert settings.wake_hours_list == list(range(24))
+
+
+def test_wake_hours_accepts_the_owners_hourly_schedule() -> None:
+    settings = DeviceSettings(wake_hours="6,7,8,9,10,11,12,13,14,15,16,17,18")
+    assert settings.wake_hours == "6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
+    assert settings.wake_hours_list == [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
 
 
 # ---------------------------------------------------------------------------

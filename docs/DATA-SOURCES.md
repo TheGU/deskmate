@@ -388,10 +388,10 @@ just started posting telemetry every 5 minutes on the hour can land on a
 different offset the moment the schedule changes.
 
 `wake_hours` is stored as a single bitmask (bit `h` set means wake at local
-hour `h`), not as a list, so it is validated as one number (non-zero, at
-most 8 bits, nothing above bit 23) and read by the battery wake slot lambda
-instead of the compiled `wake_hours` substitution, which now only seeds
-that bitmask on a fresh flash.
+hour `h`), not as a list, so it is validated as one number (non-zero,
+nothing above bit 23, any of the 24 hours) and read by the battery wake
+slot lambda instead of the compiled `wake_hours` substitution, which now
+only seeds that bitmask on a fresh flash.
 
 A change on `/settings` reaches the device on its next telemetry post, with
 no reflash; see docs/FLASHING.md.

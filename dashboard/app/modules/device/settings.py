@@ -77,7 +77,7 @@ class DeviceSettings(BaseModel):
         max_length=64,
         description=(
             "Local hours the device wakes at while running on battery, comma "
-            "separated (0 to 23, 1 to 8 hours, for example \"8, 12, 17\"). "
+            "separated (0 to 23, any of the 24 hours, for example \"8, 12, 17\"). "
             "Applied on the device's next telemetry post, no reflash."
         ),
     )
@@ -96,8 +96,8 @@ class DeviceSettings(BaseModel):
             if hour < 0 or hour > 23:
                 raise ValueError("wake_hours must list hours between 0 and 23")
         hours = sorted(set(hours))
-        if not (1 <= len(hours) <= 8):
-            raise ValueError("wake_hours must list 1 to 8 distinct hours")
+        if not (1 <= len(hours) <= 24):
+            raise ValueError("wake_hours must list 1 to 24 distinct hours")
         return ", ".join(str(hour) for hour in hours)
 
     @property

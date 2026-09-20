@@ -146,7 +146,7 @@ Until the first `POST /api/ai-usage`, `push` shows `unavailable`.
 | TTL seconds | `60` | How long the latest summary is cached. |
 | Refresh minutes | `30` | How often the device asks the hub for a fresh panel image. Sent to the device on its next telemetry post and applied without a reflash (5 to 240). |
 | Telemetry minutes | `5` | How often the device posts a telemetry sample. Applied the same way (1 to 60). |
-| Wake hours | `8, 12, 17` | Local hours the device wakes at on battery power, comma separated (0 to 23, 1 to 8 hours). Applied the same way. |
+| Wake hours | `8, 12, 17` | Local hours the device wakes at on battery power, comma separated (0 to 23, any of the 24 hours). Applied the same way. More wake hours cost more battery: each wake is roughly two to three minutes of radio time. |
 
 `store` reports `unavailable` (System page: "NO DEVICE DATA YET") until the
 E1002 posts its first sample; this is the honest production setting, since
