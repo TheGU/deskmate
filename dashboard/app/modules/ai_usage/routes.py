@@ -42,7 +42,7 @@ def build_router(context: ModuleContext) -> APIRouter:
             "stored": DATASET,
             "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
             "count": len(payload.providers),
-            "effective_source": configured,
+            "source": configured,
         }
         warning = push_warning(DATASET, configured)
         if warning is not None:

@@ -29,8 +29,9 @@ from app import geocode
 from app.config import REPO_ROOT, Env
 from app.geocode import GEOCODING_URL, MAX_QUERY_LENGTH, RESULT_COUNT, SEARCH_FAILED
 from app.hub_config import COOKIE_NAME, ClaimedSecrets
-from app.main import WIZARD_STEPS, create_app
+from app.main import create_app
 from app.settings import SECTIONS, HubSettings
+from app.settings_pages import WIZARD_STEPS
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 

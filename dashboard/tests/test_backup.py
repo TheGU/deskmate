@@ -41,7 +41,8 @@ from app.backup import (
 from app.config import REPO_ROOT, Env
 from app.db import DB_SCHEMA_VERSION, Database, get_database
 from app.hub_config import COOKIE_NAME, ClaimedSecrets, claim_hub, session_role, write_hub_config
-from app.main import _stream_upload_to, create_app
+from app.httputil import _stream_upload_to
+from app.main import create_app
 from app.modules.ai_usage.settings import AIUsageSettings
 from app.modules.brief.settings import BriefSettings
 from app.modules.calendar.settings import CalendarSettings
@@ -313,7 +314,7 @@ def test_restore_over_the_cap_is_413(
     """The real cap is 64 MiB; the test moves it down rather than uploading
     one. Both halves of the guard read this module-level name, so patching
     it covers the Content-Length refusal and the byte counter alike."""
-    monkeypatch.setattr("app.main.MAX_RESTORE_BYTES", 4096)
+    monkeypatch.setattr("app.httputil.MAX_RESTORE_BYTES", 4096)
     backup, _ = other_backup(tmp_path / "oversized")
     assert backup.stat().st_size > 4096
 
@@ -393,7 +394,7 @@ def test_the_upload_counter_refuses_past_the_cap(
 ) -> None:
     """The counter on its own: it counts the bytes it wrote, never the size
     the client claimed, and it stops the moment the total passes the cap."""
-    monkeypatch.setattr("app.main.MAX_RESTORE_BYTES", 1024)
+    monkeypatch.setattr("app.httputil.MAX_RESTORE_BYTES", 1024)
     target = tmp_path / "too-big.sqlite-tmp"
     upload = UploadFile(filename="big.sqlite", file=io.BytesIO(b"x" * 4096), size=1)
 
