@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{#
+  Every module page extends core's "base.html", the same frame the
+  built-in pages use (app/templates/today.html and friends): it draws the
+  800x480 white canvas, the header (day, weather, wifi, battery, clock)
+  and the footer (window list, DEMO mark). A module only ever fills the
+  "content" block below; "header" and "footer" are not blocks a template
+  can touch, because core builds them from its own context, not this
+  page's (app/view.py:build_context).
+#}
+
+{% block style %}
+.hello-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 32px;
+  padding-left: 16px;
+}
+.hello-row { display: flex; align-items: center; gap: 48px; height: 80px; }
+.hello-cell { display: flex; flex-direction: column; gap: 4px; }
+.hello-value { font-size: 40px; font-weight: 600; }
+.hello-note { font-size: 20px; font-weight: 500; max-width: 600px; line-height: 1.3; }
+{% endblock %}
+
+{% block content %}
+<div class="col hello-body">
+  <div class="label">THIRD-PARTY MODULE EXAMPLE</div>
+  <div class="hello-row">
+    <div class="hello-cell">
+      <span class="hello-value">{{ timezone }}</span>
+      <span class="label">HUB TIMEZONE</span>
+    </div>
+    <div class="rule-v"></div>
+    <div class="hello-cell">
+      <span class="hello-value num">{{ block_count }}</span>
+      <span class="label">DATASETS IN STATE</span>
+    </div>
+  </div>
+  <p class="hello-note">
+    This page is drawn by examples/modules/hello, a copyable minimal
+    module. See docs/MODULES.md for the contract it follows.
+  </p>
+</div>
+{% endblock %}

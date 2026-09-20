@@ -590,9 +590,15 @@ To add a new kind of pushed data to the hub:
 
 1. Add its pydantic model in `app/models.py` (`extra="forbid"`,
    `schema_version`, length caps, `AwareDatetime` for any timestamp).
-2. Add a `POST /api/<name>` endpoint in `app/main.py` that calls
+2. Add a `POST /api/<name>` route in a `build_router(context)` function
+   in the owning module's `app/modules/<name>/routes.py` (the built-in
+   `app/modules/tasks/routes.py` is the pattern to copy) that calls
    `app/datasets.py:write_dataset` (the `datasets` table upsert) and then
-   the matching adapter's `invalidate()`.
+   the matching adapter's `invalidate()`. Point the module's `Module.routes`
+   at that function; core mounts it under `/api` with `Depends(require_token)`
+   already applied, in the registry loop in `app/main.py:create_app`, so the
+   route itself never has to check a credential (see docs/MODULES.md,
+   "Push routes").
 3. Add a `Push<Name>Adapter` under `app/adapters/` that reads the row back
    through `app/datasets.py:read_dataset`, plus a `Fixture<Name>Adapter` if
    it should fall back to demo data, and a settings section
