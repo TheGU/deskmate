@@ -69,8 +69,9 @@ Volumes (already wired in `docker-compose.yml`):
 - `./data:/data` - read-write. The hub's one database,
   `deskmate.sqlite` (identity, settings, pushed datasets, telemetry). Back
   this directory up; it is the only state the hub cannot regenerate. The
-  demo fixtures need no volume: the Dockerfile bakes them into the image at
-  `/app/fixtures`.
+  demo fixtures need no volume: they ship inside each built-in module's own
+  package (`app/modules/<id>/fixtures/`) and are baked into the image with
+  the rest of `app/`.
 - an optional Obsidian vault, read only, if `OBSIDIAN_VAULT_PATH` is set in
   `.env` and the tasks section's source is set to `obsidian` on
   `/settings`.
