@@ -16,6 +16,7 @@ import asyncio
 import io
 import json
 import logging
+import math
 from functools import lru_cache
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -36,18 +37,31 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 
 logger = logging.getLogger("app.modules.ha_dashboard")
 
-#: The whole call (new context, navigation, settle, screenshot) is bounded to
-#: this many seconds no matter what hangs inside it (the plan's "its whole
-#: path is bounded to 8 s"). The steps below have their own, smaller
-#: timeouts; this is the backstop for whatever those miss.
-TOTAL_TIMEOUT_SECONDS: float = 8.0
-
 #: Navigation to the dashboard itself (the plan's "navigation timeout 4 s").
 NAVIGATION_TIMEOUT_MS: float = 4000
 
 #: The screenshot call, after settling: short, because by then the page has
 #: already loaded and settled and there is nothing left to wait for.
 SCREENSHOT_TIMEOUT_MS: float = 2000
+
+#: Slack added on top of the sum of every sub-step's own timeout, so a call
+#: whose settle wait alone is close to that sum still lands inside the
+#: outer bound instead of tripping it a moment early.
+TOTAL_TIMEOUT_SLACK_SECONDS: float = 1.0
+
+
+def _total_timeout_seconds(settle_ms: int) -> float:
+    """The whole call's own bound: navigation + settle + screenshot, plus
+    slack --- never a fixed number, because a fixed backstop shorter than
+    the sum of its own sub-timeouts fires even when every step finished
+    inside its own budget (navigation 4 s + settle up to 4 s + screenshot
+    2 s summed past a flat 8 s backstop). ``settle_ms`` is capped at 4000
+    (``settings.py``), so this is at most 11 s.
+    """
+    return (
+        NAVIGATION_TIMEOUT_MS + settle_ms + SCREENSHOT_TIMEOUT_MS
+    ) / 1000.0 + TOTAL_TIMEOUT_SLACK_SECONDS
+
 
 _FONT_PATH = APP_DIR / "static" / "fonts" / "GoogleSans-LatinThai-var.ttf"
 _ERROR_FONT_SIZE = 28
@@ -73,8 +87,9 @@ async def screenshot(
     """
     del state
     config: HaDashboardSettings = settings.ha_dashboard
+    bound = _total_timeout_seconds(config.settle_ms)
     try:
-        return await asyncio.wait_for(_render(browser, config), timeout=TOTAL_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(_render(browser, config), timeout=bound)
     except _NoUrlError:
         log(logger, logging.INFO, "ha_dashboard has no dashboard_url configured")
         return _error_frame("HA dashboard: no URL configured")
@@ -82,12 +97,13 @@ async def screenshot(
         log(logger, logging.WARNING, "ha_dashboard landed on the Home Assistant login page")
         return _error_frame("HA dashboard: login page, check the token")
     except (TimeoutError, PlaywrightTimeoutError):
-        # Both the 8 s backstop (asyncio.wait_for, a plain TimeoutError since
-        # Python 3.11) and Playwright's own, shorter navigation/screenshot
-        # timeouts land here: from the panel's point of view both are "it
-        # took too long", so both get the bound this module documents.
-        log(logger, logging.WARNING, "ha_dashboard render timed out")
-        return _error_frame(f"HA dashboard: timed out after {int(TOTAL_TIMEOUT_SECONDS)} s")
+        # Both this call's own backstop (asyncio.wait_for, a plain
+        # TimeoutError since Python 3.11) and Playwright's own, shorter
+        # navigation/screenshot timeouts land here: from the panel's point
+        # of view both are "it took too long", so both get the same bound.
+        bound_display = math.ceil(bound)
+        log(logger, logging.WARNING, "ha_dashboard render timed out", bound_s=bound_display)
+        return _error_frame(f"HA dashboard: timed out after {bound_display} s")
     except PlaywrightError:
         log(logger, logging.WARNING, "ha_dashboard hit a network error")
         return _error_frame("HA dashboard: network error, check the URL")
@@ -150,6 +166,21 @@ def _origin_of(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def _guard_origin_of(origin: str) -> str:
+    """The origin ``location.origin`` reports for ``origin``: scheme and
+    host, with a default port (80 for http, 443 for https) dropped the way
+    a browser drops it --- so the origin guard in ``_init_script`` below
+    compares like with like even when ``dashboard_url`` spells the default
+    port out explicitly. ``hassUrl`` inside ``hassTokens`` is left as
+    ``origin`` gave it; only the guard's own comparison value is normalized.
+    """
+    parts = urlsplit(origin)
+    default_port = {"http": 80, "https": 443}.get(parts.scheme)
+    if parts.port is not None and parts.port == default_port:
+        return f"{parts.scheme}://{parts.hostname}"
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def _init_script(origin: str, token: str) -> str:
     """The localStorage write sibbl/hass-lovelace-kindle-screensaver makes
     before it navigates to a dashboard (``home-assistant-auth.js``,
@@ -161,11 +192,23 @@ def _init_script(origin: str, token: str) -> str:
     against ``undefined`` and never trips) --- plus the ``selectedLanguage``
     key that project sets alongside it so the page does not show its own
     language picker before it draws the dashboard.
+
+    ``context.add_init_script`` runs this in every page and frame the
+    context ever loads, not just the dashboard's own: without a guard, an
+    iframe or webpage card pointing at a third-party site, or an off-origin
+    redirect, would get this same write and end up holding a working,
+    long-lived Home Assistant token in its own localStorage. The origin
+    check below makes the write a no-op anywhere except the Home Assistant
+    origin itself.
     """
+    guard_origin = _guard_origin_of(origin)
     hass_tokens = json.dumps({"hassUrl": origin, "access_token": token, "token_type": "Bearer"})
     return (
+        "(() => {"
+        f"if (location.origin !== {json.dumps(guard_origin)}) return;"
         f"localStorage.setItem('hassTokens', {json.dumps(hass_tokens)});"
         f"localStorage.setItem('selectedLanguage', {json.dumps(json.dumps('en'))});"
+        "})();"
     )
 
 

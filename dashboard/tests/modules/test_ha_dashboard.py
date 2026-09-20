@@ -1,21 +1,25 @@
-"""The ``ha_dashboard`` module: token injection, the screenshot renderer's
-error frames, and its bounded, secret-free logging
+"""The ``ha_dashboard`` module: token injection (only into the Home
+Assistant origin), the screenshot renderer's error frames, its settle-aware
+timeout bound, and its bounded, secret-free logging
 (docs/plan/2026-09-19-settings-modules-provisioning.md, package 3.1).
 
 A small stdlib ``http.server`` stub stands in for Home Assistant: one route
 that looks like a dashboard, one that redirects to a login page the way an
-expired token does, and one that never answers at all. The module is
-disabled by default (``app/modules/ha_dashboard/__init__.py``), so these
-tests build their own :class:`Renderer` with it turned on instead of using
-the shared session one (``tests/conftest.py``), which is what
-``tests/test_render_gate.py`` hashes: enabling it there would put a page in
-the frozen gate that was never meant to be in it.
+expired token does, one that redirects to a second, third-party origin, and
+one that never answers at all. A second, independent stub server stands in
+for that third-party origin. The module is disabled by default
+(``app/modules/ha_dashboard/__init__.py``), so these tests build their own
+:class:`Renderer` with it turned on instead of using the shared session one
+(``tests/conftest.py``), which is what ``tests/test_render_gate.py``
+hashes: enabling it there would put a page in the frozen gate that was
+never meant to be in it.
 """
 
 from __future__ import annotations
 
 import http.server
 import logging
+import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -26,7 +30,12 @@ import pytest
 from playwright.async_api import async_playwright
 
 from app.config import Env
-from app.modules.ha_dashboard.screenshot import _init_script, _origin_of
+from app.modules.ha_dashboard.screenshot import (
+    _guard_origin_of,
+    _init_script,
+    _origin_of,
+    _total_timeout_seconds,
+)
 from app.modules.ha_dashboard.settings import HaDashboardSettings
 from app.modules.registry import ModulesSettings, ModuleToggle, builtin_registry
 from app.renderer.palette import assert_display_image
@@ -57,6 +66,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/login-redirect":
             self.send_response(302)
             self.send_header("Location", "/auth/authorize")
+            self.end_headers()
+            return
+        if self.path == "/redirect-elsewhere":
+            # Where this points is set per-test on the server instance
+            # (``redirect_target``): a second, independent origin, the way
+            # an off-origin redirect would send the dashboard's tab there.
+            target = self.server.redirect_target  # type: ignore[attr-defined]
+            self.send_response(302)
+            self.send_header("Location", target)
             self.end_headers()
             return
         if self.path == "/auth/authorize":
@@ -104,6 +122,7 @@ def _require_chromium(session_loop: Any) -> None:
 def stub_server() -> Iterator[_Server]:
     server = _Server(("127.0.0.1", 0), _Handler)
     server.requests = []  # type: ignore[attr-defined]
+    server.redirect_target = None  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -117,6 +136,31 @@ def stub_server() -> Iterator[_Server]:
 @pytest.fixture()
 def base_url(stub_server: _Server) -> str:
     host, port = stub_server.server_address[:2]
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="module")
+def other_stub_server() -> Iterator[_Server]:
+    """A second, independent origin: a stand-in for a third-party site an
+    iframe, a webpage card, or an off-origin redirect could send the
+    dashboard's tab to.
+    """
+    server = _Server(("127.0.0.1", 0), _Handler)
+    server.requests = []  # type: ignore[attr-defined]
+    server.redirect_target = None  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.fixture()
+def other_base_url(other_stub_server: _Server) -> str:
+    host, port = other_stub_server.server_address[:2]
     return f"http://{host}:{port}"
 
 
@@ -203,6 +247,86 @@ def test_init_script_sets_the_expected_hass_tokens_fields(base_url: str) -> None
 
 
 # ---------------------------------------------------------------------------
+# the init script only writes hassTokens on the Home Assistant origin, never
+# on whatever other origin the same context happens to load (finding 1:
+# context.add_init_script runs in every page and frame with no origin guard)
+# ---------------------------------------------------------------------------
+def test_init_script_writes_hass_tokens_only_on_the_ha_origin(
+    base_url: str, other_base_url: str
+) -> None:
+    origin = _origin_of(f"{base_url}/some/lovelace/view")
+    script = _init_script(origin, TOKEN)
+
+    async def _check() -> dict[str, Any]:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                context = await browser.new_context()
+                await context.add_init_script(script)
+                page = await context.new_page()
+
+                await page.goto(f"{base_url}/")
+                on_ha_origin = await page.evaluate("() => localStorage.getItem('hassTokens')")
+
+                await page.goto(f"{other_base_url}/")
+                on_other_origin = await page.evaluate("() => localStorage.getItem('hassTokens')")
+
+                return {"on_ha_origin": on_ha_origin, "on_other_origin": on_other_origin}
+            finally:
+                await browser.close()
+
+    result = run(_check())
+    assert result["on_ha_origin"] is not None
+    assert result["on_other_origin"] is None
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected_guard_origin"),
+    [
+        # location.origin never includes a default port, even when
+        # dashboard_url spells it out - the guard must be built to match.
+        ("http://ha.lan:80", "http://ha.lan"),
+        ("https://ha.lan:443", "https://ha.lan"),
+        # A non-default port is part of the origin and must not be dropped.
+        ("http://ha.lan:8123", "http://ha.lan:8123"),
+        ("https://ha.lan:8123", "https://ha.lan:8123"),
+        # No explicit port at all: nothing to normalize.
+        ("http://ha.lan", "http://ha.lan"),
+    ],
+)
+def test_guard_origin_drops_only_the_default_port(origin: str, expected_guard_origin: str) -> None:
+    assert _guard_origin_of(origin) == expected_guard_origin
+
+
+def test_redirect_to_other_origin_leaves_it_without_the_token(
+    stub_server: _Server, base_url: str, other_base_url: str
+) -> None:
+    """A 302 sends the dashboard's tab to a different origin: the guard
+    must keep the token off that origin's localStorage too."""
+    stub_server.redirect_target = f"{other_base_url}/"  # type: ignore[attr-defined]
+    origin = _origin_of(f"{base_url}/dashboard")
+    script = _init_script(origin, TOKEN)
+
+    async def _check() -> dict[str, Any]:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                context = await browser.new_context()
+                await context.add_init_script(script)
+                page = await context.new_page()
+                await page.goto(f"{base_url}/redirect-elsewhere")
+                landed_on_other_origin = other_base_url in page.url
+                tokens = await page.evaluate("() => localStorage.getItem('hassTokens')")
+                return {"landed_on_other_origin": landed_on_other_origin, "tokens": tokens}
+            finally:
+                await browser.close()
+
+    result = run(_check())
+    assert result["landed_on_other_origin"]
+    assert result["tokens"] is None
+
+
+# ---------------------------------------------------------------------------
 # (c) a login redirect becomes an error frame, not a stale screenshot
 # ---------------------------------------------------------------------------
 def test_login_redirect_produces_a_different_error_frame(
@@ -231,13 +355,17 @@ def test_login_redirect_produces_a_different_error_frame(
 def test_hang_produces_a_timeout_error_frame_within_the_bound(
     ha_renderer: Renderer, base_url: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    ha_renderer.hub_settings = _settings(f"{base_url}/hang")
+    settle_ms = 50
+    ha_renderer.hub_settings = _settings(f"{base_url}/hang", settle_ms=settle_ms)
+    bound = _total_timeout_seconds(settle_ms)
     started = time.monotonic()
     with caplog.at_level(logging.INFO, logger="app.modules.ha_dashboard"):
         png = run(ha_renderer.render_png("ha_dashboard", STATE))
     elapsed = time.monotonic() - started
 
-    assert elapsed < 10.0, f"took {elapsed:.1f}s, expected well under the 8s render bound"
+    # 2s of scheduling slack on top of the computed bound itself, so this
+    # stays a wall-time sanity check rather than a race with the bound.
+    assert elapsed < bound + 2.0, f"took {elapsed:.1f}s, expected well under the {bound:.1f}s bound"
     image = open_png(png)
     assert_display_image(image)
     assert any(
@@ -245,6 +373,52 @@ def test_hang_produces_a_timeout_error_frame_within_the_bound(
         for record in caplog.records
         if record.name == "app.modules.ha_dashboard"
     )
+
+
+# ---------------------------------------------------------------------------
+# the total bound follows settle_ms rather than a flat number (finding 5:
+# navigation + settle + screenshot could sum past a fixed 8 s backstop)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("settle_ms", "expected_seconds"),
+    [(0, 7.0), (2000, 9.0), (4000, 11.0)],
+)
+def test_total_timeout_seconds_follows_settle_ms(settle_ms: int, expected_seconds: float) -> None:
+    assert _total_timeout_seconds(settle_ms) == expected_seconds
+    # settle_ms is capped at 4000 (settings.py); the bound must stay <= 11s.
+    assert _total_timeout_seconds(settle_ms) <= 11.0
+
+
+# ---------------------------------------------------------------------------
+# an unreachable host produces the network-error frame, and the log names
+# a network error without the URL (the reviewer's missing test)
+# ---------------------------------------------------------------------------
+def test_unreachable_host_produces_a_network_error_frame(
+    ha_renderer: Renderer, caplog: pytest.LogCaptureFixture
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    # The socket above is closed on exit from the with-block, so nothing is
+    # listening on this port by the time the render below tries to connect.
+    unreachable_url = f"http://127.0.0.1:{closed_port}/"
+
+    ha_renderer.hub_settings = _settings(unreachable_url)
+    with caplog.at_level(logging.INFO, logger="app.modules.ha_dashboard"):
+        png = run(ha_renderer.render_png("ha_dashboard", STATE))
+
+    image = open_png(png)
+    assert_display_image(image)
+    records = [record for record in caplog.records if record.name == "app.modules.ha_dashboard"]
+    assert any("network error" in record.getMessage().lower() for record in records)
+    for record in records:
+        message = record.getMessage()
+        assert unreachable_url not in message
+        assert str(closed_port) not in message
+        fields = getattr(record, "fields", None)
+        if isinstance(fields, dict):
+            assert unreachable_url not in str(fields)
+            assert str(closed_port) not in str(fields)
 
 
 # ---------------------------------------------------------------------------
