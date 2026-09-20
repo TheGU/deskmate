@@ -152,6 +152,7 @@ def weather_context(state: DashboardState, settings: "HubSettings") -> dict[str,
     )
     context["wx_plates_width_px"] = len(context["hourly"]) * WX_PLATE_WIDTH_PX
     context["daily"] = weather_daily_rows(weather, today)
+    context["location_name"] = settings.weather.location_name
     return context
 
 

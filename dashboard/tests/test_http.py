@@ -579,6 +579,21 @@ def test_preview_lists_every_page(reader: _ReaderClient) -> None:
         assert f"/preview?page={page}" in response.text
 
 
+def test_preview_has_a_settings_link(reader: _ReaderClient) -> None:
+    response = reader.get("/preview")
+    assert 'href="/settings"' in response.text
+
+
+def test_preview_does_not_eagerly_load_the_panel_png(reader: _ReaderClient) -> None:
+    """The hidden panel <img> must not have a src on page load: fetching the
+    Playwright render on every navigation makes even the raw view wait on
+    the render lock. It carries the URL in data-src instead, and a small
+    script assigns src only once the panel view is actually shown."""
+    response = reader.get("/preview")
+    assert ' src="/display' not in response.text
+    assert 'data-src="/display' in response.text
+
+
 def test_preview_without_a_credential_redirects_to_login(client: TestClient) -> None:
     response = client.get("/preview", follow_redirects=False)
     assert response.status_code == 303

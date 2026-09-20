@@ -41,7 +41,6 @@ BATTERY_80: Final[str] = "\U000f0081"
 BATTERY_50: Final[str] = "\U000f007e"
 BATTERY_20: Final[str] = "\U000f007b"
 BATTERY_ALERT: Final[str] = "\U000f0083"
-BATTERY_CHARGING: Final[str] = "\U000f0084"
 USB: Final[str] = "\U000f0553"
 POWER_PLUG: Final[str] = "\U000f06a5"
 POWER_PLUG_OFF: Final[str] = "\U000f06a6"
@@ -148,16 +147,22 @@ def weather_icon(condition: str, is_night: bool = False) -> str:
     return WEATHER_NIGHT if is_night else WEATHER_PARTLY_CLOUDY
 
 
-def battery_icon(level: float | None, charging: bool | None = False) -> str:
+def battery_icon(level: float | None, usb_present: bool | None = None) -> str:
     """Glyph for a battery level in percent.
 
-    ``charging`` wins over the level: a device on the charger is telling the
-    owner something different from a device at 20 percent. An unreported level
-    gets the plain battery outline, never the alert glyph, because "we do not
-    know" is not "it is nearly flat".
+    ``usb_present`` wins over the level: True means the device is plugged in
+    (charging or already charged, not told apart here), and the plug glyph
+    tells the owner that plainly instead of a battery percentage that is not
+    actually draining. ``usb_present`` is checked with ``is True`` rather than
+    truthiness on purpose: ``None`` (older firmware that never sends the
+    field, or a payload that has not reported yet) must fall through to the
+    level-based glyph below, the same as ``False`` (on battery) does, rather
+    than being read as "not plugged in" one way and "plugged in" the other.
+    An unreported level gets the plain battery outline, never the alert
+    glyph, because "we do not know" is not "it is nearly flat".
     """
-    if charging:
-        return BATTERY_CHARGING
+    if usb_present is True:
+        return POWER_PLUG
     if level is None:
         return BATTERY
     if level >= 90:

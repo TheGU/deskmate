@@ -111,7 +111,7 @@ def test_weather_icon_at_night() -> None:
 
 
 @pytest.mark.parametrize(
-    ("level", "charging", "expected"),
+    ("level", "usb_present", "expected"),
     [
         (100.0, False, icons.BATTERY),
         (92.0, False, icons.BATTERY),
@@ -119,12 +119,25 @@ def test_weather_icon_at_night() -> None:
         (40.0, False, icons.BATTERY_50),
         (20.0, False, icons.BATTERY_20),
         (4.0, False, icons.BATTERY_ALERT),
-        (4.0, True, icons.BATTERY_CHARGING),
-        (None, True, icons.BATTERY_CHARGING),
+        # usb_present wins over the level, whatever it is.
+        (4.0, True, icons.POWER_PLUG),
+        (None, True, icons.POWER_PLUG),
+        (92.0, True, icons.POWER_PLUG),
+        # None (older firmware, or a payload that has not reported yet) falls
+        # through to the level-based glyph exactly like False does.
+        (92.0, None, icons.BATTERY),
+        (4.0, None, icons.BATTERY_ALERT),
     ],
 )
-def test_battery_icon(level: float | None, charging: bool, expected: str) -> None:
-    assert icons.battery_icon(level, charging) == expected
+def test_battery_icon(level: float | None, usb_present: bool | None, expected: str) -> None:
+    assert icons.battery_icon(level, usb_present) == expected
+
+
+def test_battery_icon_usb_present_checks_identity_not_truthiness() -> None:
+    """usb_present is a tri-state (True/False/None); only True is the plug."""
+    assert icons.battery_icon(50.0, False) != icons.POWER_PLUG
+    assert icons.battery_icon(50.0, None) != icons.POWER_PLUG
+    assert icons.battery_icon(50.0, True) == icons.POWER_PLUG
 
 
 def test_battery_icon_without_a_level_is_not_an_alert() -> None:

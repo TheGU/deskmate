@@ -21,9 +21,11 @@
 .sys-battery .reading .num { font-size: 72px; font-weight: 500; }
 .sys-battery .hatch { width: 96px; height: 48px; }
 .sys-battery-meter { width: 120px; margin-top: 6px; }
-.sys-power-word { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
-.sys-age { font-size: 16px; font-weight: 500; margin-top: 2px; }
-.sys-battery-label-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.sys-power-row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.sys-power-word { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.sys-power-icon { font-size: 18px; }
+.sys-battery-label-row { display: flex; align-items: baseline; gap: 6px; margin-top: 4px; max-width: 190px; }
+.sys-battery-label-row .sys-age { flex: 1 1 auto; min-width: 0; }
 
 .sys-body .meter { display: block; position: relative; height: 2px; border: 2px solid #000000; background: #FFFFFF; box-sizing: content-box; flex: 0 0 auto; }
 .sys-body .meter-thick { height: 4px; }
@@ -109,12 +111,17 @@
       {% else %}
       <div class="hatch"></div>
       {% endif %}
-      {% if device.power_word %}<div class="sys-power-word">{{ device.power_word }}</div>{% endif %}
+      {% if device.power_word %}
+      <div class="sys-power-row">
+        {% if device.usb_present %}<span class="i sys-power-icon">{{ device.battery_icon }}</span>{% endif %}
+        <div class="sys-power-word">{{ device.power_word }}</div>
+      </div>
+      {% endif %}
       <div class="sys-battery-label-row">
         {% if device.stale %}<span class="telltale yellow"></span>{% endif %}
         <div class="label">BATTERY</div>
+        {% if device.stale %}<div class="label sys-age clip">{{ device.age_text }}</div>{% endif %}
       </div>
-      {% if device.stale %}<div class="sys-age">{{ device.age_text }}</div>{% endif %}
     </div>
     <div class="rule-v"></div>
     <div class="sys-metrics">

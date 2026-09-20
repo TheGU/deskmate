@@ -671,14 +671,16 @@ def test_power_label_maps_the_three_named_states() -> None:
     assert power_label(False, None) == "BATTERY"
 
 
-def test_power_label_is_nothing_when_it_cannot_be_determined() -> None:
-    # Older firmware never sends usb_present at all.
+def test_power_label_is_nothing_only_when_usb_present_itself_is_unknown() -> None:
+    # Older firmware never sends usb_present at all: that is the only case
+    # with no word, matching the plain battery glyph it gets instead of the
+    # plug. Once usb_present is true, the word is always CHARGING or USB,
+    # never blank under a plug icon.
     assert power_label(None, None) is None
-    # usb_present true but the gauge itself doesn't know the charge state.
-    assert power_label(True, "unknown") is None
-    assert power_label(True, "pre_charge") is None
-    assert power_label(True, "not_charging") is None
-    assert power_label(True, None) is None
+    assert power_label(True, "pre_charge") == "CHARGING"
+    assert power_label(True, "unknown") == "USB"
+    assert power_label(True, "not_charging") == "USB"
+    assert power_label(True, None) == "USB"
 
 
 def _device_state_with_power(

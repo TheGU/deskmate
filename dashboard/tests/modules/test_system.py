@@ -117,6 +117,48 @@ def test_device_panel_flags_stale_with_a_tell_tale_and_age(hub_settings: HubSett
     assert desk_accent(state) == "yellow"
 
 
+def test_device_panel_carries_the_plug_icon_and_usb_present(hub_settings: HubSettings) -> None:
+    """device_panel's battery_icon and usb_present agree with icons.battery_icon
+    and power_label: a plug glyph on usb_present true, battery glyphs on
+    false, and None keeps the plain battery glyph."""
+    from app import icons
+
+    now = datetime(2026, 9, 4, 8, 0, tzinfo=dt_timezone.utc)
+
+    charging = make_state(
+        generated_at=now,
+        timezone="Asia/Bangkok",
+        device=DeviceBlock(
+            status=AdapterStatus.OK,
+            device=_device_state(battery_level=80.0, usb_present=True, charge_state="charging"),
+        ),
+    )
+    panel = device_panel(charging, hub_settings)
+    assert panel["usb_present"] is True
+    assert panel["battery_icon"] == icons.POWER_PLUG
+
+    on_battery = make_state(
+        generated_at=now,
+        timezone="Asia/Bangkok",
+        device=DeviceBlock(
+            status=AdapterStatus.OK,
+            device=_device_state(battery_level=80.0, usb_present=False, charge_state="not_charging"),
+        ),
+    )
+    panel = device_panel(on_battery, hub_settings)
+    assert panel["usb_present"] is False
+    assert panel["battery_icon"] != icons.POWER_PLUG
+
+    unreported = make_state(
+        generated_at=now,
+        timezone="Asia/Bangkok",
+        device=DeviceBlock(status=AdapterStatus.OK, device=_device_state(battery_level=80.0)),
+    )
+    panel = device_panel(unreported, hub_settings)
+    assert panel["usb_present"] is None
+    assert panel["battery_icon"] == icons.battery_icon(80.0)
+
+
 def test_wifi_level_glyph_choice_matches_the_system_reading() -> None:
     assert wifi_level(-60) == "strong"
     assert wifi_level(-75) == "low"
@@ -246,8 +288,14 @@ def test_hub_rows_device_origin_from_device_state(hub_settings: HubSettings) -> 
 def test_power_label_words_feed_the_battery_meter_caption() -> None:
     assert power_label(False, None) == "BATTERY"
     assert power_label(True, "charging") == "CHARGING"
+    assert power_label(True, "pre_charge") == "CHARGING"
     assert power_label(True, "charged") == "USB"
-    assert power_label(True, "unknown") is None
+    # Any other usb_present-true charge state still gets a word: the plug
+    # glyph and a blank caption underneath it would be a lie by omission.
+    assert power_label(True, "unknown") == "USB"
+    assert power_label(True, "not_charging") == "USB"
+    assert power_label(True, None) == "USB"
+    assert power_label(None, None) is None
 
 
 def test_wake_label_spaces_out_the_firmware_word() -> None:

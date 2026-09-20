@@ -113,17 +113,18 @@ def wifi_accent(rssi: float | None) -> str:
 def power_label(usb_present: bool | None, charge_state: str | None) -> str | None:
     """The single caps word printed under the BATTERY meter.
 
-    Only the three states the device firmware can actually distinguish are
-    named; anything else (older firmware that never sends the fields, or a
-    charge state the gauge itself calls "unknown") prints nothing rather than
-    guessing.
+    Kept in step with the plug glyph in :func:`icons.battery_icon`: any
+    ``usb_present is True`` reading gets a word here (CHARGING while the
+    charger reports actually pushing current, USB otherwise, including an
+    unknown or missing charge state), never a plug icon with a blank caption
+    under it. ``usb_present is False`` is BATTERY, and ``usb_present is None``
+    (older firmware that never sends the field) prints nothing, matching the
+    plain battery glyph it gets instead of the plug.
     """
     if usb_present is False:
         return "BATTERY"
-    if usb_present is True and charge_state == "charging":
-        return "CHARGING"
-    if usb_present is True and charge_state == "charged":
-        return "USB"
+    if usb_present is True:
+        return "CHARGING" if charge_state in ("charging", "pre_charge") else "USB"
     return None
 
 
@@ -157,7 +158,6 @@ def device_panel(state: DashboardState, settings: "HubSettings") -> dict[str, An
             "chart": build_chart([], state.timezone, note=NO_DEVICE_DATA),
         }
     level = device.battery_level
-    charging = device.charge_state == "charging"
     hours = None if device.uptime_s is None else device.uptime_s / 3600.0
     return {
         "available": True,
@@ -166,7 +166,8 @@ def device_panel(state: DashboardState, settings: "HubSettings") -> dict[str, An
         "battery_available": level is not None,
         "battery_fraction": 0.0 if level is None else max(0.0, min(1.0, level / 100.0)),
         "battery_accent": battery_accent(level),
-        "battery_icon": icons.battery_icon(level, charging),
+        "battery_icon": icons.battery_icon(level, device.usb_present),
+        "usb_present": device.usb_present,
         "power_word": power_label(device.usb_present, device.charge_state),
         "stale": device.status is not DeviceStatus.OK,
         "age_text": age_label(device.age_seconds),

@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 from typing import Any
 
 
+from app import icons
 from app.settings import HubSettings
 from app.models import (
     AdapterStatus,
@@ -411,6 +412,42 @@ def test_header_carries_the_overdue_flag_and_a_neutral_battery(hub_settings: Hub
     # Today shows the overdue task itself (the red 1D LATE chip), so the
     # header's own overdue chip would only repeat it.
     assert header["show_overdue_chip"] is False
+
+
+def test_header_battery_shows_the_plug_icon_on_usb(hub_settings: HubSettings) -> None:
+    """usb_present true gives the plug glyph, false gives the battery glyphs,
+    and None (older firmware, or no device at all) keeps today's battery
+    reading, matching icons.battery_icon's own tri-state rule."""
+    tz = zone("Asia/Bangkok")
+    now = datetime(2026, 9, 4, 8, 0, tzinfo=tz)
+
+    def _header(usb_present: bool | None) -> dict[str, Any]:
+        device = DeviceState(
+            status=DeviceStatus.OK,
+            device="reterminal-e1002",
+            received_at=now,
+            age_seconds=30.0,
+            battery_level=80.0,
+            usb_present=usb_present,
+        )
+        state = make_state(
+            generated_at=now,
+            timezone="Asia/Bangkok",
+            device=DeviceBlock(status=AdapterStatus.OK, device=device),
+        )
+        return header_context(state, now.date(), now, "today")
+
+    plugged_in = _header(True)
+    assert plugged_in["battery"]["icon"] == icons.POWER_PLUG
+
+    on_battery = _header(False)
+    assert on_battery["battery"]["icon"] != icons.POWER_PLUG
+
+    unreported = _header(None)
+    assert unreported["battery"]["icon"] == icons.battery_icon(80.0)
+
+    no_device = header_context(empty_state(), now.date(), now, "today")
+    assert no_device["battery"]["icon"] == icons.battery_icon(None)
 
 
 def test_header_overdue_chip_hidden_on_today_and_brief_shown_elsewhere() -> None:

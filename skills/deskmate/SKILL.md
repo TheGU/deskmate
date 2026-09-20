@@ -212,7 +212,8 @@ the same dataset again "to be sure" - one push per dataset per run, per the runb
 `POST /api/alert` and `DELETE /api/alert` also require the token; full schema: `GET /openapi.json`.
 An alert takes over the whole panel and beeps. Do not raise one unless the owner explicitly asked
 for it in this run - alerts are for the owner's own automations, not a way to flag something you
-noticed.
+noticed. It only reaches the device while the panel is awake and on USB power: in battery mode the
+firmware ignores it, so the call can succeed on the hub and still never show on the panel.
 
 ## Windows note
 

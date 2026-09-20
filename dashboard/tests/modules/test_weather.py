@@ -16,11 +16,14 @@ from app.models import (
 )
 from app.timeutil import zone
 from app.modules.weather.page import (
+    weather_context,
     weather_daily_rows,
     weather_hourly_plates,
     weather_readings,
     weather_summary,
 )
+from app.modules.weather.settings import WeatherSettings
+from app.settings import HubSettings
 from tests.conftest import make_state
 
 
@@ -74,6 +77,20 @@ def test_weather_hourly_plates_start_at_current_hour_and_cap_at_six() -> None:
     assert plates[0]["hour"] == "14"
     assert plates[-1]["hour"] == "19"
     assert weather_hourly_plates(None, reference) == []
+
+
+def test_weather_context_carries_the_location_name(hub_settings: HubSettings) -> None:
+    tz = zone("Asia/Bangkok")
+    state = make_state(generated_at=datetime(2026, 9, 4, 8, 0, tzinfo=tz), timezone="Asia/Bangkok")
+
+    named = hub_settings.model_copy(
+        update={"weather": WeatherSettings(source="fixture", location_name="Bangkok")}
+    )
+    assert weather_context(state, named)["location_name"] == "Bangkok"
+
+    # A blank name is the default and prints nothing (template checks truthiness).
+    blank = hub_settings.model_copy(update={"weather": WeatherSettings(source="fixture")})
+    assert weather_context(state, blank)["location_name"] == ""
 
 
 def test_weather_daily_rows_cap_at_seven() -> None:

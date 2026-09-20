@@ -22,10 +22,11 @@ without switching windows on the PC.
 
 deskmate is a local-first desk dashboard. A server called dashboard-hub (the
 brain) gathers data, renders each page as an exact 800x480 six-color PNG, and
-serves it over the LAN. The E1002 (the paper) runs ESPHome as a thin display
-client: it fetches the PNG, shows it, and reports its own telemetry. Success is
-the owner getting the day's actionable picture in one glance, from paper, with
-no logic and no credentials on the device.
+serves it over the LAN to any ESPHome device that can fetch that PNG and post
+telemetry back. This owner's paper is a Seeed reTerminal E1002, running
+ESPHome as a thin display client: it fetches the PNG, shows it, and reports
+its own telemetry. Success is the owner getting the day's actionable picture
+in one glance, from paper, with no logic and no credentials on the device.
 
 ## Positioning
 
