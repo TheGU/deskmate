@@ -290,6 +290,50 @@ def _with_header_widget_choices(form: SectionForm, hub: "Hub") -> SectionForm:
     return form
 
 
+def _hidden_widget_cell_ids(hub: "Hub") -> frozenset[str]:
+    """Module ids whose ``header_widget`` cell renders as a hidden input,
+    not a select (``_modules_rows_with_widget_choices``).
+
+    A dataset-only module has no page of its own to override, so its cell
+    carries whatever is stored with nothing on the settings page for anyone
+    to see or fix it against. Both :func:`_unknown_header_widgets` and
+    ``_save_section``'s own pydantic error path read this, so a stray or
+    malformed value in one of these cells can never refuse a save with no
+    visible reason (finding 4, docs/plan/2026-09-20-owner-feedback-round.md).
+    """
+    return frozenset(module.id for module in hub.registry.modules if module.page is None)
+
+
+def _errors_off_hidden_cells(
+    hub: "Hub", errors: FormErrors, rows: list[Any]
+) -> FormErrors:
+    """``errors`` with any ``items-N-header_widget`` message moved to
+    ``general`` when row ``N`` belongs to a module with no page.
+
+    ``rows`` is ``parsed.data["items"]`` (or the equivalent), read only for
+    the ``id`` at each index: whatever raised ``errors`` may have done so
+    before a :class:`ModuleToggle` ever validated, so there is not always a
+    model to ask. Everything else is returned untouched.
+    """
+    if not errors.fields:
+        return errors
+    hidden_ids = _hidden_widget_cell_ids(hub)
+    prefix, suffix = "items-", f"-{HEADER_WIDGET_FIELD}"
+    fields: dict[str, str] = {}
+    general = [errors.general] if errors.general else []
+    for name, message in errors.fields.items():
+        row_id = None
+        if name.startswith(prefix) and name.endswith(suffix):
+            index_part = name[len(prefix) : -len(suffix)]
+            if index_part.isdigit() and int(index_part) < len(rows):
+                row_id = rows[int(index_part)].get("id")
+        if row_id is not None and row_id in hidden_ids:
+            general.append(message)
+        else:
+            fields[name] = message
+    return FormErrors(fields=fields, general="; ".join(general))
+
+
 def _unknown_header_widgets(hub: "Hub", section: str, value: BaseModel) -> dict[str, str]:
     """Header widget choices in ``value`` that name nothing on this hub.
 
@@ -307,8 +351,15 @@ def _unknown_header_widgets(hub: "Hub", section: str, value: BaseModel) -> dict[
         return {HEADER_WIDGET_FIELD: _unknown_widget_message(chosen, known)}
     if section != MODULES_SECTION:
         return {}
+    hidden_ids = _hidden_widget_cell_ids(hub)
     problems: dict[str, str] = {}
     for index, row in enumerate(cast(ModulesSettings, value).items):
+        if row.id in hidden_ids:
+            # This module has no page to override, so its cell is a hidden
+            # input (_modules_rows_with_widget_choices): whatever is stored
+            # in it can never reach a render, and must never refuse a save
+            # against a control nobody on the settings page can see.
+            continue
         chosen = row.header_widget
         if chosen in (HEADER_WIDGET_DEFAULT, HEADER_WIDGET_NONE) or chosen in known:
             continue
@@ -456,11 +507,14 @@ async def _save_section(
     try:
         value = model.model_validate(parsed.data)
     except ValidationError as exc:
+        errors = form_errors(model, exc)
+        if section == MODULES_SECTION:
+            errors = _errors_off_hidden_cells(hub, errors, parsed.data.get("items", []))
         return _section_form(
             hub,
             section,
             values=parsed.data,
-            errors=form_errors(model, exc),
+            errors=errors,
             search_url=search_url,
         )
     widget_problems = _unknown_header_widgets(hub, section, value)

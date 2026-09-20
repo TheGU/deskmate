@@ -92,16 +92,17 @@ def urlencode_multi(fields: dict[str, list[str]]) -> bytes:
     return urllib.parse.urlencode(fields, doseq=True).encode()
 
 
-def parse_modules_rows(html: str) -> list[tuple[int, str, bool, str]]:
+def parse_modules_rows(html: str) -> list[tuple[int, str, bool, str, str]]:
     """The modules section's ``items`` list exactly as ``/settings`` rendered
-    it: one ``(row index, module id, ticked, order)`` per row that names a
-    real module, in the page's own row order.
+    it: one ``(row index, module id, ticked, order, header_widget)`` per row
+    that names a real module, in the page's own row order.
 
     Scraped from the page rather than hard-coded, because the row order and
     the row index in each field's name (``items-0-id``, ``items-0-enabled``,
-    ``items-0-order``, see ``_section_form.html``) are the settings store's
-    to decide, not this script's. The three trailing blank rows the page
-    always adds for "add a module by hand" are dropped: they have no id.
+    ``items-0-order``, ``items-0-header_widget``, see ``_section_form.html``)
+    are the settings store's to decide, not this script's. The three
+    trailing blank rows the page always adds for "add a module by hand" are
+    dropped: they have no id.
     """
     ids: dict[int, str] = {}
     for m in re.finditer(r'name="items-(\d+)-id"[^>]*value="([^"]*)"', html):
@@ -112,18 +113,32 @@ def parse_modules_rows(html: str) -> list[tuple[int, str, bool, str]]:
     ticked: dict[int, bool] = {}
     for m in re.finditer(r'<input type="checkbox"[^>]*?name="items-(\d+)-enabled"[^>]*>', html):
         ticked[int(m.group(1))] = "checked" in m.group(0)
+    # header_widget is a hidden input on a dataset-only module's row and a
+    # select everywhere else (app/settings_pages.py:_modules_rows_with_widget_choices);
+    # a select has no value attribute of its own, so its chosen id is read
+    # off whichever <option> carries "selected" instead.
+    widgets: dict[int, str] = {}
+    for m in re.finditer(
+        r'<select[^>]*name="items-(\d+)-header_widget"[^>]*>(.*?)</select>', html, re.S
+    ):
+        option = re.search(r'<option value="([^"]*)" selected', m.group(2))
+        if option:
+            widgets[int(m.group(1))] = option.group(1)
+    for m in re.finditer(r'name="items-(\d+)-header_widget"[^>]*value="([^"]*)"', html):
+        widgets.setdefault(int(m.group(1)), m.group(2))
     return [
-        (index, ids[index], ticked.get(index, False), orders.get(index, ""))
+        (index, ids[index], ticked.get(index, False), orders.get(index, ""), widgets.get(index, "default"))
         for index in sorted(ids)
         if ids[index]
     ]
 
 
 def modules_form_fields(
-    rows: list[tuple[int, str, bool, str]],
+    rows: list[tuple[int, str, bool, str, str]],
     *,
     disable: frozenset[str] = frozenset(),
     enable: frozenset[str] = frozenset(),
+    header_widgets: dict[str, str] | None = None,
 ) -> dict[str, list[str]]:
     """The modules section exactly as the browser posts it: a hidden 0
     before every checkbox, a ticked box adding its own 1 after it (see
@@ -132,10 +147,11 @@ def modules_form_fields(
 
     Every row not named in ``disable`` or ``enable`` is resubmitted with
     whatever ``rows`` says it currently is, the way a browser resubmits a
-    form field nobody touched.
+    form field nobody touched; same for ``header_widget``, unless
+    ``header_widgets`` names a new choice for that row's module id.
     """
     fields: dict[str, list[str]] = {}
-    for index, module_id, currently_enabled, order in rows:
+    for index, module_id, currently_enabled, order, header_widget in rows:
         if module_id in enable:
             checked = True
         elif module_id in disable:
@@ -145,6 +161,7 @@ def modules_form_fields(
         fields[f"items-{index}-id"] = [module_id]
         fields[f"items-{index}-enabled"] = ["0", "1"] if checked else ["0"]
         fields[f"items-{index}-order"] = [order]
+        fields[f"items-{index}-header_widget"] = [(header_widgets or {}).get(module_id, header_widget)]
     fields["action"] = ["save"]
     return fields
 
@@ -237,7 +254,10 @@ def run_full_check(base: str) -> None:
     s, _, _ = call(admin, base, "/setup/general")
     expect("wizard general get", s, 200)
 
-    general_form = urlencode({"timezone": "Asia/Bangkok", "units": "metric", "action": "save"})
+    general_form = urlencode({
+        "timezone": "Asia/Bangkok", "units": "metric", "header_widget": "weather",
+        "action": "save",
+    })
     s, h, _ = call(admin, base, "/setup/general", "POST", general_form,
                    {"Content-Type": "application/x-www-form-urlencoded"})
     expect("wizard general post", (s, header(h, "location")), (303, "/setup/weather"))
@@ -422,6 +442,40 @@ def run_full_check(base: str) -> None:
                    {"Content-Type": "application/json", "Authorization": f"Bearer {dkey}"})
     telemetry_result = json.loads(b)
     expect("telemetry page_count is 5 with brief re-enabled", telemetry_result["page_count"], 5)
+
+    # -- modules: a page's header_widget override actually changes the header ----
+    s, _, b = call(admin, base, "/settings")
+    module_rows = parse_modules_rows(b.decode())
+    set_agenda_widget_to_system = urlencode_multi(
+        modules_form_fields(module_rows, header_widgets={"agenda": "system"})
+    )
+    s, h, _ = call(admin, base, "/settings/modules", "POST", set_agenda_widget_to_system,
+                   {"Content-Type": "application/x-www-form-urlencoded"})
+    expect(
+        "settings modules set agenda header_widget to system",
+        (s, header(h, "location")),
+        (303, "/settings?saved=modules#modules"),
+    )
+
+    s, _, b = call(admin, base, "/preview/agenda.html")
+    expect(
+        "agenda preview carries the system widget's markup once overridden",
+        (s, "hdr-desk" in b.decode()),
+        (200, True),
+    )
+
+    s, _, b = call(admin, base, "/settings")
+    module_rows = parse_modules_rows(b.decode())
+    restore_agenda_widget = urlencode_multi(
+        modules_form_fields(module_rows, header_widgets={"agenda": "default"})
+    )
+    s, h, _ = call(admin, base, "/settings/modules", "POST", restore_agenda_widget,
+                   {"Content-Type": "application/x-www-form-urlencoded"})
+    expect(
+        "settings modules restore agenda header_widget to default",
+        (s, header(h, "location")),
+        (303, "/settings?saved=modules#modules"),
+    )
 
     # -- modules: disabling every page is refused ---------------------------------
     s, _, b = call(admin, base, "/settings")

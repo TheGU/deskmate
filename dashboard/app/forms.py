@@ -12,8 +12,13 @@ One widget is not reachable from an annotation at all: ``hidden``. It is
 what a caller downgrades an already-generated field to when that particular
 row has nothing to choose from - the Modules section does it to the
 ``header_widget`` cell of a module that draws no page
-(``app/settings_pages.py``) - so the stored value still round-trips through
-the form instead of coming back blank and failing validation.
+(``app/settings_pages.py``) - after this module has already built the
+field, so it never changes how that field parses. What keeps the stored
+value round-tripping through a spare row instead of coming back blank and
+failing validation is :func:`_blank_value`: a spare row's cell already
+carries the model's own default rather than nothing, so a text field whose
+default is not blank (``header_widget`` again) is never mistaken for a
+row nobody filled in.
 
 Supported annotations, and the widget each one becomes:
 
@@ -100,10 +105,12 @@ _ROW_NAME = re.compile(r"^(?P<field>[a-z][a-z0-9_]*)-(?P<index>\d+)-(?P<sub>[a-z
 _TRUE_VALUES = frozenset({"1", "true", "on", "yes"})
 
 #: Widgets that send a value even when nobody touched them, and so cannot
-#: tell a filled list row from a spare one (see :func:`parse_section`). A
-#: hidden input is here for the same reason a select is: it always posts,
-#: and it posts a value nobody chose.
-_ALWAYS_SUBMITTED = frozenset({"select", "checkbox", "hidden"})
+#: tell a filled list row from a spare one (see :func:`parse_section`).
+#: ``hidden`` is not here: it is never a kind :func:`_classify` produces
+#: from a model's own annotation, only a kind a caller downgrades an
+#: already-classified field to for display (see the module docstring), so
+#: it never reaches this check.
+_ALWAYS_SUBMITTED = frozenset({"select", "checkbox"})
 
 
 class UnsupportedField(TypeError):

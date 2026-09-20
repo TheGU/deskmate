@@ -104,9 +104,11 @@ PageFlagFn = Callable[["DashboardState", "HubSettings"], bool]
 #: then one module's cell; 380 x 40 is what is left for that cell once the
 #: day stack carries its third line and the right group (overdue chip,
 #: Wi-Fi, battery pill, clock) is at its widest (measured, see
-#: docs/plan/2026-09-20-owner-feedback-round.md, finding 10b). Core clamps
-#: the slot in ``app/templates/base.html`` (``.hdr-widget``); a widget that
-#: wants more simply gets clipped.
+#: docs/plan/2026-09-20-owner-feedback-round.md, finding 10b). Core wraps
+#: the ``{% include %}`` in its own ``.hdr-widget`` div
+#: (``app/templates/base.html``) and clamps that wrapper to it, so the
+#: budget holds regardless of what the partial's own root does; a widget
+#: that wants more simply gets clipped.
 HEADER_WIDGET_WIDTH_PX: int = 380
 HEADER_WIDGET_HEIGHT_PX: int = 40
 
@@ -223,8 +225,11 @@ class HeaderSpec:
     ``<module id>_header.html`` (:func:`header_template_name`).
     :func:`validate_module` refuses a module whose widget file is not there.
 
-    The partial's root element must fit :data:`HEADER_WIDGET_WIDTH_PX` by
-    :data:`HEADER_WIDGET_HEIGHT_PX`; see docs/MODULES.md, "Header widget".
+    Core wraps the partial in its own ``.hdr-widget`` div and clamps that
+    wrapper to :data:`HEADER_WIDGET_WIDTH_PX` by
+    :data:`HEADER_WIDGET_HEIGHT_PX`, so the partial's root does not have to
+    carry that class itself for the budget to hold; see docs/MODULES.md,
+    "Header widget".
     """
 
     context: PageContextFn

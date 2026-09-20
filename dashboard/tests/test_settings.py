@@ -23,6 +23,7 @@ from app.config import DEFAULT_HA_ENTITIES, Env
 from app.db import Database, close_databases
 from app.main import create_app
 from app.modules.calendar.settings import CalendarSettings, Feed
+from app.modules.device.settings import DeviceSettings
 from app.modules.general.settings import GeneralSettings
 from app.modules.home.settings import HomeSettings
 from app.modules.tasks.settings import TasksSettings
@@ -200,6 +201,28 @@ def test_a_saved_section_round_trips(store: SettingsStore) -> None:
     store.save("general", saved)
     assert store.load("general") == saved
     assert store.updated_at("general") is not None
+
+
+def test_a_full_wake_hour_set_survives_a_reload(
+    store: SettingsStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """All 24 distinct hours normalize to an 84 character string
+    (``", ".join`` of "0".."23"); ``wake_hours.max_length`` must be wide
+    enough for that normalized form, not just for what a form submits, or
+    the whole device section silently falls back to defaults on the next
+    load (see ``DeviceSettings.wake_hours``)."""
+    all_hours = ", ".join(str(hour) for hour in range(24))
+    assert len(all_hours) == 84
+    saved = DeviceSettings(wake_hours=all_hours, refresh_minutes=45)
+    with caplog.at_level(logging.WARNING, logger="app.settings"):
+        store.save("device", saved)
+        loaded = store.load("device")
+    assert loaded == saved
+    assert loaded.wake_hours_list == list(range(24))
+    assert loaded.refresh_minutes == 45
+    assert not any(
+        getattr(record, "fields", {}).get("section") == "device" for record in caplog.records
+    )
 
 
 def test_a_corrupt_row_falls_back_to_defaults_with_a_warning(

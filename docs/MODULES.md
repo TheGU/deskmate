@@ -214,12 +214,16 @@ Core's own shared classes are available: `.num` for a tabular numeral,
 
 **The budget: 380 x 40 px.** That is what the header's left group has left
 once the day stack carries its year line and the right cluster is at its
-widest, measured, not guessed. Core clamps the root element to it
-(`.hdr-widget` in `app/templates/base.html`, and the constants
-`HEADER_WIDGET_WIDTH_PX` / `HEADER_WIDGET_HEIGHT_PX`), so a widget that
-wants more is clipped rather than allowed to push the clock off the panel.
-The clamp is the backstop, not the plan: clip variable text in Python to a
-measured character budget the way `app/modules/agenda/page.py`
+widest, measured, not guessed. Core wraps the `{% include %}` in its own
+`.hdr-widget` div (`app/templates/base.html`) and clamps that wrapper to
+the constants `HEADER_WIDGET_WIDTH_PX` / `HEADER_WIDGET_HEIGHT_PX`, so a
+widget that wants more is clipped rather than allowed to push the clock off
+the panel -- the partial's own root does not have to carry the `hdr-widget`
+class itself for that to hold (the built-ins and the example still do, for
+a harmless second `max-width`/`overflow` on their own root, and because it
+is useful when previewing a partial's markup on its own). The clamp is the
+backstop, not the plan: clip variable text in Python to a measured
+character budget the way `app/modules/agenda/page.py`
 (`AGENDA_HEADER_TITLE_MAX_CHARS`) does, and carry `.clip` as well for a
 string with no word boundary to break on.
 

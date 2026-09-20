@@ -37,7 +37,7 @@ from app.modules import (
 )
 from app.modules.agenda.page import agenda_header
 from app.modules.ai_usage.page import ai_usage_header
-from app.modules.registry import ModulesSettings, ModuleToggle, builtin_registry
+from app.modules.registry import ModulesSettings, ModuleToggle, Registry, builtin_registry
 from app.modules.system.page import system_header
 from app.renderer.render import Renderer
 from app.settings import HubSettings
@@ -405,3 +405,51 @@ def test_the_page_less_modules_widget_renders_on_a_page_it_does_not_own(
     point_at(widget_renderer, settings_with(hub_settings, default="ai_usage"))
     html = widget_renderer.render_html("agenda", state, embed_fonts=False)
     assert 'class="hdr-widget hdr-ai"' in html
+
+
+def test_core_clamps_the_slot_even_when_the_partial_does_not(
+    widget_renderer: Renderer, state: DashboardState, hub_settings: HubSettings, tmp_path: Path
+) -> None:
+    """A third-party widget whose own root carries no ``hdr-widget`` class
+    (docs/MODULES.md asks a module to add it, but nothing enforces that) is
+    still clamped to the 380 x 40 px slot, because ``base.html`` wraps the
+    ``{% include %}`` in its own ``.hdr-widget`` div rather than relying on
+    the partial to apply the class itself (finding 2,
+    docs/plan/2026-09-20-owner-feedback-round.md)."""
+    templates_dir = tmp_path / "templates"
+    templates_dir.mkdir()
+    (templates_dir / "acme_header.html").write_text(
+        '<div class="hdr-acme" style="width: 2000px; white-space: nowrap;">'
+        + "ACME " * 400
+        + "</div>",
+        encoding="utf-8",
+    )
+    acme = Module(
+        id="acme",
+        title="ACME",
+        version="1.0.0",
+        description="A widget that does not clamp its own root.",
+        header=HeaderSpec(context=lambda state, settings: {}, templates_dir=templates_dir),
+    )
+    settings = hub_settings.model_copy(
+        update={"general": hub_settings.general.model_copy(update={"header_widget": "acme"})}
+    )
+    registry = Registry([*builtin_registry().modules, acme], settings.modules)
+
+    # The wrapper is in the markup, around the partial's own (unclamped) root.
+    html_registry_renderer = widget_renderer
+    html_registry_renderer.hub_settings = settings
+    html_registry_renderer.registry = registry
+    html = html_registry_renderer.render_html("today", state, embed_fonts=False)
+    assert '<div class="hdr-widget">' in html
+    wrapper_start = html.index('<div class="hdr-widget">')
+    acme_start = html.index('<div class="hdr-acme"')
+    assert wrapper_start < acme_start, "the acme root must sit inside core's wrapper"
+
+    # And the clamp really holds on screen, not just in the source order.
+    measured = geometry(widget_renderer, state, "today")
+    assert measured["present"] is True, measured
+    assert measured["rules"] == 1, measured
+    assert measured["width"] <= HEADER_WIDGET_WIDTH_PX + 0.5, measured
+    assert measured["height"] <= HEADER_WIDGET_HEIGHT_PX + 0.5, measured
+    assert measured["gap"] >= 8, measured
