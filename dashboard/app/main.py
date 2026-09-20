@@ -134,6 +134,26 @@ def resolve_page(registry: Registry, segment: str, known: bool) -> str | None:
     return segment if known else None
 
 
+def resolve_telemetry_page(telemetry: DeviceTelemetry, registry: Registry) -> DeviceTelemetry:
+    """``telemetry`` with ``page`` filled in from ``page_index`` if it has to.
+
+    ``page`` is authoritative: the device sends the id it was told, and
+    ``alert`` while an alert is showing. It is ``null`` only in a session
+    that has not had a telemetry response yet, so the device knows which
+    slot it is on but not what that slot is called; that is what
+    ``page_index`` is for. An index the registry cannot resolve (the module
+    was disabled since, or this is a device with a stale page count) stores
+    ``null`` rather than a guess: the ``page`` column is what the System page
+    draws, and a wrong id there would be invented data.
+    """
+    if telemetry.page is not None or telemetry.page_index is None:
+        return telemetry
+    module = registry.page_by_index(telemetry.page_index)
+    if module is None:
+        return telemetry
+    return telemetry.model_copy(update={"page": module.id})
+
+
 @dataclass(slots=True)
 class RenderCacheEntry:
     fingerprint: str
@@ -359,7 +379,11 @@ def _stamp(value: datetime | None, timezone_name: str) -> str | None:
 
 
 def _sample_json(sample: DeviceSample, timezone_name: str) -> dict[str, Any]:
-    payload = sample.model_dump(mode="json")
+    # page_index is a request-only field: the hub resolves it to an id on the
+    # way in (:func:`resolve_telemetry_page`) and the telemetry table has no
+    # column for it, so echoing a permanent null back on every read would only
+    # invite a client to believe it.
+    payload = sample.model_dump(mode="json", exclude={"page_index"})
     payload["received_at"] = _stamp(sample.received_at, timezone_name)
     return payload
 
@@ -623,6 +647,7 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
                 status_code=400,
             )
 
+        telemetry = resolve_telemetry_page(telemetry, hub.registry)
         remote_addr, hub_host = _telemetry_origin(request)
         received_at = await run_in_threadpool(
             hub.telemetry.insert,
@@ -631,11 +656,23 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
             hub_host=hub_host,
         )
         # The next page render must see this sample, not the cached one.
-        hub.state_service.adapters["device"].invalidate()
+        # ``get``, not ``[]``: the device dataset belongs to the system
+        # module, and a hub with that module disabled still takes telemetry.
+        device_adapter = hub.state_service.adapters.get("device")
+        if device_adapter is not None:
+            device_adapter.invalidate()
+        # page_count and pages are what firmware/e1002.yaml learns the window
+        # list from (it parses this very response, see the on_response lambda
+        # by its http_request.post): the device holds no page list of its own,
+        # so enabling, disabling or reordering a module here reaches it on its
+        # next post with no reflash. ``alert`` is never in the list.
+        page_ids = hub.registry.page_ids()
         return JSONResponse(
             {
                 "accepted": True,
                 "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
+                "page_count": len(page_ids),
+                "pages": list(page_ids),
             },
             status_code=202,
         )

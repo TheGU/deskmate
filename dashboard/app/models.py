@@ -242,6 +242,14 @@ class DeviceTelemetry(BaseModel):
     wifi_rssi: float | None = None
     uptime_s: float | None = None
     page: str | None = Field(default=None, max_length=32)
+    #: Which slot of the window list the device is on, 0-based. The device
+    #: navigates by index and only learns the ids from a telemetry response,
+    #: so a session that has not had one yet can name the slot but not the
+    #: page: ``page`` is authoritative and this is the fallback the hub
+    #: resolves through the registry (``app/main.py:resolve_telemetry_page``).
+    #: Never stored: what lands in the ``page`` column is always an id.
+    #: ``None`` on older firmware.
+    page_index: int | None = None
     #: Whether the gauge is in "on battery" mode. ``None`` on older firmware.
     battery_mode: bool | None = None
     #: Whether USB power is plugged in. ``None`` on older firmware.
