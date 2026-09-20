@@ -1005,6 +1005,40 @@ def test_a_row_widget_no_module_answers_for_is_refused(admin: AdminHub) -> None:
     assert admin.hub.registry.header_override("today") == "default"
 
 
+def test_a_stray_value_on_a_hidden_widget_cell_does_not_block_the_save(
+    admin: AdminHub,
+) -> None:
+    """tasks has no page, so its header_widget cell is a hidden input
+    (see test_the_modules_section_offers_a_widget_per_page_and_none_for_a_dataset):
+    nothing on the settings page lets anyone see or change what is stored
+    there. A stray value left in it -- "ghost", naming no installed widget
+    -- must not refuse the whole Modules section with no visible error
+    (finding 4, docs/plan/2026-09-20-owner-feedback-round.md)."""
+    response = save_modules(admin, widgets={"tasks": "ghost"})
+
+    assert response.status_code == 303
+    saved = {row.id: row for row in admin.hub.settings_store.load("modules").items}
+    assert saved["tasks"].header_widget == "ghost"
+
+
+def test_a_malformed_hidden_widget_cell_refuses_the_save_but_not_invisibly(
+    admin: AdminHub,
+) -> None:
+    """Unlike "ghost" above, a value that is not even a legal id at all
+    still has to refuse the save (nothing silently keeps a corrupt row);
+    the point is only that the message must not land on a field with no
+    visible control next to it. tasks' cell is hidden either way, so this
+    is the section's own top error, never a per-cell one
+    (``_errors_off_hidden_cells``)."""
+    response = save_modules(admin, widgets={"tasks": "Not An Id!"})
+
+    assert response.status_code == 422
+    modules_section = response.text.split('id="modules"', 1)[1].split("<section", 1)[0]
+    assert '<div class="error">' in modules_section
+    assert "field-error" not in modules_section
+    assert admin.hub.settings_store.load("modules") == ModulesSettings()
+
+
 def test_today_may_be_disabled_while_another_page_stays(admin: AdminHub) -> None:
     """The rule is "no page left", not "never today": a hub whose owner
     wants only the agenda is allowed to say so."""
