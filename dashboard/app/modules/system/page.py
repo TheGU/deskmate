@@ -181,6 +181,28 @@ def device_panel(state: DashboardState, settings: "HubSettings") -> dict[str, An
     }
 
 
+def system_header(state: DashboardState, settings: "HubSettings") -> dict[str, Any]:
+    """This module's header widget: the desk's own temperature and humidity.
+
+    The two readings the device itself reports, which the System page draws
+    in full in its DESK cluster (:func:`device_panel`) and which are worth
+    carrying on every page: the owner reads the room they are sitting in
+    without navigating to it. A device that has never reported gets the
+    hatch flag, the same unavailable grammar as every other reading on the
+    panel (DESIGN.md).
+    """
+    device: DeviceState | None = state.block("device", DeviceBlock).device
+    if not state.block("device", DeviceBlock).usable or device is None or not device.has_reading:
+        return {"available": False}
+    if device.temperature is None and device.humidity is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "temperature": fmt_number(device.temperature, digits=1),
+        "humidity": fmt_number(device.humidity, digits=0),
+    }
+
+
 def desk_accent(state: DashboardState) -> str:
     """Whether the DESK row's stale tell-tale should show at all."""
     device: DeviceState | None = state.block("device", DeviceBlock).device
@@ -380,6 +402,7 @@ __all__ = [
     "service_mark",
     "strip_scheme",
     "system_context",
+    "system_header",
     "system_flag",
     "wake_label",
     "wifi_accent",

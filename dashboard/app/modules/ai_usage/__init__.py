@@ -1,8 +1,14 @@
-"""The ``ai_usage`` section (``settings.py``), its dataset and its push route.
+"""The ``ai_usage`` section (``settings.py``), its dataset, its push route
+and its header widget.
 
 AI capacity has no page of its own: the Today page draws it. Like ``tasks``
 it is a module so the dataset, the settings section and ``POST
 /api/ai-usage`` stay one thing that can be turned off in one place.
+
+It does have a header widget (``page.py:ai_usage_header``), which makes it
+the built-in proof that a widget does not need a page: the registry has to
+put this package's templates directory on the Jinja search path for a
+module that draws no page at all.
 """
 
 from __future__ import annotations
@@ -12,7 +18,8 @@ from pathlib import Path
 from app import __version__
 from app.adapters.ai_usage import build_ai_usage_adapter
 from app.models import AIUsageBlock
-from app.modules import DatasetSpec, Module
+from app.modules import DatasetSpec, HeaderSpec, Module
+from app.modules.ai_usage.page import ai_usage_header
 from app.modules.ai_usage.routes import build_router
 from app.modules.ai_usage.settings import SECTION, AIUsageSettings
 
@@ -40,6 +47,10 @@ MODULE = Module(
         ),
     ),
     routes=build_router,
+    header=HeaderSpec(
+        context=ai_usage_header,
+        templates_dir=Path(__file__).parent / "templates",
+    ),
     default_order=70,
 )
 

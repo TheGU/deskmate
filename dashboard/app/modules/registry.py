@@ -240,7 +240,12 @@ class Registry:
         what puts the warning next to them).
         """
         rows = [
-            ModuleToggle(id=module.id, enabled=self.is_enabled(module), order=self.order_of(module))
+            ModuleToggle(
+                id=module.id,
+                enabled=self.is_enabled(module),
+                order=self.order_of(module),
+                header_widget=self.header_override(module.id),
+            )
             for module in self._modules
         ]
         rows.extend(self._toggles[name] for name in self._missing)

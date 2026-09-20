@@ -1,0 +1,32 @@
+{# The ai_usage module's header widget: how much of the tightest capacity
+   window is used, and which window that is. Values:
+   app/modules/ai_usage/page.py:ai_usage_header, merged under header.widget
+   by app/view.py:header_widget_context.
+
+   Core draws the vertical rule before this file and clamps the root to the
+   380 x 40 px slot through .hdr-widget (app/templates/base.html). The
+   provider name is the only variable-width thing here, so it carries
+   core's .clip class; the numeral is tabular and at most three digits. #}
+<style>
+.hdr-ai { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.hdr-ai-label {
+  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.hdr-ai-num {
+  font-size: 32px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.hdr-ai-unit { font-size: 16px; font-weight: 600; margin-left: 2px; }
+.hdr-ai-who { max-width: 180px; }
+.hdr-ai-hatch { width: 32px; height: 18px; }
+</style>
+<div class="hdr-widget hdr-ai">
+<span class="hdr-ai-label">AI</span>
+{% if header.widget.available %}
+<span class="hdr-ai-num num{% if header.widget.accent %} t-{{ header.widget.accent }}{% endif %}">{{ header.widget.percent }}<span class="hdr-ai-unit">%</span></span>
+<span class="hdr-ai-label hdr-ai-who clip">{{ header.widget.provider }} {{ header.widget.window }}</span>
+{% else %}
+<span class="hatch hdr-ai-hatch"></span>
+<span class="hdr-ai-label">UNAVAILABLE</span>
+{% endif %}
+</div>

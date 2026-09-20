@@ -15,8 +15,8 @@ from pathlib import Path
 from app import __version__
 from app.adapters.calendar import build_calendar_adapter
 from app.models import CalendarBlock
-from app.modules import DatasetSpec, Module, PageSpec
-from app.modules.agenda.page import agenda_context, agenda_flag
+from app.modules import DatasetSpec, HeaderSpec, Module, PageSpec
+from app.modules.agenda.page import agenda_context, agenda_flag, agenda_header
 from app.modules.calendar.settings import SECTION as CALENDAR_SECTION, CalendarSettings
 from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
@@ -52,6 +52,10 @@ MODULE = Module(
         needs=("calendar", "tasks"),
         demo_datasets=PAGE_PUSH_DATASETS["agenda"],
         flag=agenda_flag,
+    ),
+    header=HeaderSpec(
+        context=agenda_header,
+        templates_dir=Path(__file__).parent / "templates",
     ),
     default_order=20,
 )

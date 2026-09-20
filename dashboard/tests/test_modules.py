@@ -66,7 +66,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.models import Task, TasksBlock
-from app.modules import DatasetSpec, Module, PageSpec
+from app.modules import DatasetSpec, HeaderSpec, Module, PageSpec
 
 HERE = Path(__file__).resolve().parent
 
@@ -81,6 +81,10 @@ class GreetingAdapter:
 
 def greeting_context(state, settings):
     return {"greeting": "HELLO FROM A THIRD PARTY"}
+
+
+def greeting_header(state, settings):
+    return {"line": "HELLO FROM THE HEADER"}
 
 
 MODULE = Module(
@@ -107,6 +111,7 @@ MODULE = Module(
         needs=("greeting",),
         flag=lambda state, settings: False,
     ),
+    header=HeaderSpec(context=greeting_header, templates_dir=HERE / "templates"),
     default_order=90,
 )
 '''
@@ -130,12 +135,25 @@ HELLO_TEMPLATE = """\
 """
 
 
+#: The module's header widget partial. Named after the module id, because
+#: that is the only name core looks for
+#: (``app/modules/__init__.py:header_template_name``) and what keeps two
+#: modules' partials from shadowing each other in the one flat Jinja
+#: search path.
+HELLO_HEADER_TEMPLATE = """\
+<div class="hdr-widget">{{ header.widget.line }}</div>
+"""
+
+
 def write_hello_module(data_dir: Path, package: str = "hello") -> Path:
     """Install the module above under ``data_dir/modules/<package>/``."""
     root = data_dir / "modules" / package
     (root / "templates").mkdir(parents=True, exist_ok=True)
     (root / "__init__.py").write_text(HELLO_PACKAGE, encoding="utf-8")
     (root / "templates" / "hello.html").write_text(HELLO_TEMPLATE, encoding="utf-8")
+    (root / "templates" / f"{package}_header.html").write_text(
+        HELLO_HEADER_TEMPLATE, encoding="utf-8"
+    )
     return root
 
 
@@ -664,6 +682,29 @@ def test_disabling_a_module_removes_its_page_after_reload(
         store.save("modules", before)
         asyncio.run(hub.reload())
     assert "hello" in hub.registry.page_ids()
+
+
+def test_a_directory_module_can_fill_the_header_widget_slot(
+    hello_client: TestClient, hello_token: str
+) -> None:
+    """A module installed by dropping a directory in brings a header widget
+    like any built-in: it is offered on the settings page, and picking it
+    draws its partial into the header of a page core owns
+    (docs/MODULES.md, "Header widget")."""
+    hub = hello_client.app.state.hub
+    assert "hello" in [module.id for module in hub.registry.installed_header_widgets()]
+    before = hub.settings_store.load("general")
+    try:
+        hub.settings_store.save(
+            "general", before.model_copy(update={"header_widget": "hello"})
+        )
+        run(hub.reload())
+        page = hello_client.get("/preview/today.html", headers=auth(hello_token))
+        assert page.status_code == 200
+        assert "HELLO FROM THE HEADER" in page.text
+    finally:
+        hub.settings_store.save("general", before)
+        run(hub.reload())
 
 
 def test_a_module_directory_without_an_init_is_ignored(hello_data_dir: Path) -> None:
