@@ -12,7 +12,6 @@ from pathlib import Path
 
 from app import __version__
 from app.adapters.weather import build_weather_adapter
-from app.config import APP_DIR
 from app.models import WeatherBlock
 from app.modules import DatasetSpec, Module, PageSpec
 from app.modules.weather.settings import SECTION, WeatherSettings
@@ -43,7 +42,7 @@ MODULE = Module(
     ),
     page=PageSpec(
         title=PAGE_TITLES["weather"],
-        templates_dir=APP_DIR / "templates",
+        templates_dir=Path(__file__).parent / "templates",
         template="weather.html",
         context=weather_context,
         render_ttl_seconds=3600.0,

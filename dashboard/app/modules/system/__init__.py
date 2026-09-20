@@ -15,7 +15,6 @@ from pathlib import Path
 from app import __version__
 from app.adapters.device import build_device_adapter
 from app.adapters.home_assistant import build_home_adapter
-from app.config import APP_DIR
 from app.models import DeviceBlock, HomeBlock
 from app.modules import DatasetSpec, Module, PageSpec
 from app.modules.device.settings import SECTION as DEVICE_SECTION
@@ -59,7 +58,7 @@ MODULE = Module(
     ),
     page=PageSpec(
         title=PAGE_TITLES["system"],
-        templates_dir=APP_DIR / "templates",
+        templates_dir=Path(__file__).parent / "templates",
         template="system.html",
         context=system_context,
         render_ttl_seconds=900.0,

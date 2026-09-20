@@ -11,7 +11,6 @@ from pathlib import Path
 
 from app import __version__
 from app.adapters.ai_brief import build_brief_adapter
-from app.config import APP_DIR
 from app.models import BriefBlock
 from app.modules import DatasetSpec, Module, PageSpec
 from app.modules.brief.routes import build_router
@@ -43,7 +42,7 @@ MODULE = Module(
     ),
     page=PageSpec(
         title=PAGE_TITLES["brief"],
-        templates_dir=APP_DIR / "templates",
+        templates_dir=Path(__file__).parent / "templates",
         template="brief.html",
         context=brief_context,
         render_ttl_seconds=300.0,

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from app import __version__
 from app.adapters.calendar import build_calendar_adapter
-from app.config import APP_DIR
 from app.models import CalendarBlock
 from app.modules import DatasetSpec, Module, PageSpec
 from app.modules.calendar.settings import SECTION as CALENDAR_SECTION, CalendarSettings
@@ -45,7 +44,7 @@ MODULE = Module(
     ),
     page=PageSpec(
         title=PAGE_TITLES["agenda"],
-        templates_dir=APP_DIR / "templates",
+        templates_dir=Path(__file__).parent / "templates",
         template="agenda.html",
         context=agenda_context,
         render_ttl_seconds=1800.0,
