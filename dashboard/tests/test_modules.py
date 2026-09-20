@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from starlette.datastructures import FormData
 
 from app.config import Env
+from app.db import get_database
 from app.forms import parse_section, render_section
 from app.main import create_app
 from app.models import TasksBlock
@@ -693,6 +694,128 @@ def test_a_module_directory_shadowing_an_installed_package_refuses_to_load(
     assert "calendar" in sys.modules
     assert sys.modules["calendar"] is stdlib_calendar
     assert stdlib_calendar.month_name is month_name
+
+
+# ---------------------------------------------------------------------------
+# a module route colliding with a core path (app/main.py:create_app)
+# ---------------------------------------------------------------------------
+#: A module whose push route is "/alert" - the same path core's own
+#: POST/DELETE /api/alert answers, once mounted under the shared "/api"
+#: prefix every module router gets. Written to disk (not built in Python
+#: and handed to a Registry directly) because the collision check lives in
+#: create_app's own route-mounting loop, which only ever sees modules the
+#: normal discovery paths found.
+SHADOW_ALERT_PACKAGE = '''\
+"""A module that declares a route colliding with a core path."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from app.modules import Module, ModuleContext
+
+
+def _routes(context: ModuleContext) -> APIRouter:
+    router = APIRouter()
+
+    @router.post("/alert")
+    async def shadow_alert() -> dict:
+        return {"shadowed": True}
+
+    return router
+
+
+MODULE = Module(
+    id="shadow",
+    title="SHADOW",
+    version="1.0.0",
+    description="Declares POST /alert, which core already owns under /api.",
+    routes=_routes,
+)
+'''
+
+
+def write_shadow_alert_module(data_dir: Path) -> Path:
+    root = data_dir / "modules" / "shadow"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "__init__.py").write_text(SHADOW_ALERT_PACKAGE, encoding="utf-8")
+    return root
+
+
+def test_a_module_route_colliding_with_a_core_path_refuses_to_load(tmp_path: Path) -> None:
+    """Module routers used to be mounted before core's own /api/alert and
+    /api/device/telemetry routes were even declared, so a module route of
+    the same path would shadow core's - Starlette matches in declaration
+    order - silently, for as long as the process stayed up. core's routes
+    are declared first now, and this is the belt: a collision refuses to
+    load at all rather than merely losing the ordering race the other way."""
+    data_dir = tmp_path / "shadow-route"
+    write_shadow_alert_module(data_dir)
+    env = Env(_env_file=None, DATA_DIR=data_dir, LOG_LEVEL="WARNING")
+
+    try:
+        with pytest.raises(ModuleError, match="POST /api/alert.*collides with a core path"):
+            create_app(env)
+    finally:
+        get_database(env.hub_db_file).close()
+
+
+def test_an_ordinary_module_route_still_mounts_and_answers(tmp_path: Path) -> None:
+    """The sanity check the refusal above needs: a module route that does
+    not collide with anything still mounts under /api and still answers, so
+    the fix is a refusal for a real collision, not routers failing to mount
+    in general once core's own routes come first."""
+    data_dir = tmp_path / "harmless-route"
+    root = data_dir / "modules" / "harmless"
+    root.mkdir(parents=True)
+    (root / "__init__.py").write_text(
+        textwrap.dedent(
+            '''\
+            from __future__ import annotations
+
+            from fastapi import APIRouter
+            from fastapi.responses import JSONResponse
+
+            from app.modules import Module, ModuleContext
+
+
+            def _routes(context: ModuleContext) -> APIRouter:
+                router = APIRouter()
+
+                @router.post("/harmless")
+                async def harmless() -> JSONResponse:
+                    return JSONResponse({"ok": True})
+
+                return router
+
+
+            MODULE = Module(
+                id="harmless",
+                title="HARMLESS",
+                version="1.0.0",
+                description="A push route with no collision.",
+                routes=_routes,
+            )
+            '''
+        ),
+        encoding="utf-8",
+    )
+    env = Env(_env_file=None, DATA_DIR=data_dir, LOG_LEVEL="WARNING")
+    app = create_app(env)
+    try:
+        secrets = asyncio.run(
+            app.state.hub.identity.claim(
+                name="deskmate", base_url="http://dashboard-hub.lan:8080"
+            )
+        )
+        client = TestClient(app)
+        response = client.post(
+            "/api/harmless", headers={"Authorization": f"Bearer {secrets.token}"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+    finally:
+        app.state.hub.db.close()
 
 
 # ---------------------------------------------------------------------------

@@ -83,7 +83,7 @@ from app.models import (
     DeviceSample,
     DeviceTelemetry,
 )
-from app.modules import Module, ModuleContext
+from app.modules import Module, ModuleContext, ModuleError
 from app.modules.registry import Registry, load_registry
 from app.renderer.render import Renderer
 from app.settings import HubSettings, SettingsStore, sections_for
@@ -454,6 +454,25 @@ def _telemetry_origin(request: Request) -> tuple[str | None, str | None]:
     return remote_addr, hub_host
 
 
+def _route_signatures(app: FastAPI) -> set[tuple[str, str]]:
+    """Every ``(method, path)`` pair a route already mounted on ``app``
+    answers for.
+
+    What the module-router collision check compares a new router's routes
+    against: recomputed fresh each time a module is mounted (see
+    ``create_app``), so it also catches two modules claiming the same path,
+    not only a module against core.
+    """
+    signatures: set[tuple[str, str]] = set()
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path is None or not methods:
+            continue
+        signatures.update((method, path) for method in methods)
+    return signatures
+
+
 def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) -> FastAPI:
     """Build the FastAPI app and the one :class:`Hub` behind it.
 
@@ -597,28 +616,6 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
                     "tasks": {"source": hub.hub_settings.tasks.source},
                 },
             }
-        )
-
-    # -- pushed data -------------------------------------------------------
-    # A module that declares routes hands core an APIRouter; core mounts it
-    # under /api with the bearer-token dependency applied, so a module
-    # cannot forget auth. Each push route writes its dataset row in a
-    # threadpool and invalidates the matching CachedAdapter so /api/state
-    # reflects it on the very next build, not after the adapter's own TTL
-    # (app/modules/<id>/routes.py).
-    #
-    # Every installed module, not only the enabled ones: routes are fixed at
-    # startup (FastAPI has no unmount), so mounting only the enabled ones
-    # would mean a restart after every enable, while leaving a disabled
-    # module's route up costs nothing - it writes a row nothing draws and
-    # says exactly that in its own "warning" field.
-    for module in app.state.hub.registry.modules:
-        if module.routes is None:
-            continue
-        app.include_router(
-            module.routes(app.state.hub.module_context(module)),
-            prefix="/api",
-            dependencies=[Depends(require_token)],
         )
 
     # -- alerts ------------------------------------------------------------
@@ -956,6 +953,43 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         state = await hub.state(force="t" in request.query_params)
         html = hub.renderer.render_html(page, state, embed_fonts=False)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+    # -- pushed data -------------------------------------------------------
+    # A module that declares routes hands core an APIRouter; core mounts it
+    # under /api with the bearer-token dependency applied, so a module
+    # cannot forget auth. Each push route writes its dataset row in a
+    # threadpool and invalidates the matching CachedAdapter so /api/state
+    # reflects it on the very next build, not after the adapter's own TTL
+    # (app/modules/<id>/routes.py).
+    #
+    # Mounted last, after every one of core's own routes above: Starlette
+    # matches routes in declaration order, so a module router included
+    # before /api/alert or /api/device/telemetry could shadow either of
+    # them - the module's own handler would run instead of core's, silently,
+    # for as long as the process stayed up. Declaring core's routes first
+    # and refusing a collision below (rather than only ordering around it)
+    # is what makes that impossible instead of merely unlikely.
+    #
+    # Every installed module, not only the enabled ones: routes are fixed at
+    # startup (FastAPI has no unmount), so mounting only the enabled ones
+    # would mean a restart after every enable, while leaving a disabled
+    # module's route up costs nothing - it writes a row nothing draws and
+    # says exactly that in its own "warning" field.
+    for module in app.state.hub.registry.modules:
+        if module.routes is None:
+            continue
+        router = module.routes(app.state.hub.module_context(module))
+        prefix = "/api"
+        existing = _route_signatures(app)
+        for route in router.routes:
+            full_path = prefix + getattr(route, "path", "")
+            for method in getattr(route, "methods", None) or ():
+                if (method, full_path) in existing:
+                    raise ModuleError(
+                        f"module {module.id!r}: route {method} {full_path} collides "
+                        "with a core path; rename it"
+                    )
+        app.include_router(router, prefix=prefix, dependencies=[Depends(require_token)])
 
     @app.exception_handler(LoginRedirect)
     async def login_redirect_handler(request: Request, exc: LoginRedirect) -> RedirectResponse:
