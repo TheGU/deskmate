@@ -25,7 +25,7 @@ from app.logging_setup import log
 from app.models import Block, DashboardState
 from app.modules import DatasetSpec, ModuleContext
 from app.modules.registry import Registry, builtin_registry
-from app.settings import HubSettings
+from app.settings import HubSettings, sections_for
 from app.timeutil import now_local
 
 logger = logging.getLogger("app.state")
@@ -53,6 +53,10 @@ class StateService:
         self._registry = builtin_registry(hub_settings.modules) if registry is None else registry
         self._db = get_database(env.hub_db_file) if db is None else db
         self._specs: dict[str, DatasetSpec] = self._registry.datasets()
+        # Every section this hub has, including the ones installed modules
+        # brought: a dataset names the section its adapter reads and this is
+        # what turns that name into a model (see :meth:`_section`).
+        self._sections = sections_for(self._registry)
         self._adapters: dict[str, CachedAdapter[Any]] = {
             name: CachedAdapter(self._build(name, spec), spec.ttl_seconds(self._section(spec)))
             for name, spec in self._specs.items()
@@ -61,21 +65,18 @@ class StateService:
     def _section(self, spec: DatasetSpec) -> Any:
         """The settings the dataset's adapter reads.
 
-        A built-in or core section is an attribute of the snapshot. A section
-        a module brought with it is not (``HubSettings`` is a fixed model),
-        so it falls back to that module's own defaults until 2.1b gives a
-        module's section a row of its own.
+        ``HubSettings.section`` answers for a built-in section's fixed
+        attribute and for a module's own stored section alike, so an adapter
+        a third-party module brought reads what the settings page saved for
+        it, exactly as a built-in does.
         """
-        stored = getattr(self._hub_settings, spec.section, None)
-        if stored is not None:
-            return stored
-        model = self._registry.sections().get(spec.section)
+        model = self._sections.get(spec.section)
         if model is None:
             raise KeyError(
                 f"dataset {spec.name!r} reads the settings section {spec.section!r}, "
                 "which no module and no core section defines"
             )
-        return model()
+        return self._hub_settings.section(spec.section, model)
 
     def _build(self, name: str, spec: DatasetSpec) -> Adapter[Any]:
         owner = self._registry.dataset_owner(name)

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
+from datetime import datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -36,8 +38,10 @@ from app.modules.registry import (
     builtin_registry,
     directory_modules,
 )
-from app.settings import HubSettings
+from app.settings import SECTIONS, HubSettings
+from tests.conftest import make_state
 from tests.test_forms import submission
+from tests.test_settings_page import AdminHub
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 
@@ -123,6 +127,84 @@ def write_hello_module(data_dir: Path, package: str = "hello") -> Path:
     (root / "templates").mkdir(parents=True, exist_ok=True)
     (root / "__init__.py").write_text(HELLO_PACKAGE, encoding="utf-8")
     (root / "templates" / "hello.html").write_text(HELLO_TEMPLATE, encoding="utf-8")
+    return root
+
+
+#: A second module in a temp directory, this one with a settings section of
+#: its own. Core has no attribute for it on ``HubSettings`` and no entry for
+#: it in the module-level ``SECTIONS``, so everything it exercises - a form
+#: on /settings, a POST that saves, a value that survives a reload and
+#: reaches the page - has to come from the hub's own live section map.
+GREETER_PACKAGE = '''\
+"""A module with a settings section core has never heard of."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+from app.modules import Module, PageSpec
+
+HERE = Path(__file__).resolve().parent
+
+
+class GreeterSettings(BaseModel):
+    """What an owner sets for this module on the settings page."""
+
+    greeting: str = Field(default="HELLO", description="Printed on the page.")
+    shout: bool = Field(default=False, description="Print it in upper case.")
+
+
+def greeter_context(state, settings):
+    # The one accessor a module needs: it does not know or care whether its
+    # section is a fixed attribute of HubSettings or a row in extra.
+    own = settings.section("greeter", GreeterSettings)
+    return {"greeting": own.greeting.upper() if own.shout else own.greeting}
+
+
+MODULE = Module(
+    id="greeter",
+    title="GREETER",
+    version="1.0.0",
+    description="A page whose text comes from its own settings section.",
+    settings_model=GreeterSettings,
+    page=PageSpec(
+        title="GREETER",
+        templates_dir=HERE / "templates",
+        template="greeter.html",
+        context=greeter_context,
+        render_ttl_seconds=60.0,
+    ),
+    default_order=95,
+)
+'''
+
+GREETER_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      {{ font_css }}
+      html, body { margin: 0; width: 800px; height: 480px; background: #ffffff; }
+      h1 { font-family: 'Google Sans', sans-serif; font-size: 40px; padding: 24px; }
+    </style>
+  </head>
+  <body>
+    <h1>{{ page_title }}</h1>
+    <p>{{ greeting }}</p>
+  </body>
+</html>
+"""
+
+
+def write_greeter_module(data_dir: Path) -> Path:
+    """Install the settings-carrying module under ``data_dir/modules/greeter``."""
+    root = data_dir / "modules" / "greeter"
+    (root / "templates").mkdir(parents=True, exist_ok=True)
+    (root / "__init__.py").write_text(GREETER_PACKAGE, encoding="utf-8")
+    (root / "templates" / "greeter.html").write_text(GREETER_TEMPLATE, encoding="utf-8")
     return root
 
 
@@ -404,3 +486,83 @@ def test_the_example_package_is_plain_ascii() -> None:
     """The repo's own rule, asserted where a test writes source to disk."""
     assert textwrap.dedent(HELLO_PACKAGE).isascii()
     assert HELLO_TEMPLATE.isascii()
+    assert textwrap.dedent(GREETER_PACKAGE).isascii()
+    assert GREETER_TEMPLATE.isascii()
+
+
+# ---------------------------------------------------------------------------
+# a third-party module's own settings section
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def greeter(tmp_path: Path) -> Iterator[AdminHub]:
+    """A claimed hub with the greeter module installed in its DATA_DIR."""
+    data_dir = tmp_path / "live"
+    write_greeter_module(data_dir)
+    hub = AdminHub(data_dir)
+    yield hub
+    hub.hub.db.close()
+
+
+def greeter_settings(admin: AdminHub) -> Any:
+    """The greeter section as the hub holds it right now."""
+    return admin.hub.hub_settings.extra["greeter"]
+
+
+def save_greeting(admin: AdminHub, **fields: str) -> Any:
+    return admin.client.post(
+        "/settings/greeter",
+        data={"action": "save", **fields},
+        headers=admin.auth,
+        follow_redirects=False,
+    )
+
+
+def test_a_third_party_section_is_in_the_hubs_section_map(greeter: AdminHub) -> None:
+    """``SECTIONS`` is fixed at import and cannot know this module exists."""
+    assert "greeter" not in SECTIONS
+    assert "greeter" in greeter.hub.sections
+    assert greeter_settings(greeter).greeting == "HELLO"
+
+
+def test_a_third_party_section_renders_its_own_form(greeter: AdminHub) -> None:
+    page = greeter.client.get("/settings", headers=greeter.auth)
+    assert page.status_code == 200
+    assert 'id="greeter"' in page.text
+    assert 'action="/settings/greeter"' in page.text
+    assert 'id="greeter-greeting"' in page.text
+    assert 'id="greeter-shout"' in page.text
+
+
+def test_a_third_party_section_saves_and_survives_a_reload(greeter: AdminHub) -> None:
+    assert save_greeting(greeter, greeting="bonjour", shout="1").status_code == 303
+    assert greeter_settings(greeter).greeting == "bonjour"
+    assert greeter_settings(greeter).shout is True
+
+    asyncio.run(greeter.hub.reload())
+    assert greeter_settings(greeter).greeting == "bonjour"
+    # And it is on the page the admin comes back to, not only in memory.
+    assert 'value="bonjour"' in greeter.client.get("/settings", headers=greeter.auth).text
+
+
+def test_a_third_party_section_reaches_its_own_page(greeter: AdminHub) -> None:
+    """The point of the whole exercise: what was saved is what is drawn."""
+    save_greeting(greeter, greeting="bonjour", shout="1")
+    state = make_state(generated_at=datetime(2026, 9, 20, 9, 0, tzinfo=ZoneInfo("Asia/Bangkok")))
+    html = greeter.hub.renderer.render_html("greeter", state, embed_fonts=False)
+    assert "BONJOUR" in html
+
+
+def test_a_disabled_third_party_module_keeps_its_section(greeter: AdminHub) -> None:
+    """Turning a module off must not lose what its section holds, and must
+    not take its form off the page either: there would be no way back."""
+    save_greeting(greeter, greeting="bonjour")
+    greeter.hub.settings_store.save(
+        "modules", ModulesSettings(items=[ModuleToggle(id="greeter", enabled=False)])
+    )
+    asyncio.run(greeter.hub.reload())
+
+    assert "greeter" not in greeter.hub.registry.page_ids()
+    assert "greeter" in greeter.hub.sections
+    assert greeter_settings(greeter).greeting == "bonjour"
+    page = greeter.client.get("/settings", headers=greeter.auth)
+    assert 'action="/settings/greeter"' in page.text

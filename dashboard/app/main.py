@@ -86,7 +86,7 @@ from app.models import (
 from app.modules import Module, ModuleContext
 from app.modules.registry import Registry, load_registry
 from app.renderer.render import Renderer
-from app.settings import SECTIONS, HubSettings, SettingsStore
+from app.settings import HubSettings, SettingsStore, sections_for
 from app.settings_pages import register as register_settings_pages
 from app.state import StateService, state_fingerprint
 from app.telemetry import TelemetryStore, TelemetrySummary, utc_now
@@ -194,10 +194,16 @@ def _seed_missing_sections(store: SettingsStore, seed: HubSettings) -> None:
     environment: both of those ran first (``Hub.__init__`` calls this after
     ``import_legacy``), so a section either of them touched already has a
     row here and is left alone.
+
+    Which sections these are is the store's own map, so seeding through the
+    bootstrap store writes the built-ins and seeding through the real one
+    adds whatever an installed module brought. A seed with nothing to say
+    about a module's section writes that section's defaults, exactly as it
+    does for a built-in it left alone.
     """
-    for section in SECTIONS:
+    for section, model in store.sections.items():
         if store.updated_at(section) is None:
-            store.save(section, getattr(seed, section))
+            store.save(section, seed.section(section, model))
 
 
 class Hub:
@@ -223,15 +229,10 @@ class Hub:
         # or that file's sources would win over the seed on a fresh DATA_DIR.
         legacy_env = LegacyEnv(_env_file=None) if hub_settings is not None else LegacyEnv()
         import_legacy(self.db, legacy_env, env.data_dir)
-        self.settings_store = SettingsStore(self.db)
-        if hub_settings is not None:
-            _seed_missing_sections(self.settings_store, hub_settings)
-        self.hub_settings = self.settings_store.snapshot()
-        # The registry is built from the snapshot, so the ``modules`` section
-        # (which module is enabled, in what order) is what decides which
-        # pages this hub serves and which adapters it runs. It is rebuilt on
-        # every reload, which is how a settings save takes effect.
-        self.registry = self._build_registry()
+        # Registry, section map, settings store and snapshot, in that order
+        # and for that reason (see :meth:`_rebuild`). Every one of them is
+        # rebuilt on reload, which is how a settings save takes effect.
+        self._rebuild(hub_settings)
         self.alerts = AlertStore(self.db, self.hub_settings.general.timezone)
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
         self.state_service = StateService(
@@ -275,14 +276,13 @@ class Hub:
         identity = await run_in_threadpool(HubIdentity, self.db)
         self.identity = identity
         await run_in_threadpool(self.alerts.load)
-        self.hub_settings = await run_in_threadpool(self.settings_store.snapshot)
+        await run_in_threadpool(self._rebuild)
         self.alerts.set_timezone(self.hub_settings.general.timezone)
         # TelemetryStore owns no connection of its own (see __init__), but it
         # does carry retention_days as a plain attribute read by the
         # /api/device/telemetry summary: without rebuilding it here, a saved
         # device.retention_days would never reach that response.
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
-        self.registry = await run_in_threadpool(self._build_registry)
         self.state_service = StateService(
             self.hub_settings, self.env, self.alerts, self.registry, self.db
         )
@@ -292,15 +292,42 @@ class Hub:
             self._cache.clear()
         log(logger, logging.INFO, "hub reloaded", configured=self.identity.configured)
 
-    def _build_registry(self) -> Registry:
-        """Every module this hub can see, with the ``modules`` section applied.
+    def _rebuild(self, seed: HubSettings | None = None) -> None:
+        """Re-read the registry, the section map, the store and the snapshot.
 
-        Built-ins, then ``deskmate.modules`` entry points, then the packages
-        under ``DATA_DIR/modules/``. A duplicate or invalid id refuses to
-        load rather than being dropped, so a hub either serves what the
-        settings page says it serves or does not come up.
+        The order is forced and looks circular until you follow it: the
+        registry decides which settings sections exist, and the ``modules``
+        section decides which modules the registry has. ``modules`` is a
+        *core* section, so a store over the built-in map can always read it
+        even on a hub whose real section map is not known yet. That is step
+        one; everything else follows from the registry it builds.
+
+        1. a bootstrap store over the built-ins, which is enough to read
+           ``modules`` (and, for a caller that handed one in, to seed the
+           built-in sections before that read, so a seeded ``modules``
+           section is the one this registry is built from);
+        2. the registry: built-ins, then ``deskmate.modules`` entry points,
+           then the packages under ``DATA_DIR/modules/``. A duplicate or
+           invalid id refuses to load rather than being dropped, so a hub
+           either serves what the settings page says it serves or does not
+           come up;
+        3. the section map, which is every installed module's own section
+           (enabled or not) plus the core ones;
+        4. the real store over that map, seeded again for whatever the
+           bootstrap store had no section for, and its snapshot.
+
+        Plain synchronous I/O throughout, like the store itself:
+        :meth:`reload` calls it in a threadpool.
         """
-        return load_registry(self.hub_settings.modules, self.env.data_dir)
+        bootstrap = SettingsStore(self.db)
+        if seed is not None:
+            _seed_missing_sections(bootstrap, seed)
+        self.registry = load_registry(bootstrap.modules(), self.env.data_dir)
+        self.sections = sections_for(self.registry)
+        self.settings_store = SettingsStore(self.db, self.sections)
+        if seed is not None:
+            _seed_missing_sections(self.settings_store, seed)
+        self.hub_settings = self.settings_store.snapshot()
 
     def module_context(self, module: Module) -> ModuleContext:
         """What this hub hands ``module`` when it builds a router."""

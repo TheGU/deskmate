@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.config import DEFAULT_HA_ENTITIES, Env
 from app.db import Database, close_databases
@@ -27,7 +27,7 @@ from app.modules.general.settings import GeneralSettings
 from app.modules.home.settings import HomeSettings
 from app.modules.tasks.settings import TasksSettings
 from app.modules.weather.settings import WeatherSettings
-from app.settings import SECTIONS, HubSettings, SettingsStore
+from app.settings import BUILTIN_SECTIONS, SECTIONS, HubSettings, SettingsStore
 
 
 def auth(token: str) -> dict[str, str]:
@@ -112,6 +112,78 @@ def test_sections_are_registered_in_wizard_order() -> None:
         "alert",
         "modules",
     ]
+
+
+# ---------------------------------------------------------------------------
+# sections a module brings with it
+# ---------------------------------------------------------------------------
+class ExtraSettings(BaseModel):
+    """Stands in for a third-party module's section model."""
+
+    greeting: str = "HELLO"
+    shout: bool = False
+
+
+def test_builtin_sections_are_exactly_the_fixed_attributes() -> None:
+    """``HubSettings.section`` reads an attribute for a name in this set and
+    ``extra`` for anything else, so the two must not drift apart."""
+    fixed = set(HubSettings.model_fields) - {"extra"}
+    assert BUILTIN_SECTIONS == fixed
+    assert BUILTIN_SECTIONS == set(SECTIONS)
+
+
+def test_section_reads_a_builtin_attribute() -> None:
+    settings = HubSettings(weather=WeatherSettings(source="fixture"))
+    assert settings.section("weather", WeatherSettings).source == "fixture"
+
+
+def test_section_reads_an_extra_section() -> None:
+    settings = HubSettings(extra={"greeter": ExtraSettings(greeting="bonjour")})
+    assert settings.section("greeter", ExtraSettings).greeting == "bonjour"
+
+
+def test_section_of_an_absent_module_is_that_models_defaults() -> None:
+    """A module reads its own settings without None-checking them: a hub
+    that never saved the section answers with the model's own defaults."""
+    assert HubSettings().section("greeter", ExtraSettings).greeting == "HELLO"
+
+
+def test_section_revalidates_a_value_stored_under_another_model() -> None:
+    """A snapshot taken while the module was not installed keeps whatever
+    fields the real model declares and drops the rest."""
+    settings = HubSettings(extra={"greeter": GeneralSettings(timezone="UTC")})
+    assert settings.section("greeter", ExtraSettings).greeting == "HELLO"
+
+
+def test_extra_sections_serialize_as_themselves() -> None:
+    """``SerializeAsAny``: without it every extra section would dump as the
+    bare ``BaseModel`` and carry no fields at all."""
+    settings = HubSettings(extra={"greeter": ExtraSettings(greeting="bonjour")})
+    assert settings.model_dump()["extra"]["greeter"]["greeting"] == "bonjour"
+
+
+def test_a_store_over_a_wider_map_round_trips_an_extra_section(
+    database: Database,
+) -> None:
+    """What ``Hub`` does with a module installed into ``DATA_DIR/modules/``:
+    the store speaks for the live section map, not for ``SECTIONS``."""
+    store = SettingsStore(database, {**SECTIONS, "greeter": ExtraSettings})
+    store.save("greeter", ExtraSettings(greeting="bonjour", shout=True))
+
+    snapshot = store.snapshot()
+    assert snapshot.section("greeter", ExtraSettings).greeting == "bonjour"
+    assert snapshot.section("greeter", ExtraSettings).shout is True
+    # The built-in attributes are untouched by any of it.
+    assert snapshot.general.timezone == "Asia/Bangkok"
+
+
+def test_a_store_over_the_builtin_map_refuses_an_unknown_section(
+    store: SettingsStore,
+) -> None:
+    """A section no installed module declares has no model to validate it,
+    so it is a KeyError here rather than an unreadable row later."""
+    with pytest.raises(KeyError):
+        store.load("greeter")
 
 
 # ---------------------------------------------------------------------------

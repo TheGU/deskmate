@@ -65,7 +65,6 @@ from app.hub_config import (
 )
 from app.httputil import _cap_form_body, _cap_restore_length, _stream_upload_to
 from app.logging_setup import log
-from app.settings import SECTIONS
 
 if TYPE_CHECKING:
     from app.main import Hub
@@ -117,9 +116,14 @@ def _section_form(
     ``values`` is what fills the inputs: the stored section by default, or a
     rejected submission's own values when the page is being re-rendered with
     its errors, so nobody retypes a whole form because one field was wrong.
+
+    The section map is the hub's own (``app/main.py:Hub._rebuild``), not the
+    module-level ``SECTIONS``: a module installed into ``DATA_DIR/modules/``
+    exists only at runtime, and its section gets a form here like any
+    built-in's.
     """
-    model = SECTIONS[section]
-    current = getattr(hub.hub_settings, section)
+    model = hub.sections[section]
+    current = hub.hub_settings.section(section, model)
     form = render_section(
         section,
         model,
@@ -134,13 +138,13 @@ def _section_form(
 
 
 def _settings_forms(hub: "Hub", *, replace: SectionForm | None = None) -> list[SectionForm]:
-    """Every section's form in SECTIONS order, with ``replace`` swapped in for
-    its own section (the one just saved, tested or refused)."""
+    """Every section's form in the hub's section order, with ``replace``
+    swapped in for its own section (the one just saved, tested or refused)."""
     return [
         replace
         if replace is not None and replace.section == section
         else _section_form(hub, section)
-        for section in SECTIONS
+        for section in hub.sections
     ]
 
 
@@ -199,8 +203,8 @@ async def _save_section(
     caused them: the caller re-renders it with a 422, so a browser sees
     exactly which field it has to fix.
     """
-    model = SECTIONS[section]
-    current = getattr(hub.hub_settings, section)
+    model = hub.sections[section]
+    current = hub.hub_settings.section(section, model)
     parsed = parse_section(model, form, current)
     if section == "weather":
         _apply_place(parsed.data, form)
@@ -496,7 +500,7 @@ def register(app: FastAPI, env: Env) -> None:
         this ICS URL right" is on the page rather than on the next render.
         """
         hub: Hub = app.state.hub
-        if section not in SECTIONS:
+        if section not in hub.sections:
             raise HTTPException(status_code=404, detail=f"unknown settings section {section}")
         await _cap_form_body(request)
         form = await request.form()
