@@ -323,6 +323,23 @@ def test_an_id_outside_the_pattern_refuses_to_load(bad: str) -> None:
         validate_module(_module(id=bad))
 
 
+def test_an_id_longer_than_the_telemetry_page_column_refuses_to_load() -> None:
+    """A page id is a module id verbatim, and a device echoes it back on
+    every ``POST /api/device/telemetry`` (``app/models.py:DeviceTelemetry.page``,
+    capped at 32 characters). An id that loads here but does not fit there
+    would 400 every telemetry post from a device sitting on that page."""
+    too_long = "a" + "b" * 32
+    assert len(too_long) > 32
+    with pytest.raises(ModuleError, match="32"):
+        validate_module(_module(id=too_long))
+
+
+def test_an_id_exactly_at_the_length_cap_loads() -> None:
+    exactly_32 = "a" + "b" * 31
+    assert len(exactly_32) == 32
+    validate_module(_module(id=exactly_32))
+
+
 def test_a_dataset_name_outside_the_pattern_refuses_to_load() -> None:
     spec = DatasetSpec(
         name="Not A Name",

@@ -55,6 +55,14 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 #: so anything else would have to be escaped somewhere.
 MODULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
+#: Longest a module id, settings section, dataset name or dataset section
+#: may be. A page id is a module id verbatim, and it is what a device echoes
+#: back in every ``POST /api/device/telemetry``
+#: (``app/models.py:DeviceTelemetry.page``, ``max_length=32``): a longer id
+#: would load here today, and then 400 every telemetry post from a device
+#: sitting on that page, forever after.
+MAX_ID_LENGTH = 32
+
 #: Ids core owns and a module may never claim. ``alert`` is the interrupt
 #: page (see the module docstring).
 RESERVED_IDS: frozenset[str] = frozenset({"alert"})
@@ -267,6 +275,12 @@ def validate_module(module: Module) -> None:
 def _check_id(value: Any, what: str, *, reserved: bool = True) -> None:
     if not isinstance(value, str) or not MODULE_ID_RE.match(value):
         raise ModuleError(f"{what} {value!r} must match {MODULE_ID_RE.pattern}")
+    if len(value) > MAX_ID_LENGTH:
+        raise ModuleError(
+            f"{what} {value!r} is {len(value)} characters; the longest allowed is "
+            f"{MAX_ID_LENGTH} (a page id is a module id, and that is what a device "
+            "echoes back on every telemetry post)"
+        )
     if value.isdigit():
         # Unreachable through the pattern above (it demands a leading
         # letter), and checked anyway: /display/{n}.png reads an all-digit
@@ -278,6 +292,7 @@ def _check_id(value: Any, what: str, *, reserved: bool = True) -> None:
 
 
 __all__ = [
+    "MAX_ID_LENGTH",
     "MODULE_ID_RE",
     "PUSHED_DATASETS",
     "RESERVED_IDS",
