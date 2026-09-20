@@ -11,8 +11,10 @@ from PIL import Image
 from app.adapters.device import build_device_state
 from app.models import (
     AdapterStatus,
+    AIUsageBlock,
     Alert,
     AlertPriority,
+    BriefBlock,
     DashboardState,
     DeviceBlock,
     DeviceSample,
@@ -30,7 +32,7 @@ from app.renderer.palette import DISPLAY_SIZE, PALETTE_RGB, assert_palette, pale
 from app.renderer.render import PAGES, Renderer
 from app.telemetry import TelemetrySummary
 from app.timeutil import zone
-from tests.conftest import open_png, run
+from tests.conftest import make_state, open_png, run, with_blocks
 
 
 @pytest.fixture(scope="module")
@@ -128,14 +130,13 @@ def test_system_page_without_device_data_is_still_clean(
     renderer: Renderer, state: DashboardState
 ) -> None:
     """No device, no chart: the panel says so rather than drawing a flat line."""
-    blank = state.model_copy(
-        update={
-            "device": DeviceBlock(
-                status=AdapterStatus.UNAVAILABLE,
-                source="store",
-                error="the device has not posted any telemetry yet",
-            )
-        }
+    blank = with_blocks(
+        state,
+        device=DeviceBlock(
+            status=AdapterStatus.UNAVAILABLE,
+            source="store",
+            error="the device has not posted any telemetry yet",
+        ),
     )
     assert "NO DEVICE DATA YET" in renderer.render_html("system", blank, embed_fonts=False)
 
@@ -170,9 +171,7 @@ def _device_block_with_power(usb_present: bool | None, charge_state: str | None)
 def test_system_page_shows_power_on_usb_and_stays_palette_clean(
     renderer: Renderer, state: DashboardState
 ) -> None:
-    charging = state.model_copy(
-        update={"device": _device_block_with_power(True, "charging")}
-    )
+    charging = with_blocks(state, device=_device_block_with_power(True, "charging"))
     html = renderer.render_html("system", charging, embed_fonts=False)
     assert 'class="sys-power-word">CHARGING<' in html
 
@@ -185,9 +184,7 @@ def test_system_page_shows_power_on_usb_and_stays_palette_clean(
 def test_system_page_shows_power_on_battery_and_stays_palette_clean(
     renderer: Renderer, state: DashboardState
 ) -> None:
-    on_battery = state.model_copy(
-        update={"device": _device_block_with_power(False, "not_charging")}
-    )
+    on_battery = with_blocks(state, device=_device_block_with_power(False, "not_charging"))
     html = renderer.render_html("system", on_battery, embed_fonts=False)
     assert 'class="sys-power-word">BATTERY<' in html
 
@@ -200,7 +197,7 @@ def test_system_page_shows_power_on_battery_and_stays_palette_clean(
 def test_system_page_hides_power_row_when_unreported(
     renderer: Renderer, state: DashboardState
 ) -> None:
-    unreported = state.model_copy(update={"device": _device_block_with_power(None, None)})
+    unreported = with_blocks(state, device=_device_block_with_power(None, None))
     html = renderer.render_html("system", unreported, embed_fonts=False)
     assert '<div class="sys-power-word">' not in html
 
@@ -257,7 +254,7 @@ def _widest_header_state(state: DashboardState) -> DashboardState:
         status=AdapterStatus.OK,
         items=[Task(id=str(n), title=f"Overdue {n}", due=late) for n in range(12)],
     )
-    return state.model_copy(update={"device": device, "tasks": tasks})
+    return with_blocks(state, device=device, tasks=tasks)
 
 
 def _all_flags_state(state: DashboardState) -> DashboardState:
@@ -274,7 +271,7 @@ def _all_flags_state(state: DashboardState) -> DashboardState:
         status=AdapterStatus.OK,
         home=HomeState(services=[ServiceStatus(key="nas", name="NAS", health=ServiceHealth.DOWN)]),
     )
-    return state.model_copy(update={"tasks": tasks, "weather": weather, "home": home})
+    return with_blocks(state, tasks=tasks, weather=weather, home=home)
 
 
 @pytest.mark.parametrize("page", PAGES)
@@ -341,12 +338,15 @@ def _today_state_with_stale_ai_usage_and_tasks(state: DashboardState) -> Dashboa
     """
     old_usage = state.generated_at - timedelta(hours=8, minutes=10)
     old_tasks = state.generated_at - timedelta(hours=12, minutes=10)
-    providers = [p.model_copy(update={"collected_at": old_usage}) for p in state.ai_usage.providers]
-    return state.model_copy(
-        update={
-            "ai_usage": state.ai_usage.model_copy(update={"source": "file", "providers": providers}),
-            "tasks": state.tasks.model_copy(update={"source": "file", "received_at": old_tasks}),
-        }
+    providers = [p.model_copy(update={"collected_at": old_usage}) for p in state.block("ai_usage", AIUsageBlock).providers]
+    return with_blocks(
+        state,
+        ai_usage=state.block("ai_usage", AIUsageBlock).model_copy(
+            update={"source": "file", "providers": providers}
+        ),
+        tasks=state.block("tasks", TasksBlock).model_copy(
+            update={"source": "file", "received_at": old_tasks}
+        ),
     )
 
 
@@ -361,22 +361,29 @@ def test_today_page_fresh_has_no_stale_mark_and_stays_clean(
     # fixture's own timestamps sit in the morning, so without this the test
     # turned stale, and failed, every afternoon once the 6 h threshold passed.
     now = state.generated_at
-    assert state.brief.brief is not None
-    fresh = state.model_copy(
-        update={
-            "ai_usage": state.ai_usage.model_copy(
-                update={
-                    "source": "file",
-                    "providers": [
-                        p.model_copy(update={"collected_at": now}) for p in state.ai_usage.providers
-                    ],
-                }
-            ),
-            "brief": state.brief.model_copy(
-                update={"source": "file", "brief": state.brief.brief.model_copy(update={"generated_at": now})}
-            ),
-            "tasks": state.tasks.model_copy(update={"source": "file", "received_at": now}),
-        }
+    assert state.block("brief", BriefBlock).brief is not None
+    usage = state.block("ai_usage", AIUsageBlock)
+    brief = state.block("brief", BriefBlock)
+    assert brief.brief is not None
+    fresh = with_blocks(
+        state,
+        ai_usage=usage.model_copy(
+            update={
+                "source": "file",
+                "providers": [
+                    p.model_copy(update={"collected_at": now}) for p in usage.providers
+                ],
+            }
+        ),
+        brief=brief.model_copy(
+            update={
+                "source": "file",
+                "brief": brief.brief.model_copy(update={"generated_at": now}),
+            }
+        ),
+        tasks=state.block("tasks", TasksBlock).model_copy(
+            update={"source": "file", "received_at": now}
+        ),
     )
     html = renderer.render_html("today", fresh, embed_fonts=False)
     assert 'class="today-stale-age"' not in html
@@ -427,7 +434,7 @@ def test_today_footer_shows_demo_for_the_default_fixture_state(
     """The shared fixture state's ai_usage/tasks are fixture-sourced (auto
     resolves to fixture with no DATA_DIR pushes), so a fresh install's
     footer must say DEMO rather than pass fixture numbers off as real."""
-    assert state.ai_usage.source == "fixture"
+    assert state.block("ai_usage", AIUsageBlock).source == "fixture"
     html = renderer.render_html("today", state, embed_fonts=False)
     assert '<span class="ftr-demo">DEMO</span>' in html
 
@@ -445,12 +452,11 @@ def test_today_footer_hides_demo_once_every_shown_dataset_is_file_sourced(
     """Today draws all three pushed datasets (ai_usage, brief via the NOTE
     field, and tasks), so DEMO only clears once none of the three is a
     fixture."""
-    real = state.model_copy(
-        update={
-            "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
-            "brief": state.brief.model_copy(update={"source": "file"}),
-            "tasks": state.tasks.model_copy(update={"source": "file"}),
-        }
+    real = with_blocks(
+        state,
+        ai_usage=state.block("ai_usage", AIUsageBlock).model_copy(update={"source": "file"}),
+        brief=state.block("brief", BriefBlock).model_copy(update={"source": "file"}),
+        tasks=state.block("tasks", TasksBlock).model_copy(update={"source": "file"}),
     )
     html = renderer.render_html("today", real, embed_fonts=False)
     assert 'class="ftr-demo"' not in html
@@ -462,13 +468,12 @@ def test_today_footer_shows_demo_when_only_the_brief_is_still_a_fixture(
     """Regression: Today draws the brief note (the NOTE field), not just
     ai_usage and tasks, so a fixture-sourced brief alone must still show
     DEMO even when ai_usage and tasks are both file-sourced."""
-    mixed = state.model_copy(
-        update={
-            "ai_usage": state.ai_usage.model_copy(update={"source": "file"}),
-            "tasks": state.tasks.model_copy(update={"source": "file"}),
-        }
+    mixed = with_blocks(
+        state,
+        ai_usage=state.block("ai_usage", AIUsageBlock).model_copy(update={"source": "file"}),
+        tasks=state.block("tasks", TasksBlock).model_copy(update={"source": "file"}),
     )
-    assert mixed.brief.source == "fixture"
+    assert mixed.block("brief", BriefBlock).source == "fixture"
     html = renderer.render_html("today", mixed, embed_fonts=False)
     assert '<span class="ftr-demo">DEMO</span>' in html
 
@@ -514,7 +519,7 @@ def _weather_state_with_hourly_plates(count: int) -> DashboardState:
         for n in range(count)
     ]
     weather = WeatherBlock(status=AdapterStatus.OK, weather=Weather(condition="Cloudy", hourly_rain=hourly))
-    return DashboardState(generated_at=reference, timezone="Asia/Bangkok", weather=weather)
+    return make_state(generated_at=reference, timezone="Asia/Bangkok", weather=weather)
 
 
 #: Whether the hero+readings group has grown to absorb the column's slack,
@@ -583,7 +588,7 @@ def test_brief_task_titles_never_truncate_mid_word(renderer: Renderer, state: Da
     full or ends in the single ellipsis character :func:`clip_words` uses;
     the CSS ellipsis is a safety net only, so it should not be the one
     actually firing here."""
-    fixture_titles = {task.title for task in state.tasks.items}
+    fixture_titles = {task.title for task in state.block("tasks", TasksBlock).items}
     rows = run(
         renderer.probe(
             "brief",

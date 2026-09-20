@@ -70,4 +70,22 @@ def write_dataset(
         )
 
 
-__all__ = ["read_dataset", "write_dataset"]
+def push_warning(dataset: str, configured: str) -> str | None:
+    """The push response's ``warning`` field when the row just written is not
+    what the panel actually draws.
+
+    The source is pinned to ``fixture`` (a fresh hub still shows demo data
+    for this dataset) or, for tasks only, ``obsidian`` (the push landed but
+    the panel keeps reading the vault). ``None`` when the source is
+    ``push``, since that is exactly the row the route just wrote.
+
+    It lives here rather than in a route because all three push routes
+    (``app/modules/<id>/routes.py``) answer with it and none of them owns
+    it. A module of someone else's writing gets it for free.
+    """
+    if configured == "push":
+        return None
+    return f"{dataset}.source is {configured}; the panel will not show this push"
+
+
+__all__ = ["push_warning", "read_dataset", "write_dataset"]

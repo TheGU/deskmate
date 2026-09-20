@@ -9,9 +9,16 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone as dt_timezone
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeVar
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializeAsAny,
+    field_validator,
+)
 
 
 class AdapterStatus(str, Enum):
@@ -536,31 +543,57 @@ class DeviceBlock(Block):
     device: DeviceState | None = None
 
 
-class DashboardState(BaseModel):
-    """Everything the templates are allowed to see."""
+BlockT = TypeVar("BlockT", bound=Block)
 
+#: ``/api/state``'s shape number. 1 was the seven typed top-level block
+#: fields this model carried until 2.1a; 2 is the ``blocks`` mapping, whose
+#: keys are whatever datasets the enabled modules declare
+#: (docs/plan/2026-09-19-settings-modules-provisioning.md, phase 2 "State").
+STATE_SCHEMA_VERSION: int = 2
+
+
+class DashboardState(BaseModel):
+    """Everything the templates are allowed to see.
+
+    ``blocks`` is keyed by dataset name, not by a fixed set of fields: a
+    module brings its own datasets, so the hub cannot know the names at
+    class-definition time. ``SerializeAsAny`` is what makes that mapping
+    carry real data over the wire: without it pydantic would serialize
+    every value as the declared base :class:`Block` and ``/api/state``
+    would be seven envelopes with no items, no weather and no brief in
+    them.
+
+    Nothing reads ``state.blocks[name]`` directly. :meth:`block` is the
+    accessor, and it always answers with the asked-for block type, so a
+    page never has to None-check a dataset whose module is disabled or
+    whose adapter has not run.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    schema_version: int = Field(default=STATE_SCHEMA_VERSION, alias="schema")
     generated_at: datetime
     timezone: str
-    tasks: TasksBlock = Field(default_factory=TasksBlock)
-    calendar: CalendarBlock = Field(default_factory=CalendarBlock)
-    weather: WeatherBlock = Field(default_factory=WeatherBlock)
-    ai_usage: AIUsageBlock = Field(default_factory=AIUsageBlock)
-    brief: BriefBlock = Field(default_factory=BriefBlock)
-    home: HomeBlock = Field(default_factory=HomeBlock)
-    device: DeviceBlock = Field(default_factory=DeviceBlock)
+    blocks: dict[str, SerializeAsAny[Block]] = Field(default_factory=dict)
     alert: Alert | None = None
 
-    @property
-    def blocks(self) -> dict[str, Block]:
-        return {
-            "tasks": self.tasks,
-            "calendar": self.calendar,
-            "weather": self.weather,
-            "ai_usage": self.ai_usage,
-            "brief": self.brief,
-            "home": self.home,
-            "device": self.device,
-        }
+    def block(self, name: str, model: type[BlockT]) -> BlockT:
+        """``name``'s block as a ``model``, or an unavailable placeholder.
+
+        A missing dataset (no such module, the module disabled, or the
+        adapter never ran) is an unavailable block of the asked-for type,
+        which is exactly what every page already draws for an adapter that
+        could not produce anything. A block stored under a different type -
+        a state validated from JSON that predates the module that owns it -
+        keeps its envelope (status, source, ``updated_at``, error) and
+        loses only the value fields the asked-for type does not declare.
+        """
+        value = self.blocks.get(name)
+        if isinstance(value, model):
+            return value
+        if value is None:
+            return model()
+        return model.model_validate(value.model_dump())
 
     @property
     def updated_at(self) -> datetime:

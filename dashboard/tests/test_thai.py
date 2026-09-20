@@ -14,10 +14,10 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from app.models import DashboardState
+from app.models import CalendarBlock, DashboardState, TasksBlock
 from app.renderer.palette import DISPLAY_SIZE, assert_palette, palette_violations
 from app.renderer.render import Renderer
-from tests.conftest import open_png, run
+from tests.conftest import open_png, run, with_blocks
 
 #: Real Thai, with ascenders (the vowel over the first cluster) and descenders
 #: (the loop below), because those are what a too-tight row clips first.
@@ -31,19 +31,19 @@ PRIORITIES_BOX = (14, 96, 488, 248)
 
 def _retitled(state: DashboardState, task_title: str, event_title: str) -> DashboardState:
     """The fixture state with every task and event title replaced."""
-    tasks = state.tasks.model_copy(
+    tasks = state.block("tasks", TasksBlock).model_copy(
         update={
-            "items": [item.model_copy(update={"title": task_title}) for item in state.tasks.items]
+            "items": [item.model_copy(update={"title": task_title}) for item in state.block("tasks", TasksBlock).items]
         }
     )
-    calendar = state.calendar.model_copy(
+    calendar = state.block("calendar", CalendarBlock).model_copy(
         update={
             "items": [
-                item.model_copy(update={"title": event_title}) for item in state.calendar.items
+                item.model_copy(update={"title": event_title}) for item in state.block("calendar", CalendarBlock).items
             ]
         }
     )
-    return state.model_copy(update={"tasks": tasks, "calendar": calendar})
+    return with_blocks(state, tasks=tasks, calendar=calendar)
 
 
 @pytest.fixture(scope="module")

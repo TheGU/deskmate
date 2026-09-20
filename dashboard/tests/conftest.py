@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import io
 from collections.abc import Coroutine, Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -21,7 +22,7 @@ from app.alerts import AlertStore
 from app.config import REPO_ROOT, Env
 from app.db import close_databases, get_database
 from app.main import create_app
-from app.models import DashboardState
+from app.models import Alert, Block, DashboardState
 from app.modules.ai_usage.settings import AIUsageSettings
 from app.modules.brief.settings import BriefSettings
 from app.modules.calendar.settings import CalendarSettings
@@ -124,6 +125,31 @@ def client(env: Env, hub_settings: HubSettings) -> Iterator[TestClient]:
     app = create_app(env, hub_settings)
     with TestClient(app) as test_client:
         yield test_client
+
+
+def make_state(
+    *,
+    generated_at: datetime,
+    timezone: str = "Asia/Bangkok",
+    alert: Alert | None = None,
+    **blocks: Block,
+) -> DashboardState:
+    """A :class:`DashboardState` from block keyword arguments.
+
+    ``DashboardState`` keys its blocks by dataset name since 2.1a (a module
+    brings its own datasets, so there is no fixed set of fields any more),
+    but a test reads far better as ``make_state(..., tasks=TasksBlock(...))``
+    than as a hand-built mapping. This is that one line of sugar, and
+    nothing else: every name lands in ``state.blocks`` untouched.
+    """
+    return DashboardState(
+        generated_at=generated_at, timezone=timezone, blocks=dict(blocks), alert=alert
+    )
+
+
+def with_blocks(state: DashboardState, **blocks: Block) -> DashboardState:
+    """``state`` with these blocks replaced and every other one kept."""
+    return state.model_copy(update={"blocks": {**state.blocks, **blocks}})
 
 
 def open_png(payload: bytes) -> Image.Image:

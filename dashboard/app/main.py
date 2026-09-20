@@ -57,7 +57,6 @@ from starlette.datastructures import FormData, UploadFile
 from starlette.formparsers import MultiPartException
 
 from app import __version__
-from app.adapters.ai_brief import current_mode
 from app.adapters.device import HISTORY_MAX_POINTS, device_status, downsample
 from app.alerts import AlertStore
 from app.backup import (
@@ -70,7 +69,6 @@ from app.backup import (
     restore_temp_path,
 )
 from app.config import Env
-from app.datasets import write_dataset
 from app.db import get_database
 from app.forms import (
     FormErrors,
@@ -113,15 +111,14 @@ from app.hub_config import (
 from app.legacy import LegacyEnv, import_legacy
 from app.logging_setup import configure_logging, log
 from app.models import (
-    AIUsagePush,
     AlertRequest,
-    BriefPush,
     DashboardState,
     DeviceSample,
     DeviceTelemetry,
-    TasksPush,
 )
-from app.renderer.render import PAGE_TTL_SECONDS, PAGES, Renderer
+from app.modules import Module, ModuleContext
+from app.modules.registry import Registry, load_registry
+from app.renderer.render import Renderer
 from app.settings import SECTIONS, HubSettings, SettingsStore
 from app.state import StateService, state_fingerprint
 from app.telemetry import TelemetryStore, TelemetrySummary, utc_now
@@ -249,10 +246,17 @@ class Hub:
         if hub_settings is not None:
             _seed_missing_sections(self.settings_store, hub_settings)
         self.hub_settings = self.settings_store.snapshot()
+        # The registry is built from the snapshot, so the ``modules`` section
+        # (which module is enabled, in what order) is what decides which
+        # pages this hub serves and which adapters it runs. It is rebuilt on
+        # every reload, which is how a settings save takes effect.
+        self.registry = self._build_registry()
         self.alerts = AlertStore(self.db, self.hub_settings.general.timezone)
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
-        self.state_service = StateService(self.hub_settings, env, self.alerts)
-        self.renderer = Renderer(env, self.hub_settings)
+        self.state_service = StateService(
+            self.hub_settings, env, self.alerts, self.registry, self.db
+        )
+        self.renderer = Renderer(env, self.hub_settings, self.registry)
         self.identity = HubIdentity(self.db)
         self._cache: dict[str, RenderCacheEntry] = {}
         self._cache_lock = asyncio.Lock()
@@ -297,11 +301,39 @@ class Hub:
         # /api/device/telemetry summary: without rebuilding it here, a saved
         # device.retention_days would never reach that response.
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
-        self.state_service = StateService(self.hub_settings, self.env, self.alerts)
+        self.registry = await run_in_threadpool(self._build_registry)
+        self.state_service = StateService(
+            self.hub_settings, self.env, self.alerts, self.registry, self.db
+        )
         self.renderer.hub_settings = self.hub_settings
+        self.renderer.registry = self.registry
         async with self._cache_lock:
             self._cache.clear()
         log(logger, logging.INFO, "hub reloaded", configured=self.identity.configured)
+
+    def _build_registry(self) -> Registry:
+        """Every module this hub can see, with the ``modules`` section applied.
+
+        Built-ins, then ``deskmate.modules`` entry points, then the packages
+        under ``DATA_DIR/modules/``. A duplicate or invalid id refuses to
+        load rather than being dropped, so a hub either serves what the
+        settings page says it serves or does not come up.
+        """
+        return load_registry(self.hub_settings.modules, self.env.data_dir)
+
+    def module_context(self, module: Module) -> ModuleContext:
+        """What this hub hands ``module`` when it builds a router."""
+        return ModuleContext(
+            env=self.env,
+            db=self.db,
+            data_dir=self.env.data_dir,
+            http_timeout_seconds=self.env.http_timeout_seconds,
+            logger=logging.getLogger(f"app.modules.{module.id}"),
+        )
+
+    def has_page(self, page: str) -> bool:
+        """Whether this hub draws ``page``: an enabled module's, or alert."""
+        return page in self.renderer.pages
 
     async def state(self, *, force: bool = False) -> DashboardState:
         return await self.state_service.build(force=force)
@@ -309,7 +341,9 @@ class Hub:
     async def png(self, page: str, state: DashboardState, *, force: bool) -> RenderCacheEntry:
         """Return the cached PNG for ``page`` or render a fresh one."""
         fingerprint = state_fingerprint(state)
-        ttl = PAGE_TTL_SECONDS.get(page, 0.0)
+        # Alert is not a module, so the registry has no TTL for it: it is an
+        # interrupt and is re-rendered whenever it is asked for.
+        ttl = self.registry.page_ttl_seconds(page)
         async with self._cache_lock:
             entry = self._cache.get(page)
             if (
@@ -581,7 +615,7 @@ async def _tested_section_form(hub: "Hub", section: str, *, search_url: str) -> 
     or a Home Assistant token is wrong, on the page, before they move on.
     """
     form = _section_form(hub, section, search_url=search_url)
-    adapter = getattr(hub.state_service, section)
+    adapter = hub.state_service.adapters[section]
     outcome = await adapter.get(force=True)
     form.test_status = outcome.status.value
     form.test_error = outcome.error or ""
@@ -629,19 +663,6 @@ def _wizard_html(
         skip_url=_wizard_next(step),
     )
     return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
-
-
-def _push_warning(section: str, configured: str) -> str | None:
-    """The response's "warning" field when the just-written push is not what
-    the panel actually draws: the source is pinned to ``fixture`` (a fresh
-    hub still shows demo data for this dataset) or, for tasks only,
-    ``obsidian`` (the push landed but the panel keeps reading the vault).
-    ``None`` when the source is ``push``, since that is exactly the row this
-    route just wrote.
-    """
-    if configured == "push":
-        return None
-    return f"{section}.source is {configured}; the panel will not show this push"
 
 
 def _validation_problems(error: ValidationError) -> list[dict[str, str]]:
@@ -804,7 +825,7 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
             {
                 **minimal,
                 "timezone": hub.hub_settings.general.timezone,
-                "pages": list(PAGES),
+                "pages": list(hub.renderer.pages),
                 "adapters": adapters,
                 "alert": hub.alerts.current.priority.value if hub.alerts.current else None,
             }
@@ -847,76 +868,26 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
         )
 
     # -- pushed data -------------------------------------------------------
-    # Every push writes its dataset row in a threadpool, then invalidates the
-    # matching CachedAdapter so /api/state reflects it on the very next
-    # build, not after the adapter's own TTL.
-    @app.post("/api/ai-usage", dependencies=[Depends(require_token)])
-    async def post_ai_usage(payload: AIUsagePush) -> JSONResponse:
-        hub: Hub = app.state.hub
-        received_at = datetime.now(dt_timezone.utc)
-        document = {
-            "providers": [item.model_dump(mode="json") for item in payload.providers],
-        }
-        await run_in_threadpool(write_dataset, hub.db, "ai_usage", document, received_at)
-        hub.state_service.ai_usage.invalidate()
-        configured = hub.hub_settings.ai_usage.source
-        body: dict[str, Any] = {
-            "stored": "ai_usage",
-            "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
-            "count": len(payload.providers),
-            "effective_source": configured,
-        }
-        warning = _push_warning("ai_usage", configured)
-        if warning is not None:
-            body["warning"] = warning
-        return JSONResponse(body)
-
-    @app.post("/api/brief", dependencies=[Depends(require_token)])
-    async def post_brief(payload: BriefPush) -> JSONResponse:
-        hub: Hub = app.state.hub
-        received_at = datetime.now(dt_timezone.utc)
-        mode = payload.mode or current_mode(hub.hub_settings.brief, hub.hub_settings.general)
-        document = {
-            "mode": mode.value,
-            "headline": payload.headline,
-            "note": payload.note or "",
-            "sections": [section.model_dump(mode="json") for section in payload.sections],
-            "generated_at": payload.generated_at.isoformat(),
-        }
-        await run_in_threadpool(write_dataset, hub.db, "brief", document, received_at)
-        hub.state_service.brief.invalidate()
-        configured = hub.hub_settings.brief.source
-        body: dict[str, Any] = {
-            "stored": "brief",
-            "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
-            "count": len(payload.sections),
-            "effective_source": configured,
-        }
-        warning = _push_warning("brief", configured)
-        if warning is not None:
-            body["warning"] = warning
-        return JSONResponse(body)
-
-    @app.post("/api/tasks", dependencies=[Depends(require_token)])
-    async def post_tasks(payload: TasksPush) -> JSONResponse:
-        hub: Hub = app.state.hub
-        received_at = datetime.now(dt_timezone.utc)
-        document = {
-            "tasks": [item.model_dump(mode="json") for item in payload.tasks],
-        }
-        await run_in_threadpool(write_dataset, hub.db, "tasks", document, received_at)
-        hub.state_service.tasks.invalidate()
-        configured = hub.hub_settings.tasks.source
-        body: dict[str, Any] = {
-            "stored": "tasks",
-            "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
-            "count": len(payload.tasks),
-            "effective_source": configured,
-        }
-        warning = _push_warning("tasks", configured)
-        if warning is not None:
-            body["warning"] = warning
-        return JSONResponse(body)
+    # A module that declares routes hands core an APIRouter; core mounts it
+    # under /api with the bearer-token dependency applied, so a module
+    # cannot forget auth. Each push route writes its dataset row in a
+    # threadpool and invalidates the matching CachedAdapter so /api/state
+    # reflects it on the very next build, not after the adapter's own TTL
+    # (app/modules/<id>/routes.py).
+    #
+    # Every installed module, not only the enabled ones: routes are fixed at
+    # startup (FastAPI has no unmount), so mounting only the enabled ones
+    # would mean a restart after every enable, while leaving a disabled
+    # module's route up costs nothing - it writes a row nothing draws and
+    # says exactly that in its own "warning" field.
+    for module in app.state.hub.registry.modules:
+        if module.routes is None:
+            continue
+        app.include_router(
+            module.routes(app.state.hub.module_context(module)),
+            prefix="/api",
+            dependencies=[Depends(require_token)],
+        )
 
     # -- alerts ------------------------------------------------------------
     @app.post("/api/alert", dependencies=[Depends(require_token)])
@@ -978,7 +949,7 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
             hub_host=hub_host,
         )
         # The next page render must see this sample, not the cached one.
-        hub.state_service.device.invalidate()
+        hub.state_service.adapters["device"].invalidate()
         return JSONResponse(
             {
                 "accepted": True,
@@ -1033,7 +1004,10 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     @app.get("/display/{page}.png", dependencies=[Depends(require_reader)])
     async def display(page: str, request: Request) -> Response:
         hub: Hub = app.state.hub
-        if page not in PAGES:
+        # 2.1b adds /display/{n}.png, which resolves an integer n to the
+        # n-th enabled page's id (registry.page_by_index) before the render
+        # cache, so the cache key and the X-Deskmate-Page header stay the id.
+        if not hub.has_page(page):
             return JSONResponse({"error": f"unknown page {page}"}, status_code=404)
         force = "t" in request.query_params
         state = await hub.state(force=force)
@@ -1466,14 +1440,15 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     @app.get("/preview", response_class=HTMLResponse, dependencies=[Depends(require_reader_html)])
     async def preview(request: Request) -> HTMLResponse:
         hub: Hub = app.state.hub
-        page = request.query_params.get("page", "today")
-        if page not in PAGES:
-            page = "today"
+        pages = hub.renderer.pages
+        page = request.query_params.get("page", pages[0])
+        if page not in pages:
+            page = pages[0]
         state = await hub.state()
         template = hub.renderer.environment.get_template("preview.html")
         html = template.render(
             page=page,
-            pages=list(PAGES),
+            pages=list(pages),
             timezone=hub.hub_settings.general.timezone,
             updated_label=state.updated_at.strftime("%H:%M"),
             adapters={name: block.status.value for name, block in state.blocks.items()},
@@ -1488,7 +1463,7 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     )
     async def preview_page(page: str, request: Request) -> Response:
         hub: Hub = app.state.hub
-        if page not in PAGES:
+        if not hub.has_page(page):
             return JSONResponse({"error": f"unknown page {page}"}, status_code=404)
         state = await hub.state(force="t" in request.query_params)
         html = hub.renderer.render_html(page, state, embed_fonts=False)

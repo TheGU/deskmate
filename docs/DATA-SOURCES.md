@@ -600,10 +600,13 @@ To add a new kind of pushed data to the hub:
 4. In `app/view.py`: give it a label on the page and in the matching
    template; add a `<dataset>_stale` wrapper around `stale_info` if it has a
    staleness threshold; list every page that actually draws it in
-   `PAGE_PUSH_DATASETS`; and, if it should ever flag a page's footer with
-   `!`, add that check to `window_flags`. **A page missing from
-   `PAGE_PUSH_DATASETS` silently gets no DEMO mark and no stale flag for
-   that dataset**, even if the page draws it, so double check every page
-   that reads the new field, not just the page it is "for".
+   `PAGE_PUSH_DATASETS` (which is what each page's `PageSpec.demo_datasets`
+   is built from); and, if it should ever flag a page's footer with `!`,
+   add that check to that page's own flag function (`today_flag`,
+   `agenda_flag`, ...), which is what its `PageSpec.flag` points at.
+   **A page missing from `PAGE_PUSH_DATASETS` silently gets no DEMO mark
+   and no stale flag for that dataset**, even if the page draws it, so
+   double check every page that reads the new field, not just the page it
+   is "for".
 5. Add one curl example and its cadence here, and its section to
    docs/SETTINGS.md.

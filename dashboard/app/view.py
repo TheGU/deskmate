@@ -7,27 +7,44 @@ Templates stay dumb: no adapter knowledge, no arithmetic, no fallbacks. Every
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from app import icons
 from app.models import (
     AdapterStatus,
+    AIUsageBlock,
     Alert,
     AlertPriority,
     Block,
+    BriefBlock,
+    CalendarBlock,
     DashboardState,
+    DeviceBlock,
     DeviceState,
     DeviceStatus,
     Event,
+    HomeBlock,
     PRIORITY_RANK,
     Priority,
     Task,
+    TasksBlock,
     Weather,
+    WeatherBlock,
 )
 from app.renderer.chart import build_chart
-from app.settings import HubSettings
 from app.timeutil import to_local
+
+if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    # app/settings.py's SECTIONS registry is derived from the module
+    # registry (app/modules/registry.py), and the registry imports the
+    # built-in module packages, which import this module for their context
+    # builders. Importing HubSettings only for annotations is what keeps
+    # that chain acyclic; ``from __future__ import annotations`` at the top
+    # makes every use below a string.
+    from app.modules import Module, PageContextFn
+    from app.settings import HubSettings
 
 UNKNOWN = "unknown"
 UNAVAILABLE = "unavailable"
@@ -53,9 +70,11 @@ PAGE_NAMES: dict[str, str] = {
     "alert": "ALERT",
 }
 
-#: The five pages the left and right buttons walk through. Alert is not in the
-#: list: it interrupts and then hands the previous page back.
-WINDOW_PAGES: tuple[str, ...] = ("today", "agenda", "weather", "brief", "system")
+# The window list itself is no longer a constant here. It is the registry's
+# enabled pages, in settings order (``app/modules/registry.py:Registry.
+# pages``), which is what lets a module add a window and the settings page
+# take one away. Alert is still never in it: it interrupts and then hands
+# the previous page back.
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +142,7 @@ def clip_words(text: str, budget_chars: int) -> str:
 # task and event selection
 # ---------------------------------------------------------------------------
 def open_tasks(state: DashboardState) -> list[Task]:
-    return [task for task in state.tasks.items if not task.completed]
+    return [task for task in state.block("tasks", TasksBlock).items if not task.completed]
 
 
 def task_sort_key(task: Task, today: date) -> tuple[int, int, str]:
@@ -282,7 +301,7 @@ def upcoming_events(
 ) -> list[dict[str, Any]]:
     today = reference.date()
     colors = colors or {}
-    events = [event for event in state.calendar.items if _event_end(event) >= reference]
+    events = [event for event in state.block("calendar", CalendarBlock).items if _event_end(event) >= reference]
     events.sort(key=lambda event: event.start)
     rows: list[dict[str, Any]] = []
     for event in events[:limit]:
@@ -354,11 +373,11 @@ def today_next_rows(
     The word TOMORROW never appears here (the owner asked for it gone): a
     later day always prints as its 3-letter weekday, timed or all-day.
     """
-    if not state.calendar.usable:
+    if not state.block("calendar", CalendarBlock).usable:
         return []
     today = reference.date()
     events = sorted(
-        (event for event in state.calendar.items if _event_end(event) >= reference),
+        (event for event in state.block("calendar", CalendarBlock).items if _event_end(event) >= reference),
         key=lambda event: event.start,
     )
     rows: list[dict[str, Any]] = []
@@ -396,7 +415,7 @@ def calendar_colors(state: DashboardState, settings: HubSettings) -> dict[str, s
     for index, feed in enumerate(settings.calendar.feeds):
         mapping[settings.calendar.feed_name(index).lower()] = feed.color
     unnamed = 0
-    for event in state.calendar.items:
+    for event in state.block("calendar", CalendarBlock).items:
         key = (event.calendar or "").lower()
         if not key or key in mapping:
             continue
@@ -436,7 +455,7 @@ def meter_cells(value: float | None, filled: bool = True) -> list[bool]:
 
 
 def overdue_tasks(state: DashboardState, today: date) -> list[Task]:
-    if not state.tasks.usable:
+    if not state.block("tasks", TasksBlock).usable:
         return []
     return [
         task
@@ -475,7 +494,7 @@ def stale_info(
 
 def ai_usage_stale(state: DashboardState, settings: HubSettings, now: datetime) -> str | None:
     """Age source: the oldest provider's ``collected_at``."""
-    block = state.ai_usage
+    block = state.block("ai_usage", AIUsageBlock)
     collected = [p.collected_at for p in block.providers if p.collected_at is not None]
     reference = min(collected) if collected else None
     return stale_info(reference, block.source, settings.ai_usage.stale_seconds, now)
@@ -483,14 +502,14 @@ def ai_usage_stale(state: DashboardState, settings: HubSettings, now: datetime) 
 
 def brief_stale(state: DashboardState, settings: HubSettings, now: datetime) -> str | None:
     """Age source: ``Brief.generated_at``."""
-    block = state.brief
+    block = state.block("brief", BriefBlock)
     reference = block.brief.generated_at if block.brief is not None else None
     return stale_info(reference, block.source, settings.brief.stale_seconds, now)
 
 
 def tasks_stale(state: DashboardState, settings: HubSettings, now: datetime) -> str | None:
     """Age source: ``TasksBlock.received_at``."""
-    block = state.tasks
+    block = state.block("tasks", TasksBlock)
     return stale_info(block.received_at, block.source, settings.tasks.stale_seconds, now)
 
 
@@ -505,6 +524,9 @@ def tasks_stale(state: DashboardState, settings: HubSettings, now: datetime) -> 
 #: draws (see "Adding a new pushed dataset" in docs/DATA-SOURCES.md). Today
 #: also draws the brief note (view.py:brief_note, the Today page's NOTE
 #: field), so "brief" belongs here too, not just on the brief page.
+#: 2.1a made these the built-in pages' ``PageSpec.demo_datasets``; the map
+#: stays here as the one place those tuples are written down until 2.2 moves
+#: each page into its own module package.
 PAGE_PUSH_DATASETS: dict[str, tuple[str, ...]] = {
     "today": ("ai_usage", "brief", "tasks"),
     "agenda": (),
@@ -514,59 +536,97 @@ PAGE_PUSH_DATASETS: dict[str, tuple[str, ...]] = {
     "alert": (),
 }
 
+#: The block type each pushed dataset arrives in. Only these three can ever
+#: be named in a page's ``demo_datasets`` (``app/modules/__init__.py``:
+#: ``PUSHED_DATASETS``), so this map is complete by construction.
+PUSHED_BLOCK_MODELS: dict[str, type[Block]] = {
+    "ai_usage": AIUsageBlock,
+    "brief": BriefBlock,
+    "tasks": TasksBlock,
+}
 
-def page_shows_demo_data(state: DashboardState, page: str) -> bool:
-    """True when a pushed dataset actually shown on this page is a fixture,
+
+def page_shows_demo_data(state: DashboardState, datasets: Sequence[str]) -> bool:
+    """True when one of the pushed datasets a page shows is a fixture,
     so a fresh install (nothing pushed yet) never passes demo numbers off
-    as real."""
-    blocks = {"ai_usage": state.ai_usage, "brief": state.brief, "tasks": state.tasks}
-    return any(blocks[name].source == "fixture" for name in PAGE_PUSH_DATASETS.get(page, ()))
+    as real.
 
-
-def window_flags(
-    state: DashboardState, settings: HubSettings, reference: datetime, overdue_count: int
-) -> set[str]:
-    """Pages the window list marks with a "!".
-
-    tmux flags a window that wants attention, and a flag on everything is a
-    flag on nothing, so the bar is deliberately hard to set: something has to
-    be late, broken or unhealthy, not merely worth reading. Rain is not a flag
-    because the status bar already carries it on every page.
+    ``datasets`` is the page's own ``demo_datasets``; the caller is the
+    footer, which gets it from the page spec.
     """
-    flagged: set[str] = set()
-    if overdue_count > 0:
-        flagged.add("agenda")
+    return any(
+        state.block(name, PUSHED_BLOCK_MODELS[name]).source == "fixture" for name in datasets
+    )
 
-    home = state.home.home
-    if state.home.usable and home is not None:
-        # A degraded service is on the System page already; only a service
-        # that is actually down is worth sending the owner there.
-        if any(service.health.value == "down" for service in home.services):
-            flagged.add("system")
 
-    device = state.device.device
-    if state.device.usable and device is not None and device.status is DeviceStatus.STALE:
-        flagged.add("system")
+# ---------------------------------------------------------------------------
+# window flags: one function per page, each the page's own reason
+# ---------------------------------------------------------------------------
+# tmux flags a window that wants attention, and a flag on everything is a
+# flag on nothing, so the bar is deliberately hard to set: something has to
+# be late, broken or unhealthy, not merely worth reading. Rain is not a flag
+# because the status bar already carries it on every page.
+#
+# Until 2.1a these five were one ``window_flags`` function that knew about
+# every page at once. They are now what each page's ``PageSpec.flag``
+# points at, so a module owns its own reason to be flagged and core owns
+# none of them. Each takes its reference time from ``state.updated_at``,
+# which is exactly what the footer passed in before.
+def page_reference(state: DashboardState) -> datetime:
+    """The moment a page reasons from: the newest adapter timestamp."""
+    return to_local(state.updated_at, state.timezone)
 
-    weather = state.weather.weather
-    if state.weather.usable and weather is not None:
-        air = (
-            uv_accent(weather.uv_index),
-            pm25_accent(weather.pm2_5),
-            aqi_accent(weather.aqi),
-        )
-        if "red" in air:
-            flagged.add("weather")
 
-    if (
+def today_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """Today draws AI capacity, the brief note and the priorities, so any of
+    the three going stale is Today's problem."""
+    reference = page_reference(state)
+    return bool(
         ai_usage_stale(state, settings, reference)
         or brief_stale(state, settings, reference)
         or tasks_stale(state, settings, reference)
-    ):
-        flagged.add("today")
-    if brief_stale(state, settings, reference) or tasks_stale(state, settings, reference):
-        flagged.add("brief")
-    return flagged
+    )
+
+
+def agenda_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """An overdue task is what sends the owner to the task list."""
+    return len(overdue_tasks(state, page_reference(state).date())) > 0
+
+
+def weather_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """Only air that is actually bad, never merely interesting weather."""
+    block = state.block("weather", WeatherBlock)
+    weather = block.weather
+    if not block.usable or weather is None:
+        return False
+    air = (
+        uv_accent(weather.uv_index),
+        pm25_accent(weather.pm2_5),
+        aqi_accent(weather.aqi),
+    )
+    return "red" in air
+
+
+def brief_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """The brief page draws the brief and the task list, and nothing else."""
+    reference = page_reference(state)
+    return bool(
+        brief_stale(state, settings, reference) or tasks_stale(state, settings, reference)
+    )
+
+
+def system_flag(state: DashboardState, settings: HubSettings) -> bool:
+    """A service that is down, or a device that stopped reporting."""
+    home_block = state.block("home", HomeBlock)
+    home = home_block.home
+    if home_block.usable and home is not None:
+        # A degraded service is on the System page already; only a service
+        # that is actually down is worth sending the owner there.
+        if any(service.health.value == "down" for service in home.services):
+            return True
+    device_block = state.block("device", DeviceBlock)
+    device = device_block.device
+    return device_block.usable and device is not None and device.status is DeviceStatus.STALE
 
 
 #: Header battery reading: yellow at or below 20 percent, red at or below 10.
@@ -598,8 +658,8 @@ def header_weather(state: DashboardState) -> dict[str, Any]:
     Heat outranks rain (a 40 degree feel is the thing to know first); a dry,
     cool reading gets the plain condition word with no dot and no colour.
     """
-    weather = state.weather.weather
-    if not state.weather.usable or weather is None:
+    weather = state.block("weather", WeatherBlock).weather
+    if not state.block("weather", WeatherBlock).usable or weather is None:
         return {"available": False}
     if is_heat(weather):
         color, label = "red", "HEAT"
@@ -625,8 +685,8 @@ PAGES_WITH_OWN_OVERDUE_CHIP: frozenset[str] = frozenset({"today", "brief"})
 
 def header_context(state: DashboardState, today: date, reference: datetime, page: str) -> dict[str, Any]:
     """Everything the shared header draws, on every page."""
-    device: DeviceState | None = state.device.device
-    has_device = state.device.usable and device is not None and device.has_reading
+    device: DeviceState | None = state.block("device", DeviceBlock).device
+    has_device = state.block("device", DeviceBlock).usable and device is not None and device.has_reading
     level = device.battery_level if has_device else None
     rssi = device.wifi_rssi if has_device else None
     charging = has_device and device.charge_state == "charging"
@@ -648,28 +708,68 @@ def header_context(state: DashboardState, today: date, reference: datetime, page
     }
 
 
+def enabled_pages() -> tuple[Module, ...]:
+    """The built-in pages, for a caller that has no registry to hand.
+
+    Core always passes the hub's own registry (``app/main.py`` builds it,
+    the renderer carries it). This fallback is for the direct callers -
+    tests, and a module context builder calling ``base_context`` on its own,
+    whose header and footer core overwrites anyway - and it is imported
+    lazily because the registry imports the built-in module packages, which
+    import this file.
+    """
+    from app.modules.registry import builtin_registry
+
+    return builtin_registry().pages()
+
+
 def footer_context(
-    state: DashboardState, settings: HubSettings, today: date, reference: datetime, page: str
+    state: DashboardState,
+    settings: HubSettings,
+    today: date,
+    reference: datetime,
+    page: str,
+    pages: Sequence[Module] | None = None,
+    demo_datasets: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """The window list: the five pages the buttons walk through, plus the
-    DEMO mark at the footer's right end for this page."""
-    overdue_count = len(overdue_tasks(state, today))
-    flagged = window_flags(state, settings, reference, overdue_count)
+    """The window list: the enabled pages the buttons walk through, plus the
+    DEMO mark at the footer's right end for this page.
+
+    ``pages`` is the registry's enabled pages in order, and each one's own
+    ``PageSpec.flag`` decides its "!". ``alert`` is never in the list: it
+    interrupts and then hands the previous page back.
+    """
+    window_pages = enabled_pages() if pages is None else tuple(pages)
+    if demo_datasets is None:
+        demo_datasets = PAGE_PUSH_DATASETS.get(page, ())
     return {
         "windows": [
             {
                 "index": index,
-                "name": PAGE_NAMES[name],
-                "flag": name in flagged,
-                "active": name == page,
+                "name": module.title,
+                "flag": _flagged(module, state, settings),
+                "active": module.id == page,
             }
-            for index, name in enumerate(WINDOW_PAGES, start=1)
+            for index, module in enumerate(window_pages, start=1)
         ],
-        "demo": page_shows_demo_data(state, page),
+        "demo": page_shows_demo_data(state, demo_datasets),
     }
 
 
-def base_context(state: DashboardState, settings: HubSettings, page: str) -> dict[str, Any]:
+def _flagged(module: Module, state: DashboardState, settings: HubSettings) -> bool:
+    spec = module.page
+    if spec is None or spec.flag is None:
+        return False
+    return bool(spec.flag(state, settings))
+
+
+def base_context(
+    state: DashboardState,
+    settings: HubSettings,
+    page: str,
+    pages: Sequence[Module] | None = None,
+    demo_datasets: Sequence[str] | None = None,
+) -> dict[str, Any]:
     reference = to_local(state.updated_at, state.timezone)
     today = reference.date()
     return {
@@ -682,7 +782,9 @@ def base_context(state: DashboardState, settings: HubSettings, page: str) -> dic
         # Named constants for the fixed glyphs; the chosen ones are per row.
         "icons": icons,
         "header": header_context(state, today, reference, page),
-        "footer": footer_context(state, settings, today, reference, page),
+        "footer": footer_context(
+            state, settings, today, reference, page, pages, demo_datasets
+        ),
         # Each page builder fills this with one accent per pane title bar.
         # Kept for agenda, weather, brief and system until their own parts
         # rebuild them off the older pane-title chrome.
@@ -698,14 +800,14 @@ def today_context(state: DashboardState, settings: HubSettings) -> dict[str, Any
 
     context["priorities"] = (
         today_priority_tasks(state, today, settings.tasks.max_priority_tasks)
-        if state.tasks.usable
+        if state.block("tasks", TasksBlock).usable
         else []
     )
-    context["tasks_note"] = block_note(state.tasks.status, "tasks")
+    context["tasks_note"] = block_note(state.block("tasks", TasksBlock).status, "tasks")
     context["agenda_rows"] = today_next_rows(state, reference, colors)
-    context["calendar_note"] = block_note(state.calendar.status, "calendar")
+    context["calendar_note"] = block_note(state.block("calendar", CalendarBlock).status, "calendar")
     context["providers"] = ai_capacity_rows(state)
-    context["usage_note"] = block_note(state.ai_usage.status, "AI quota")
+    context["usage_note"] = block_note(state.block("ai_usage", AIUsageBlock).status, "AI quota")
     context["ai_note"] = brief_note(state)
     context["priorities_stale"] = tasks_stale(state, settings, reference)
     context["capacity_stale"] = ai_usage_stale(state, settings, reference)
@@ -753,10 +855,10 @@ def _capacity_window(
 
 def ai_capacity_rows(state: DashboardState) -> list[dict[str, Any]]:
     """CLAUDE and CODEX, each with a 5H and a 7D reading, for the Today page."""
-    if not state.ai_usage.usable:
+    if not state.block("ai_usage", AIUsageBlock).usable:
         return []
     rows: list[dict[str, Any]] = []
-    for provider in state.ai_usage.providers[:2]:
+    for provider in state.block("ai_usage", AIUsageBlock).providers[:2]:
         healthy = provider.collection_status == "ok"
         rows.append(
             {
@@ -792,8 +894,8 @@ def percent_accent(value: int | None, healthy: bool) -> str:
 
 
 def brief_note(state: DashboardState) -> dict[str, str]:
-    brief = state.brief.brief
-    if not state.brief.usable or brief is None:
+    brief = state.block("brief", BriefBlock).brief
+    if not state.block("brief", BriefBlock).usable or brief is None:
         return {"text": f"AI brief {UNAVAILABLE}", "accent": "black"}
     text = brief.note or brief.headline
     if not text:
@@ -907,10 +1009,10 @@ def agenda_list_rows(
     in place of a divider or event once the remaining rows would not fit,
     ``N`` counting only events, never the dividers that introduced them.
     """
-    if not state.calendar.usable:
+    if not state.block("calendar", CalendarBlock).usable:
         return []
     events_by_day: dict[date, list[Event]] = {}
-    for event in state.calendar.items:
+    for event in state.block("calendar", CalendarBlock).items:
         day = event.start.date()
         if day < today:
             continue
@@ -950,8 +1052,8 @@ def month_grid(state: DashboardState, colors: dict[str, str], today: date) -> di
     days_in_month = (next_first - first).days
 
     day_colors: dict[int, set[str]] = {}
-    if state.calendar.usable:
-        for event in state.calendar.items:
+    if state.block("calendar", CalendarBlock).usable:
+        for event in state.block("calendar", CalendarBlock).items:
             day = event.start.date()
             if day.year == today.year and day.month == today.month:
                 day_colors.setdefault(day.day, set()).add(event_color(event, colors))
@@ -977,7 +1079,7 @@ def _next7_position(minutes: float) -> float:
 def next_seven_days(state: DashboardState, today: date) -> list[dict[str, Any]]:
     """The "rough answer" strip: one busy bar per day, 06:00-22:00, all-day
     events filling the whole bar; the event count blank at zero."""
-    events = state.calendar.items if state.calendar.usable else []
+    events = state.block("calendar", CalendarBlock).items if state.block("calendar", CalendarBlock).usable else []
     rows: list[dict[str, Any]] = []
     for offset in range(1, 8):
         day = today + timedelta(days=offset)
@@ -1009,7 +1111,7 @@ def agenda_context(state: DashboardState, settings: HubSettings) -> dict[str, An
 
     context["long_date"] = reference.strftime("%A %d %B").upper()
     context["agenda_list"] = agenda_list_rows(state, colors, today)
-    context["calendar_note"] = block_note(state.calendar.status, "calendar")
+    context["calendar_note"] = block_note(state.block("calendar", CalendarBlock).status, "calendar")
     context["month"] = month_grid(state, colors, today)
     context["next7"] = next_seven_days(state, today)
     return context
@@ -1132,11 +1234,11 @@ def weather_daily_rows(weather: Weather | None, today: date, limit: int = 7) -> 
 
 def weather_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "weather")
-    weather = state.weather.weather if state.weather.usable else None
+    weather = state.block("weather", WeatherBlock).weather if state.block("weather", WeatherBlock).usable else None
     reference: datetime = context["reference"]
     today: date = context["today"]
 
-    context["weather_note"] = block_note(state.weather.status, "weather")
+    context["weather_note"] = block_note(state.block("weather", WeatherBlock).status, "weather")
     context["hero"] = weather_summary(weather)
     context["readings"] = weather_readings(weather)
     context["hourly"] = weather_hourly_plates(weather, reference)
@@ -1352,10 +1454,10 @@ def brief_context(state: DashboardState, settings: HubSettings) -> dict[str, Any
     context = base_context(state, settings, "brief")
     today: date = context["today"]
     reference: datetime = context["reference"]
-    brief = state.brief.brief
+    brief = state.block("brief", BriefBlock).brief
     context["brief_stale"] = brief_stale(state, settings, reference)
-    context["brief_note"] = block_note(state.brief.status, "AI brief")
-    context["brief_available"] = state.brief.usable and brief is not None
+    context["brief_note"] = block_note(state.block("brief", BriefBlock).status, "AI brief")
+    context["brief_available"] = state.block("brief", BriefBlock).usable and brief is not None
     context["unavailable_message"] = BRIEF_UNAVAILABLE_MESSAGE
     if context["brief_available"]:
         context["mode_label"] = f"{brief.mode.value.upper()} BRIEF"
@@ -1383,15 +1485,15 @@ def brief_context(state: DashboardState, settings: HubSettings) -> dict[str, Any
         context["lines"] = []
         context["truncated"] = False
 
-    if state.tasks.usable:
+    if state.block("tasks", TasksBlock).usable:
         open_count = len(open_tasks(state))
         candidates = priority_tasks(state, today, open_count)
         context["tasks"], context["tasks_more_count"] = brief_task_rows(candidates)
     else:
         context["tasks"] = []
         context["tasks_more_count"] = 0
-    context["tasks_open_count"] = len(open_tasks(state)) if state.tasks.usable else 0
-    context["tasks_note"] = block_note(state.tasks.status, "tasks")
+    context["tasks_open_count"] = len(open_tasks(state)) if state.block("tasks", TasksBlock).usable else 0
+    context["tasks_note"] = block_note(state.block("tasks", TasksBlock).status, "tasks")
     return context
 
 
@@ -1504,8 +1606,8 @@ def wake_label(wake_cause: str | None) -> str:
 
 def device_panel(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     """Everything the DESK instrument cluster and its chart draw."""
-    device: DeviceState | None = state.device.device
-    if not state.device.usable or device is None or not device.has_reading:
+    device: DeviceState | None = state.block("device", DeviceBlock).device
+    if not state.block("device", DeviceBlock).usable or device is None or not device.has_reading:
         return {
             "available": False,
             "chart": build_chart([], state.timezone, note=NO_DEVICE_DATA),
@@ -1536,8 +1638,8 @@ def device_panel(state: DashboardState, settings: HubSettings) -> dict[str, Any]
 
 def desk_accent(state: DashboardState) -> str:
     """Whether the DESK row's stale tell-tale should show at all."""
-    device: DeviceState | None = state.device.device
-    if not state.device.usable or device is None or not device.has_reading:
+    device: DeviceState | None = state.block("device", DeviceBlock).device
+    if not state.block("device", DeviceBlock).usable or device is None or not device.has_reading:
         return "black"
     return "black" if device.status is DeviceStatus.OK else "yellow"
 
@@ -1599,12 +1701,12 @@ def _hub_dataset_rows(
     state: DashboardState, settings: HubSettings, now: datetime
 ) -> list[dict[str, Any]]:
     datasets: tuple[tuple[str, Block, str | None], ...] = (
-        ("TASKS", state.tasks, tasks_stale(state, settings, now)),
-        ("CALENDAR", state.calendar, None),
-        ("WEATHER", state.weather, None),
-        ("AI USAGE", state.ai_usage, ai_usage_stale(state, settings, now)),
-        ("BRIEF", state.brief, brief_stale(state, settings, now)),
-        ("HOME", state.home, None),
+        ("TASKS", state.block("tasks", TasksBlock), tasks_stale(state, settings, now)),
+        ("CALENDAR", state.block("calendar", CalendarBlock), None),
+        ("WEATHER", state.block("weather", WeatherBlock), None),
+        ("AI USAGE", state.block("ai_usage", AIUsageBlock), ai_usage_stale(state, settings, now)),
+        ("BRIEF", state.block("brief", BriefBlock), brief_stale(state, settings, now)),
+        ("HOME", state.block("home", HomeBlock), None),
     )
     return [
         {
@@ -1624,8 +1726,8 @@ def _hub_dataset_rows(
 #: back together when the device has never reported: NEVER, a hatch, a
 #: hatch, never a guess.
 def _hub_device_rows(state: DashboardState, now: datetime) -> list[dict[str, Any]]:
-    device: DeviceState | None = state.device.device
-    has_reading = state.device.usable and device is not None and device.has_reading
+    device: DeviceState | None = state.block("device", DeviceBlock).device
+    has_reading = state.block("device", DeviceBlock).usable and device is not None and device.has_reading
     newest_at = device.newest_at if has_reading and device is not None else None
     remote_addr = device.remote_addr if has_reading and device is not None else None
     hub_host = device.hub_host if has_reading and device is not None else None
@@ -1666,12 +1768,12 @@ def hub_rows(state: DashboardState, settings: HubSettings, now: datetime) -> lis
 def system_context(state: DashboardState, settings: HubSettings) -> dict[str, Any]:
     context = base_context(state, settings, "system")
     reference: datetime = context["reference"]
-    context["home_note"] = block_note(state.home.status, "home")
+    context["home_note"] = block_note(state.block("home", HomeBlock).status, "home")
     context["device"] = device_panel(state, settings)
     context["hub"] = hub_rows(state, settings, reference)
 
-    home = state.home.home
-    if not state.home.usable or home is None:
+    home = state.block("home", HomeBlock).home
+    if not state.block("home", HomeBlock).usable or home is None:
         context["home_rows"] = []
         return context
 
@@ -1739,18 +1841,68 @@ def alert_context(state: DashboardState, settings: HubSettings) -> dict[str, Any
     return context
 
 
-CONTEXT_BUILDERS = {
-    "today": today_context,
-    "agenda": agenda_context,
-    "weather": weather_context,
-    "brief": brief_context,
-    "system": system_context,
-    "alert": alert_context,
-}
+#: The one page core draws itself. Every other page comes from a module's
+#: ``PageSpec`` (``app/modules/registry.py``); ``alert`` never does, because
+#: it interrupts whatever is on screen and then hands it back, which is not
+#: something a module may claim (``app/modules/__init__.py:RESERVED_IDS``).
+ALERT_PAGE: str = "alert"
+
+CORE_CONTEXT_BUILDERS: dict[str, PageContextFn] = {ALERT_PAGE: alert_context}
 
 
-def build_context(page: str, state: DashboardState, settings: HubSettings) -> dict[str, Any]:
-    builder = CONTEXT_BUILDERS.get(page)
-    if builder is None:
+def build_context(
+    page: str,
+    state: DashboardState,
+    settings: HubSettings,
+    pages: Sequence[Module] | None = None,
+) -> dict[str, Any]:
+    """The page's own context, with core's frame merged over it.
+
+    The module builds its dict first and core computes ``header`` and
+    ``footer`` after, so a module cannot overwrite the frame by accident or
+    on purpose. ``page_title`` comes from the page spec for the same reason:
+    the footer and the title bar are what the device navigates by.
+
+    ``pages`` is the registry's enabled pages, which the footer's window
+    list and the flags are built from. Leaving it out uses the built-ins,
+    which is what a test asking for one page's context wants.
+    """
+    window_pages = enabled_pages() if pages is None else tuple(pages)
+    core = CORE_CONTEXT_BUILDERS.get(page)
+    if core is not None:
+        return _with_frame(
+            core(state, settings), state, settings, page, window_pages, (), PAGE_TITLES[page]
+        )
+
+    module = next((candidate for candidate in window_pages if candidate.id == page), None)
+    if module is None or module.page is None:
         raise KeyError(f"unknown page {page!r}")
-    return builder(state, settings)
+    spec = module.page
+    return _with_frame(
+        spec.context(state, settings),
+        state,
+        settings,
+        page,
+        window_pages,
+        spec.demo_datasets,
+        spec.title,
+    )
+
+
+def _with_frame(
+    context: dict[str, Any],
+    state: DashboardState,
+    settings: HubSettings,
+    page: str,
+    window_pages: Sequence[Module],
+    demo_datasets: Sequence[str],
+    title: str,
+) -> dict[str, Any]:
+    """The page's dict with core's frame merged over it, never under it."""
+    frame = base_context(state, settings, page, window_pages, demo_datasets)
+    merged = dict(context)
+    merged["page"] = page
+    merged["page_title"] = title
+    merged["header"] = frame["header"]
+    merged["footer"] = frame["footer"]
+    return merged

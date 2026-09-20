@@ -110,6 +110,7 @@ def test_sections_are_registered_in_wizard_order() -> None:
         "home",
         "device",
         "alert",
+        "modules",
     ]
 
 

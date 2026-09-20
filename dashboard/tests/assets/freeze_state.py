@@ -26,26 +26,41 @@ Re-run this script with no flag only when a change to the rendered pixels is
 intended; otherwise a mismatch there is a regression to fix, not a hash to
 refresh.
 
+The committed ``frozen-state.json`` is still written in the pre-2.1a shape
+(the seven typed block fields at the top level, not the ``blocks`` mapping),
+because rewriting it would mean rewriting the hashes beside it, and a gate
+that refreshes its own expectation proves nothing.
+``tests/test_render_gate.py:load_frozen_state`` reads either shape, and a
+fresh run of this script writes the current one, so ``--check`` reports the
+payload as differing for that reason as well as for the device block below.
+
 Pass ``--check`` instead to prove the script still works (the point of
 running it at all outside of an intentional pixel change) without touching
 either committed file: it builds the state and renders every page the same
 way, then compares against what is already on disk instead of writing.
-Every page except ``system`` is compared byte-for-byte; ``system`` is
-compared only for freshness of its adapters, never its hash, for the reason
-in the note below.
+Three pages are not compared byte-for-byte: ``system``, ``today`` and
+``brief``, for the reasons in the note below.
 
-Note: this script is not itself idempotent across runs. The device block's
-fixture (app/adapters/device.py's ``load_device_fixture``) deliberately
-generates its 24 h history relative to wall-clock "now" ("a fixed anchor date
-would make the demo device look permanently stale", per its own docstring),
-so the ``device``/``system`` page content can differ between two invocations
-of this script even though every timestamp on ``DashboardState`` itself is
-pinned above. That is fine for what this script is for: it freezes one
+Note: this script is not itself idempotent across runs. Two fixtures read
+the wall clock, on purpose:
+
+* the device fixture (app/adapters/device.py's ``load_device_fixture``)
+  generates its 24 h history relative to "now" ("a fixed anchor date would
+  make the demo device look permanently stale", per its own docstring), so
+  the ``device`` block and the ``system`` page move between runs;
+* the brief fixture picks the morning or the evening brief from the hour
+  this script runs at (app/adapters/ai_brief.py's ``current_mode``), so the
+  ``brief`` block, the ``brief`` page and the Today page's NOTE field flip
+  across the section's ``evening_hour``.
+
+Either way the content can differ between two invocations of this script
+even though every timestamp on ``DashboardState`` itself is pinned above. That is fine for what this script is for: it freezes one
 snapshot to disk once, and everything downstream (the render gate) only ever
 renders that already-frozen, unchanging state, which is what makes the gate
 itself byte-for-byte reproducible. It is also why ``--check`` cannot compare
-the ``system`` page's hash against the committed one: a fresh run's device
-history is never the same as the one already frozen on disk, by design.
+those three pages' hashes against the committed ones: a fresh run's device
+history, and a fresh run's brief mode, are not the ones already frozen on
+disk, by design.
 """
 
 from __future__ import annotations
@@ -82,6 +97,7 @@ from app.modules.weather.settings import WeatherSettings  # noqa: E402
 from app.renderer.render import PAGES, Renderer  # noqa: E402
 from app.settings import HubSettings  # noqa: E402
 from app.state import StateService  # noqa: E402
+from tests.test_render_gate import load_frozen_state  # noqa: E402
 
 FIXTURES_DIR = REPO_ROOT / "fixtures"
 ASSETS_DIR = Path(__file__).resolve().parent
@@ -93,9 +109,10 @@ HASHES_PATH = ASSETS_DIR / "frozen-hashes.json"
 #: value carries no meaning beyond being fixed.
 FROZEN_AT = datetime.fromisoformat("2026-09-19T09:00:00+07:00")
 
-#: The page whose rendered hash is never compared in --check: it draws the
-#: device block, whose fixture is wall-clock dependent (see module docstring).
-_WALL_CLOCK_DEPENDENT_PAGE = "system"
+#: The pages whose rendered hashes are never compared in --check: they draw
+#: a block whose fixture is wall-clock dependent (see module docstring).
+#: ``today`` draws the brief's NOTE field, which is why it is here too.
+_WALL_CLOCK_DEPENDENT_PAGES = ("system", "brief", "today")
 
 
 def _env(data_dir: Path) -> Env:
@@ -135,7 +152,7 @@ def _freeze_timestamps(state: DashboardState) -> DashboardState:
         name: block.model_copy(update={"updated_at": FROZEN_AT})
         for name, block in state.blocks.items()
     }
-    return state.model_copy(update={"generated_at": FROZEN_AT, **frozen_blocks})
+    return state.model_copy(update={"generated_at": FROZEN_AT, "blocks": frozen_blocks})
 
 
 async def _build_frozen_state(env: Env, hub_settings: HubSettings) -> DashboardState:
@@ -149,15 +166,16 @@ async def _build_frozen_state(env: Env, hub_settings: HubSettings) -> DashboardS
 
 def _dump_and_round_trip(state: DashboardState) -> str:
     payload = state.model_dump_json(indent=2) + "\n"
-    # Confirm the JSON round-trips: a change to models.py that makes a Block
-    # subclass lose fields on the way back through model_validate_json would
+    # Confirm the JSON round-trips through the very loader the gate uses
+    # (tests/test_render_gate.py:load_frozen_state): a change to models.py
+    # that makes a Block subclass lose fields on the way back would
     # otherwise pass silently, since the state built above is never compared
     # against anything else in the write path.
-    reloaded = DashboardState.model_validate_json(payload)
+    reloaded = load_frozen_state(payload)
     if reloaded != state:
         raise RuntimeError(
             "the freshly built state does not round-trip: "
-            "DashboardState.model_validate_json(...) != the model that produced it"
+            "load_frozen_state(...) != the model that produced it"
         )
     return payload
 
@@ -207,15 +225,16 @@ async def _check() -> int:
     if payload != expected_payload:
         print(
             "frozen-state.json would differ from a fresh build "
-            "(expected for the wall-clock-dependent device block; "
-            "unexpected for anything else - diff the two payloads by hand)",
+            "(expected: the wall-clock-dependent device and brief blocks, and "
+            "the committed file's pre-2.1a shape; unexpected for anything "
+            "else - diff the two payloads by hand)",
             file=sys.stderr,
         )
         ok = False
 
     expected_hashes = json.loads(HASHES_PATH.read_text(encoding="utf-8"))
     for page in PAGES:
-        if page == _WALL_CLOCK_DEPENDENT_PAGE:
+        if page in _WALL_CLOCK_DEPENDENT_PAGES:
             print(f"{page}: skipped (wall-clock dependent, see module docstring)")
             continue
         if hashes[page] != expected_hashes.get(page):

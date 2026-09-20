@@ -1,4 +1,11 @@
-"""HTML to six-color PNG rendering."""
+"""HTML to six-color PNG rendering.
+
+Only the palette is re-exported here. ``app/renderer/render.py`` is not,
+deliberately: importing it pulls in Playwright, ``app/view.py`` and the
+module registry, and ``app/view.py`` itself imports ``app.renderer.chart``,
+so a package ``__init__`` that reached for the renderer would close that
+loop. Import :class:`app.renderer.render.Renderer` from its own module.
+"""
 
 from __future__ import annotations
 
@@ -10,13 +17,10 @@ from app.renderer.palette import (
     quantize,
     to_png_bytes,
 )
-from app.renderer.render import PAGES, Renderer
 
 __all__ = [
-    "PAGES",
     "PALETTE",
     "PALETTE_RGB",
-    "Renderer",
     "assert_palette",
     "palette_image",
     "quantize",
