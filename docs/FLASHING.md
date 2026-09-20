@@ -134,6 +134,18 @@ change has no text fields or device page; a reflash is the fallback for
 those older devices (see `docs/DEPLOY.md`, "Giving the device its hub
 URL and key").
 
+**Refresh schedule.** `auto_refresh_interval`, `telemetry_interval` and
+`wake_hours` in `firmware/e1002.yaml`'s `substitutions:` block are now only
+the first-boot defaults, the same way `hub_base_url` and `hub_key` are: the
+device's refresh schedule is a hub setting (device section's Refresh
+minutes, Telemetry minutes and Wake hours; see docs/SETTINGS.md), carried in
+every telemetry POST response (docs/DATA-SOURCES.md) and stored by the
+device in restorable globals in NVS. A change on `/settings` reaches the
+device on its next telemetry post and is applied immediately - the two
+`interval:` components' update interval and the battery wake slot - with no
+OTA and no reboot. Editing the substitutions in the YAML only changes what a
+device that has never posted telemetry yet starts out with.
+
 ## Build gotcha on this PC
 
 Run `esphome compile` and `esphome run` from PowerShell. Launched from Git
