@@ -86,8 +86,8 @@ shared Chromium instance every other page uses
 
 1. Opens a fresh, throwaway browser context (800x480 viewport, the same
    supersample factor the panel's own template pages render at).
-2. Adds an init script that writes a `hassTokens` entry to that context's
-   `localStorage`, the same way the
+2. Adds an init script that writes a `hassTokens` entry to `localStorage`,
+   the same way the
    [sibbl/hass-lovelace-kindle-screensaver](https://github.com/sibbl/hass-lovelace-kindle-screensaver)
    project does it (`home-assistant-auth.js`, read on 2026-09-20): a JSON
    object with `hassUrl` (the dashboard URL's origin), `access_token` and
@@ -96,7 +96,12 @@ shared Chromium instance every other page uses
    own expiry check compares against `undefined` and never trips, so the
    token is treated as already logged in without a refresh cycle. It also
    sets `selectedLanguage` alongside it, which this module does too, so the
-   dashboard does not show its own language picker first.
+   dashboard does not show its own language picker first. An init script
+   like this one runs in every page and frame the context ever loads, not
+   just the dashboard's own, so the write is guarded by an origin check and
+   only ever lands in the Home Assistant origin's `localStorage` - never in
+   an iframe or webpage card pointing at a third-party site, and never on
+   an off-origin redirect.
 3. Navigates to the dashboard URL (4 second navigation timeout), waits
    `settle_ms`, and screenshots the viewport.
 4. Closes the context (always, even on failure) and hands the result to the

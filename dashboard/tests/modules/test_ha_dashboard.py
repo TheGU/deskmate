@@ -1,15 +1,18 @@
-"""The ``ha_dashboard`` module: token injection, the screenshot renderer's
-error frames, and its bounded, secret-free logging
+"""The ``ha_dashboard`` module: token injection (only into the Home
+Assistant origin), the screenshot renderer's error frames, and its
+bounded, secret-free logging
 (docs/plan/2026-09-19-settings-modules-provisioning.md, package 3.1).
 
 A small stdlib ``http.server`` stub stands in for Home Assistant: one route
 that looks like a dashboard, one that redirects to a login page the way an
-expired token does, and one that never answers at all. The module is
-disabled by default (``app/modules/ha_dashboard/__init__.py``), so these
-tests build their own :class:`Renderer` with it turned on instead of using
-the shared session one (``tests/conftest.py``), which is what
-``tests/test_render_gate.py`` hashes: enabling it there would put a page in
-the frozen gate that was never meant to be in it.
+expired token does, one that redirects to a second, third-party origin, and
+one that never answers at all. A second, independent stub server stands in
+for that third-party origin. The module is disabled by default
+(``app/modules/ha_dashboard/__init__.py``), so these tests build their own
+:class:`Renderer` with it turned on instead of using the shared session one
+(``tests/conftest.py``), which is what ``tests/test_render_gate.py``
+hashes: enabling it there would put a page in the frozen gate that was
+never meant to be in it.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ import pytest
 from playwright.async_api import async_playwright
 
 from app.config import Env
-from app.modules.ha_dashboard.screenshot import _init_script, _origin_of
+from app.modules.ha_dashboard.screenshot import _guard_origin_of, _init_script, _origin_of
 from app.modules.ha_dashboard.settings import HaDashboardSettings
 from app.modules.registry import ModulesSettings, ModuleToggle, builtin_registry
 from app.renderer.palette import assert_display_image
@@ -57,6 +60,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/login-redirect":
             self.send_response(302)
             self.send_header("Location", "/auth/authorize")
+            self.end_headers()
+            return
+        if self.path == "/redirect-elsewhere":
+            # Where this points is set per-test on the server instance
+            # (``redirect_target``): a second, independent origin, the way
+            # an off-origin redirect would send the dashboard's tab there.
+            target = self.server.redirect_target  # type: ignore[attr-defined]
+            self.send_response(302)
+            self.send_header("Location", target)
             self.end_headers()
             return
         if self.path == "/auth/authorize":
@@ -104,6 +116,7 @@ def _require_chromium(session_loop: Any) -> None:
 def stub_server() -> Iterator[_Server]:
     server = _Server(("127.0.0.1", 0), _Handler)
     server.requests = []  # type: ignore[attr-defined]
+    server.redirect_target = None  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -117,6 +130,31 @@ def stub_server() -> Iterator[_Server]:
 @pytest.fixture()
 def base_url(stub_server: _Server) -> str:
     host, port = stub_server.server_address[:2]
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="module")
+def other_stub_server() -> Iterator[_Server]:
+    """A second, independent origin: a stand-in for a third-party site an
+    iframe, a webpage card, or an off-origin redirect could send the
+    dashboard's tab to.
+    """
+    server = _Server(("127.0.0.1", 0), _Handler)
+    server.requests = []  # type: ignore[attr-defined]
+    server.redirect_target = None  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.fixture()
+def other_base_url(other_stub_server: _Server) -> str:
+    host, port = other_stub_server.server_address[:2]
     return f"http://{host}:{port}"
 
 
@@ -200,6 +238,86 @@ def test_init_script_sets_the_expected_hass_tokens_fields(base_url: str) -> None
     }
     # sibbl's project stores JSON.stringify(language), quotes included.
     assert result["language"] == '"en"'
+
+
+# ---------------------------------------------------------------------------
+# the init script only writes hassTokens on the Home Assistant origin, never
+# on whatever other origin the same context happens to load (finding 1:
+# context.add_init_script runs in every page and frame with no origin guard)
+# ---------------------------------------------------------------------------
+def test_init_script_writes_hass_tokens_only_on_the_ha_origin(
+    base_url: str, other_base_url: str
+) -> None:
+    origin = _origin_of(f"{base_url}/some/lovelace/view")
+    script = _init_script(origin, TOKEN)
+
+    async def _check() -> dict[str, Any]:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                context = await browser.new_context()
+                await context.add_init_script(script)
+                page = await context.new_page()
+
+                await page.goto(f"{base_url}/")
+                on_ha_origin = await page.evaluate("() => localStorage.getItem('hassTokens')")
+
+                await page.goto(f"{other_base_url}/")
+                on_other_origin = await page.evaluate("() => localStorage.getItem('hassTokens')")
+
+                return {"on_ha_origin": on_ha_origin, "on_other_origin": on_other_origin}
+            finally:
+                await browser.close()
+
+    result = run(_check())
+    assert result["on_ha_origin"] is not None
+    assert result["on_other_origin"] is None
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected_guard_origin"),
+    [
+        # location.origin never includes a default port, even when
+        # dashboard_url spells it out - the guard must be built to match.
+        ("http://ha.lan:80", "http://ha.lan"),
+        ("https://ha.lan:443", "https://ha.lan"),
+        # A non-default port is part of the origin and must not be dropped.
+        ("http://ha.lan:8123", "http://ha.lan:8123"),
+        ("https://ha.lan:8123", "https://ha.lan:8123"),
+        # No explicit port at all: nothing to normalize.
+        ("http://ha.lan", "http://ha.lan"),
+    ],
+)
+def test_guard_origin_drops_only_the_default_port(origin: str, expected_guard_origin: str) -> None:
+    assert _guard_origin_of(origin) == expected_guard_origin
+
+
+def test_redirect_to_other_origin_leaves_it_without_the_token(
+    stub_server: _Server, base_url: str, other_base_url: str
+) -> None:
+    """A 302 sends the dashboard's tab to a different origin: the guard
+    must keep the token off that origin's localStorage too."""
+    stub_server.redirect_target = f"{other_base_url}/"  # type: ignore[attr-defined]
+    origin = _origin_of(f"{base_url}/dashboard")
+    script = _init_script(origin, TOKEN)
+
+    async def _check() -> dict[str, Any]:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                context = await browser.new_context()
+                await context.add_init_script(script)
+                page = await context.new_page()
+                await page.goto(f"{base_url}/redirect-elsewhere")
+                landed_on_other_origin = other_base_url in page.url
+                tokens = await page.evaluate("() => localStorage.getItem('hassTokens')")
+                return {"landed_on_other_origin": landed_on_other_origin, "tokens": tokens}
+            finally:
+                await browser.close()
+
+    result = run(_check())
+    assert result["landed_on_other_origin"]
+    assert result["tokens"] is None
 
 
 # ---------------------------------------------------------------------------

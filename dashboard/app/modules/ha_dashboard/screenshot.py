@@ -150,6 +150,21 @@ def _origin_of(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def _guard_origin_of(origin: str) -> str:
+    """The origin ``location.origin`` reports for ``origin``: scheme and
+    host, with a default port (80 for http, 443 for https) dropped the way
+    a browser drops it --- so the origin guard in ``_init_script`` below
+    compares like with like even when ``dashboard_url`` spells the default
+    port out explicitly. ``hassUrl`` inside ``hassTokens`` is left as
+    ``origin`` gave it; only the guard's own comparison value is normalized.
+    """
+    parts = urlsplit(origin)
+    default_port = {"http": 80, "https": 443}.get(parts.scheme)
+    if parts.port is not None and parts.port == default_port:
+        return f"{parts.scheme}://{parts.hostname}"
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def _init_script(origin: str, token: str) -> str:
     """The localStorage write sibbl/hass-lovelace-kindle-screensaver makes
     before it navigates to a dashboard (``home-assistant-auth.js``,
@@ -161,11 +176,23 @@ def _init_script(origin: str, token: str) -> str:
     against ``undefined`` and never trips) --- plus the ``selectedLanguage``
     key that project sets alongside it so the page does not show its own
     language picker before it draws the dashboard.
+
+    ``context.add_init_script`` runs this in every page and frame the
+    context ever loads, not just the dashboard's own: without a guard, an
+    iframe or webpage card pointing at a third-party site, or an off-origin
+    redirect, would get this same write and end up holding a working,
+    long-lived Home Assistant token in its own localStorage. The origin
+    check below makes the write a no-op anywhere except the Home Assistant
+    origin itself.
     """
+    guard_origin = _guard_origin_of(origin)
     hass_tokens = json.dumps({"hassUrl": origin, "access_token": token, "token_type": "Bearer"})
     return (
+        "(() => {"
+        f"if (location.origin !== {json.dumps(guard_origin)}) return;"
         f"localStorage.setItem('hassTokens', {json.dumps(hass_tokens)});"
         f"localStorage.setItem('selectedLanguage', {json.dumps(json.dumps('en'))});"
+        "})();"
     )
 
 
