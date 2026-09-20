@@ -2,9 +2,9 @@
 
 Tasks reach the hub only through the push API (``POST /api/tasks``, see
 docs/DATA-SOURCES.md): a local agent that reads the owner's own task
-manager (an Obsidian vault, a to-do app, whatever it is) pushes the list
-over HTTP (docs/LOCAL-AGENT.md). The hub itself never reads a task source
-directly; the only other selector is ``fixture``, the explicit demo choice.
+manager pushes the list over HTTP (docs/LOCAL-AGENT.md). The hub itself
+never reads a task source directly; the only other selector is
+``fixture``, the explicit demo choice.
 """
 
 from __future__ import annotations
