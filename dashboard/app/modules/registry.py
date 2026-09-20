@@ -65,6 +65,7 @@ BUILTIN_MODULE_PACKAGES: tuple[str, ...] = (
     "app.modules.system",
     "app.modules.tasks",
     "app.modules.ai_usage",
+    "app.modules.ha_dashboard",
 )
 
 #: The entry point group a packaged module announces itself in.

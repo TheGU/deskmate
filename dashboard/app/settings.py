@@ -41,6 +41,7 @@ from app.modules.brief.settings import SECTION as _BRIEF_SECTION, BriefSettings
 from app.modules.calendar.settings import SECTION as _CALENDAR_SECTION, CalendarSettings
 from app.modules.device.settings import SECTION as _DEVICE_SECTION, DeviceSettings
 from app.modules.general.settings import SECTION as _GENERAL_SECTION, GeneralSettings
+from app.modules.ha_dashboard.settings import SECTION as _HA_DASHBOARD_SECTION, HaDashboardSettings
 from app.modules.home.settings import SECTION as _HOME_SECTION, HomeSettings
 from app.modules.registry import (
     SECTION as _MODULES_SECTION,
@@ -81,6 +82,7 @@ SECTION_ORDER: tuple[str, ...] = (
     _DEVICE_SECTION,
     _ALERT_SECTION,
     _MODULES_SECTION,
+    _HA_DASHBOARD_SECTION,
 )
 
 
@@ -122,6 +124,7 @@ class HubSettings(BaseModel):
     device: DeviceSettings = Field(default_factory=DeviceSettings)
     alert: AlertSettings = Field(default_factory=AlertSettings)
     modules: ModulesSettings = Field(default_factory=ModulesSettings)
+    ha_dashboard: HaDashboardSettings = Field(default_factory=HaDashboardSettings)
 
 
 class SettingsStore:
