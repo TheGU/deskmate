@@ -144,7 +144,11 @@ device in restorable globals in NVS. A change on `/settings` reaches the
 device on its next telemetry post and is applied immediately - the two
 `interval:` components' update interval and the battery wake slot - with no
 OTA and no reboot. Editing the substitutions in the YAML only changes what a
-device that has never posted telemetry yet starts out with.
+device that has never posted telemetry yet starts out with. ESPHome keys a
+restorable global's NVS entry off the md5 hash of its id, not its type, so
+if `refresh_minutes`, `telemetry_minutes` or `wake_hours_mask` ever needs a
+different type later, rename the id too - reusing the old one would read
+back whatever bytes the old type left behind as if they were the new type.
 
 ## Build gotcha on this PC
 

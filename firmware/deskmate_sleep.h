@@ -2,7 +2,7 @@
 // Included from e1002.yaml via `esphome: includes:`.
 #pragma once
 
-#include <initializer_list>
+#include <cstdint>
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
@@ -46,13 +46,17 @@ inline void release_sleep_pads() {
   gpio_hold_dis(GPIO_NUM_45);
 }
 
-// Seconds from now_seconds_of_day until the next slot in hours (local hours,
-// ascending). Slots closer than margin seconds are skipped so a wake that ran
-// a little late does not immediately re-arm for the same slot.
-inline uint32_t seconds_until_next_slot(int now_seconds_of_day, std::initializer_list<int> hours,
-                                        int margin = 120) {
+// Seconds from now_seconds_of_day until the next slot in hour_mask (bit h set
+// means wake at local hour h; see wake_hours_mask in e1002.yaml). Slots
+// closer than margin seconds are skipped so a wake that ran a little late
+// does not immediately re-arm for the same slot. A mask iterated bit 0
+// upward visits hours in ascending order on its own, so the caller never has
+// to sort anything.
+inline uint32_t seconds_until_next_slot(int now_seconds_of_day, uint32_t hour_mask, int margin = 120) {
   int first = -1;
-  for (int h : hours) {
+  for (int h = 0; h < 24; h++) {
+    if (!(hour_mask & (1u << h)))
+      continue;
     int t = h * 3600;
     if (first < 0)
       first = t;

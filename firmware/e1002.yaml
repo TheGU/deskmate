@@ -26,10 +26,21 @@ substitutions:
   # page_count and page_names (globals, below) are likewise runtime state,
   # not substitutions: the device starts with a default count of 5 and no
   # known ids, then learns both from every telemetry response.
+  #
+  # auto_refresh_interval, telemetry_interval and wake_hours below are only
+  # the first-boot defaults now (docs/plan finding 11): the refresh_minutes,
+  # telemetry_minutes and wake_hours_mask globals (below) are what the
+  # device actually runs on after its first telemetry response, restored
+  # from NVS across reboots and updated in place, with no reflash, whenever
+  # the hub's device section changes (docs/DATA-SOURCES.md, "Device
+  # telemetry").
   auto_refresh_interval: 30min              # conditional request, 304 means no panel refresh
   alert_default_seconds: "90"
   telemetry_interval: 5min                  # POST sensors to the hub
   # Battery mode: wake at these local hours (ascending), refresh, sleep.
+  # Keep this in sync with the wake_hours_mask global's initial value below
+  # if you change it: the substitution only seeds that bitmask on a fresh
+  # flash, it is never read again afterwards.
   wake_hours: "8, 12, 17"
   battery_awake_grace: 45s                  # stay awake this long after the refresh
   battery_awake_deadline: 150s              # sleep no matter what after this
@@ -58,6 +69,42 @@ esphome:
             if (id(page_count) > 32) id(page_count) = 32;
             int count = id(page_count);
             id(page_index) = ((id(page_index) % count) + count) % count;
+        # Refresh schedule: refresh_minutes, telemetry_minutes and
+        # wake_hours_mask are restore_value: true, so a device that has
+        # talked to the hub before boots with whatever it was last told
+        # rather than the compiled substitution defaults. Clamp to the same
+        # bounds the hub's device settings enforce (docs/SETTINGS.md) in
+        # case a bound shrank since the last time this device was on -
+        # never zero a value, only clamp it or, for the mask, fall back to
+        # the compiled default - then apply the two interval components
+        # right away: they otherwise start this boot on their compiled
+        # ${auto_refresh_interval}/${telemetry_interval} literal, not the
+        # restored minutes value. set_update_interval() alone only changes
+        # the field PollingComponent reads on its next tick; the running
+        # poller must be stopped and restarted to pick up a new period,
+        # which also resets its phase (docs/DATA-SOURCES.md).
+        - lambda: |-
+            // The 5 minute floor matters beyond "not too chatty": every
+            // load_current_page call restarts sleep_timer, which sleeps
+            // after battery_awake_grace (45s); refresh_minutes * 60 must
+            // stay well above that or a battery-mode device would never
+            // finish a refresh before its own auto-refresh interval fires
+            // again on the next wake. 5 min leaves ample margin.
+            if (id(refresh_minutes) < 5) id(refresh_minutes) = 5;
+            if (id(refresh_minutes) > 240) id(refresh_minutes) = 240;
+            id(refresh_tick).set_update_interval(id(refresh_minutes) * 60 * 1000);
+            id(refresh_tick).stop_poller();
+            id(refresh_tick).start_poller();
+            if (id(telemetry_minutes) < 1) id(telemetry_minutes) = 1;
+            if (id(telemetry_minutes) > 60) id(telemetry_minutes) = 60;
+            id(telemetry_tick).set_update_interval(id(telemetry_minutes) * 60 * 1000);
+            id(telemetry_tick).stop_poller();
+            id(telemetry_tick).start_poller();
+            uint32_t mask = id(wake_hours_mask);
+            if (mask == 0 || mask > 0xFFFFFF || __builtin_popcount(mask) > 8) {
+              ESP_LOGW("main", "Restored wake_hours_mask 0x%06x is invalid, falling back to the compiled default", (unsigned) mask);
+              id(wake_hours_mask) = 0x21100;
+            }
         - pcf85063.read_time: rtc_time
         # Decide the power mode first: a battery wake that finds USB plugged
         # in switches back to always-on before any sleep timer is armed.
@@ -319,6 +366,32 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  # Refresh schedule (docs/plan finding 11): restore_value: true carries
+  # whatever the hub last sent across a reboot, the same way page_count
+  # does. initial_value is the fresh-flash default, matching the
+  # auto_refresh_interval/telemetry_interval/wake_hours substitutions above;
+  # keep them in sync if either changes. A restorable global's NVS entry is
+  # keyed off the md5 of its id, not its type, so resizing one of these
+  # types later needs a renamed id too - the old entry would otherwise be
+  # read back as garbage bytes (see docs/FLASHING.md).
+  - id: refresh_minutes
+    type: int
+    restore_value: true
+    initial_value: "30"
+  - id: telemetry_minutes
+    type: int
+    restore_value: true
+    initial_value: "5"
+  # Wake hours as a bitmask (bit h set = wake at local hour h), not an
+  # array: one restorable word, ascending and de-duplicated by
+  # construction, and a single range check (non-zero, at most 8 bits,
+  # nothing above bit 23) instead of validating a whole array plus a count.
+  # 0x21100 is bits 8, 12 and 17 set, matching the wake_hours substitution
+  # above; keep them in sync if either changes.
+  - id: wake_hours_mask
+    type: uint32_t
+    restore_value: true
+    initial_value: "0x21100"
 
 spi:
   clk_pin: GPIO7
@@ -499,8 +572,13 @@ script:
                             format: "Telemetry rejected by hub, HTTP %d: set the Hub key on the device's web page or in Home Assistant"
                             args: [response->status_code]
                       else:
-                        # Learn the page count and ids for this session. The
-                        # loop is already blocked for the duration of the
+                        # Learn the page count and ids for this session, and
+                        # the refresh schedule (docs/plan finding 11). Same
+                        # defensive style throughout: a field that is absent,
+                        # the wrong type, or out of bounds leaves the current
+                        # value untouched rather than zeroing it - a key the
+                        # hub did not send is not the hub asking for zero.
+                        # The loop is already blocked for the duration of the
                         # POST, so keep this short.
                         - lambda: |-
                             json::parse_json(body, [](JsonObject root) -> bool {
@@ -517,6 +595,44 @@ script:
                                   joined += v.as<std::string>();
                                 }
                                 id(page_names) = joined;
+                              }
+                              if (root["refresh_minutes"].is<int>()) {
+                                int m = root["refresh_minutes"].as<int>();
+                                if (m >= 5 && m <= 240 && m != id(refresh_minutes)) {
+                                  id(refresh_minutes) = m;
+                                  id(refresh_tick).set_update_interval(m * 60 * 1000);
+                                  // set_update_interval() only changes the value the
+                                  // poller reads on its next tick; restarting it is
+                                  // what makes a shorter period take effect right
+                                  // away instead of after the old period elapses.
+                                  // This resets the poller's phase.
+                                  id(refresh_tick).stop_poller();
+                                  id(refresh_tick).start_poller();
+                                }
+                              }
+                              if (root["telemetry_minutes"].is<int>()) {
+                                int m = root["telemetry_minutes"].as<int>();
+                                if (m >= 1 && m <= 60 && m != id(telemetry_minutes)) {
+                                  id(telemetry_minutes) = m;
+                                  id(telemetry_tick).set_update_interval(m * 60 * 1000);
+                                  id(telemetry_tick).stop_poller();
+                                  id(telemetry_tick).start_poller();
+                                }
+                              }
+                              if (root["wake_hours"].is<JsonArray>()) {
+                                JsonArray hours = root["wake_hours"].as<JsonArray>();
+                                uint32_t mask = 0;
+                                for (JsonVariant v : hours) {
+                                  if (!v.is<int>()) continue;
+                                  int h = v.as<int>();
+                                  if (h < 0 || h > 23) continue;
+                                  mask |= (1u << h);
+                                }
+                                if (mask != 0 && mask <= 0xFFFFFF && __builtin_popcount(mask) <= 8) {
+                                  id(wake_hours_mask) = mask;
+                                } else {
+                                  ESP_LOGW("main", "Telemetry response: ignoring invalid wake_hours");
+                                }
                               }
                               return true;
                             });
@@ -639,7 +755,7 @@ script:
                 uint32_t secs = 3600;
                 if (now.is_valid()) {
                   int sod = now.hour * 3600 + now.minute * 60 + now.second;
-                  secs = deskmate::seconds_until_next_slot(sod, {${wake_hours}});
+                  secs = deskmate::seconds_until_next_slot(sod, id(wake_hours_mask));
                 }
                 ESP_LOGI("main", "Battery mode: sleeping for %u s (time valid=%d)", (unsigned) secs, (int) now.is_valid());
                 id(next_sleep_seconds) = secs;
@@ -774,10 +890,17 @@ interval:
   - interval: 10s
     then:
       - script.execute: check_power
-  - interval: ${telemetry_interval}
+  # id: lets the refresh schedule (docs/plan finding 11) change this poller's
+  # period at runtime with set_update_interval() + stop_poller()/
+  # start_poller() (see the on_boot clamp and report_telemetry's on_response
+  # below); the literal ${telemetry_interval}/${auto_refresh_interval} below
+  # is only what this poller starts at before either of those run.
+  - id: telemetry_tick
+    interval: ${telemetry_interval}
     then:
       - script.execute: report_telemetry
-  - interval: ${auto_refresh_interval}
+  - id: refresh_tick
+    interval: ${auto_refresh_interval}
     then:
       - if:
           condition:
