@@ -183,22 +183,23 @@ def parse_task_line(line: str, *, source_id: str) -> Task | None:
 
 
 class FixtureTasksAdapter:
-    """Tasks from ``fixtures/tasks.json``."""
+    """Tasks from the module's own ``fixtures/tasks.json``."""
 
     name = "tasks"
     source = "fixture"
 
-    def __init__(self, tasks: TasksSettings, general: GeneralSettings, env: Env) -> None:
+    def __init__(self, tasks: TasksSettings, general: GeneralSettings, env: Env, fixture: Path) -> None:
         self._tasks = tasks
         self._general = general
         self._env = env
+        self._fixture = fixture
 
     def resolve(self) -> str:
         return self.source
 
     async def fetch(self) -> list[Task]:
         env = self._env
-        payload = load_fixture(env.fixtures_dir / "tasks.json")
+        payload = load_fixture(self._fixture)
         delta = day_delta(
             payload, today_local(self._general.timezone), enabled=env.fixture_relative_dates
         )
@@ -310,10 +311,10 @@ def read_vault(vault: Path, pattern: str) -> list[Task]:
 
 
 def build_tasks_adapter(
-    tasks: TasksSettings, general: GeneralSettings, env: Env
+    tasks: TasksSettings, general: GeneralSettings, env: Env, fixture: Path
 ) -> FixtureTasksAdapter | ObsidianTasksAdapter | PushTasksAdapter:
     if tasks.source == "obsidian":
         return ObsidianTasksAdapter(tasks, env)
     if tasks.source == "push":
         return PushTasksAdapter(tasks, general, env)
-    return FixtureTasksAdapter(tasks, general, env)
+    return FixtureTasksAdapter(tasks, general, env, fixture)

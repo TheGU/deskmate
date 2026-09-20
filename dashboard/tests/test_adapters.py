@@ -29,7 +29,13 @@ from app.config import Env
 from app.datasets import write_dataset
 from app.db import get_database
 from app.models import AdapterStatus, BriefMode, HourlyRain, Priority, ServiceHealth
+from app.modules.agenda import FIXTURE as CALENDAR_FIXTURE
+from app.modules.ai_usage import FIXTURE as AI_USAGE_FIXTURE
+from app.modules.brief import FIXTURE as BRIEF_FIXTURE
 from app.modules.calendar.settings import Feed
+from app.modules.system import HOME_FIXTURE
+from app.modules.tasks import FIXTURE as TASKS_FIXTURE
+from app.modules.weather import FIXTURE as WEATHER_FIXTURE
 from app.settings import HubSettings
 from app.timeutil import today_local, zone
 from tests.conftest import run
@@ -45,7 +51,7 @@ def _push_env(env: Env, tmp_path) -> Env:  # type: ignore[no-untyped-def]
 
 # -- tasks -----------------------------------------------------------------
 def test_fixture_tasks_are_shifted_to_today(hub_settings: HubSettings, env: Env) -> None:
-    tasks = run(FixtureTasksAdapter(hub_settings.tasks, hub_settings.general, env).fetch())
+    tasks = run(FixtureTasksAdapter(hub_settings.tasks, hub_settings.general, env, TASKS_FIXTURE).fetch())
     assert tasks
     today = today_local(hub_settings.general.timezone)
     dues = {task.due for task in tasks if task.due is not None}
@@ -60,7 +66,7 @@ def test_fixture_tasks_keep_literal_dates_when_shifting_is_off(
     hub_settings: HubSettings, env: Env
 ) -> None:
     literal = env.model_copy(update={"fixture_relative_dates": False})
-    tasks = run(FixtureTasksAdapter(hub_settings.tasks, hub_settings.general, literal).fetch())
+    tasks = run(FixtureTasksAdapter(hub_settings.tasks, hub_settings.general, literal, TASKS_FIXTURE).fetch())
     assert any(task.due == date(2026, 9, 4) for task in tasks)
 
 
@@ -106,7 +112,7 @@ def test_push_tasks_round_trips_with_no_date_shifting(  # type: ignore[no-untype
 
 # -- calendar --------------------------------------------------------------
 def test_fixture_calendar_is_sorted_and_localized(hub_settings: HubSettings, env: Env) -> None:
-    events = run(FixtureCalendarAdapter(hub_settings.calendar, hub_settings.general, env).fetch())
+    events = run(FixtureCalendarAdapter(hub_settings.calendar, hub_settings.general, env, CALENDAR_FIXTURE).fetch())
     assert events
     assert events == sorted(events, key=lambda event: (event.start, event.title))
     assert all(event.start.tzinfo is not None for event in events)
@@ -210,7 +216,7 @@ def test_parse_ics_expands_a_recurring_event(hub_settings: HubSettings) -> None:
 
 # -- weather ---------------------------------------------------------------
 def test_fixture_weather_has_air_quality_and_forecast(hub_settings: HubSettings, env: Env) -> None:
-    weather = run(FixtureWeatherAdapter(hub_settings.weather, hub_settings.general, env).fetch())
+    weather = run(FixtureWeatherAdapter(hub_settings.weather, hub_settings.general, env, WEATHER_FIXTURE).fetch())
     assert weather.location_name == "Bangkok"
     assert weather.temperature_c is not None
     assert weather.feels_like_c is not None
@@ -256,7 +262,7 @@ def test_weather_code_and_aqi_labels() -> None:
 
 # -- ai usage --------------------------------------------------------------
 def test_fixture_ai_usage_has_both_providers(hub_settings: HubSettings, env: Env) -> None:
-    providers = run(FixtureAIUsageAdapter(hub_settings.ai_usage, hub_settings.general, env).fetch())
+    providers = run(FixtureAIUsageAdapter(hub_settings.ai_usage, hub_settings.general, env, AI_USAGE_FIXTURE).fetch())
     names = [provider.provider for provider in providers]
     assert names == ["Claude", "Codex"]
     claude = providers[0]
@@ -311,7 +317,7 @@ def freeze_hour(monkeypatch: pytest.MonkeyPatch, hour: int) -> None:
 def test_fixture_brief_picks_the_mode_by_local_hour(
     hub_settings: HubSettings, env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter = FixtureBriefAdapter(hub_settings.brief, hub_settings.general, env)
+    adapter = FixtureBriefAdapter(hub_settings.brief, hub_settings.general, env, BRIEF_FIXTURE)
     freeze_hour(monkeypatch, 8)
     assert run(adapter.fetch()).mode is BriefMode.MORNING
     freeze_hour(monkeypatch, 20)
@@ -325,7 +331,7 @@ def test_fixture_brief_has_sections_and_a_note(
     hub_settings: HubSettings, env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     freeze_hour(monkeypatch, 8)
-    brief = run(FixtureBriefAdapter(hub_settings.brief, hub_settings.general, env).fetch())
+    brief = run(FixtureBriefAdapter(hub_settings.brief, hub_settings.general, env, BRIEF_FIXTURE).fetch())
     assert brief.headline
     assert brief.note
     assert len(brief.sections) == 5
@@ -382,7 +388,7 @@ def test_push_brief_is_unavailable_before_anything_is_pushed(  # type: ignore[no
 
 # -- home assistant --------------------------------------------------------
 def test_fixture_home_has_sensors_and_services(hub_settings: HubSettings, env: Env) -> None:
-    home = run(FixtureHomeAdapter(hub_settings.home, env).fetch())
+    home = run(FixtureHomeAdapter(hub_settings.home, env, HOME_FIXTURE).fetch())
     assert len(home.sensors) == 5
     assert len(home.services) == 7
     assert any(service.health is ServiceHealth.WARN for service in home.services)

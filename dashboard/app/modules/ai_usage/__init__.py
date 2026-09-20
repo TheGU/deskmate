@@ -7,12 +7,17 @@ it is a module so the dataset, the settings section and ``POST
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app import __version__
 from app.adapters.ai_usage import build_ai_usage_adapter
 from app.models import AIUsageBlock
 from app.modules import DatasetSpec, Module
 from app.modules.ai_usage.routes import build_router
 from app.modules.ai_usage.settings import SECTION, AIUsageSettings
+
+#: The demo data this module falls back to on ``source: fixture``.
+FIXTURE: Path = Path(__file__).parent / "fixtures" / "ai_usage.json"
 
 MODULE = Module(
     id="ai_usage",
@@ -28,13 +33,14 @@ MODULE = Module(
             value_field="providers",
             section=SECTION,
             build_adapter=lambda ai_usage, general, context: build_ai_usage_adapter(
-                ai_usage, general, context.env
+                ai_usage, general, context.env, FIXTURE
             ),
             ttl_seconds=lambda ai_usage: ai_usage.ttl_seconds,
+            fixture=FIXTURE,
         ),
     ),
     routes=build_router,
     default_order=70,
 )
 
-__all__ = ["MODULE"]
+__all__ = ["FIXTURE", "MODULE"]

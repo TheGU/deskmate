@@ -25,11 +25,6 @@ services:
       - path: .env
         required: false
     environment:
-      # Phase 1 only: the demo fixtures are read from the copy the Dockerfile
-      # already bakes into the image (COPY fixtures /app/fixtures), so there
-      # is no bind mount for them below; phase 2 moves fixtures into each
-      # module's own directory and this variable goes away.
-      FIXTURES_DIR: /app/fixtures
       DATA_DIR: /data
       # The vault is always mounted at /vault inside the container; the host
       # path lives in OBSIDIAN_VAULT_PATH and is used by the volume below.

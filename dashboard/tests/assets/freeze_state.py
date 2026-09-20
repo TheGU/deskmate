@@ -83,7 +83,7 @@ if str(DASHBOARD_DIR) not in sys.path:
     sys.path.insert(0, str(DASHBOARD_DIR))
 
 from app.alerts import AlertStore  # noqa: E402
-from app.config import REPO_ROOT, Env  # noqa: E402
+from app.config import Env  # noqa: E402
 from app.db import close_databases, get_database  # noqa: E402
 from app.models import DashboardState  # noqa: E402
 from app.modules.ai_usage.settings import AIUsageSettings  # noqa: E402
@@ -99,7 +99,6 @@ from app.settings import HubSettings  # noqa: E402
 from app.state import StateService  # noqa: E402
 from tests.test_render_gate import load_frozen_state  # noqa: E402
 
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 ASSETS_DIR = Path(__file__).resolve().parent
 STATE_PATH = ASSETS_DIR / "frozen-state.json"
 HASHES_PATH = ASSETS_DIR / "frozen-hashes.json"
@@ -122,7 +121,6 @@ def _env(data_dir: Path) -> Env:
     """
     return Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         FIXTURE_RELATIVE_DATES=False,
         LOG_LEVEL="WARNING",

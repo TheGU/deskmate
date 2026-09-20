@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from app.adapters.base import AdapterUnavailable
@@ -38,15 +39,18 @@ def _localize(providers: list[AIUsage], timezone_name: str) -> list[AIUsage]:
 
 
 class FixtureAIUsageAdapter:
-    """Quota from ``fixtures/ai_usage.json``."""
+    """Quota from the module's own ``fixtures/ai_usage.json``."""
 
     name = "ai_usage"
     source = "fixture"
 
-    def __init__(self, ai_usage: AIUsageSettings, general: GeneralSettings, env: Env) -> None:
+    def __init__(
+        self, ai_usage: AIUsageSettings, general: GeneralSettings, env: Env, fixture: Path
+    ) -> None:
         self._ai_usage = ai_usage
         self._general = general
         self._env = env
+        self._fixture = fixture
 
     def resolve(self) -> str:
         """The source a fetch would use right now, without fetching. Fixed
@@ -56,7 +60,7 @@ class FixtureAIUsageAdapter:
     async def fetch(self) -> list[AIUsage]:
         env = self._env
         timezone_name = self._general.timezone
-        payload = load_fixture(env.fixtures_dir / "ai_usage.json")
+        payload = load_fixture(self._fixture)
         delta = day_delta(
             payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
@@ -104,8 +108,8 @@ class PushAIUsageAdapter:
 
 
 def build_ai_usage_adapter(
-    ai_usage: AIUsageSettings, general: GeneralSettings, env: Env
+    ai_usage: AIUsageSettings, general: GeneralSettings, env: Env, fixture: Path
 ) -> FixtureAIUsageAdapter | PushAIUsageAdapter:
     if ai_usage.source == "push":
         return PushAIUsageAdapter(ai_usage, general, env)
-    return FixtureAIUsageAdapter(ai_usage, general, env)
+    return FixtureAIUsageAdapter(ai_usage, general, env, fixture)

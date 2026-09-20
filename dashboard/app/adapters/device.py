@@ -3,10 +3,10 @@
 The only real source is the local SQLite store the device writes into through
 ``POST /api/device/telemetry``; there is nothing to configure but the paths.
 ``DEVICE_SOURCE=fixture`` adds one fallback for development and for the render
-tests: while the store is still empty, ``fixtures/device.json`` supplies a day
-of plausible samples so the page can be laid out before the device is flashed.
-As soon as one real sample exists the fixture is ignored, and
-``DEVICE_SOURCE=store`` never looks at it at all.
+tests: while the store is still empty, the system module's own
+``fixtures/device.json`` supplies a day of plausible samples so the page can
+be laid out before the device is flashed. As soon as one real sample exists
+the fixture is ignored, and ``DEVICE_SOURCE=store`` never looks at it at all.
 """
 
 from __future__ import annotations
@@ -185,7 +185,7 @@ def build_device_state(
 # fixture
 # ---------------------------------------------------------------------------
 def load_device_fixture(path: Path, *, now: datetime) -> list[DeviceSample]:
-    """Read ``fixtures/device.json``.
+    """Read the system module's own ``fixtures/device.json``.
 
     Sample times are stored as ``offset_minutes`` relative to "now" rather than
     as absolute stamps: a rolling 24 h window only makes sense against the
@@ -299,25 +299,29 @@ class StoreDeviceAdapter:
 
 
 class FixtureDeviceAdapter:
-    """The store when it has anything, ``fixtures/device.json`` while it is empty."""
+    """The store when it has anything, the system module's own
+    ``fixtures/device.json`` while it is empty."""
 
     name = "device"
     source = "fixture"
 
-    def __init__(self, device: DeviceSettings, env: Env) -> None:
+    def __init__(self, device: DeviceSettings, env: Env, fixture: Path) -> None:
         self._device = device
         self._env = env
+        self._fixture = fixture
 
     async def fetch(self) -> DeviceState:
         now = utc_now()
         stored = _state_from_store(self._device, self._env, now=now)
         if stored is not None:
             return _log_state(stored, self.source, "store")
-        samples = load_device_fixture(self._env.fixtures_dir / "device.json", now=now)
+        samples = load_device_fixture(self._fixture, now=now)
         return _log_state(_state_from_samples(samples, now=now), self.source, "fixture")
 
 
-def build_device_adapter(device: DeviceSettings, env: Env) -> StoreDeviceAdapter | FixtureDeviceAdapter:
+def build_device_adapter(
+    device: DeviceSettings, env: Env, fixture: Path
+) -> StoreDeviceAdapter | FixtureDeviceAdapter:
     if device.source == "store":
         return StoreDeviceAdapter(device, env)
-    return FixtureDeviceAdapter(device, env)
+    return FixtureDeviceAdapter(device, env, fixture)

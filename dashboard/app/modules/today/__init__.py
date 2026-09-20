@@ -11,10 +11,12 @@ because ``state.block`` always answers with the asked-for block type.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app import __version__
-from app.config import APP_DIR
 from app.modules import Module, PageSpec
-from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, today_context, today_flag
+from app.modules.today.page import today_context, today_flag
+from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
 
 MODULE = Module(
     id="today",
@@ -23,7 +25,7 @@ MODULE = Module(
     description="Today's priorities, next events, AI capacity and the brief note.",
     page=PageSpec(
         title=PAGE_TITLES["today"],
-        templates_dir=APP_DIR / "templates",
+        templates_dir=Path(__file__).parent / "templates",
         template="today.html",
         context=today_context,
         render_ttl_seconds=1800.0,

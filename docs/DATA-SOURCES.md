@@ -65,17 +65,20 @@ source per pushed dataset (`{dataset: {source}}`). Every field, its
 description and its default is on `/settings`; see docs/SETTINGS.md.
 
 Timezone and units live in the General section (default `Asia/Bangkok`,
-`metric`). `FIXTURES_DIR`, `DATA_DIR` and `FIXTURE_RELATIVE_DATES` are
-process-level knobs in `.env.example`, not settings-page fields.
+`metric`). `DATA_DIR` and `FIXTURE_RELATIVE_DATES` are process-level knobs
+in `.env.example`, not settings-page fields.
 
 ---
 
 ## Fixtures
 
-`fixtures/*.json` hold the demo data. Each file carries an `anchor_date`; when
-`FIXTURE_RELATIVE_DATES=true` (the default) the loader shifts every date and
-datetime in the file by `today - anchor_date` whole days, so the demo always
-looks current. Clock times are never changed, only the day.
+Each built-in module carries its own demo data at
+`app/modules/<id>/fixtures/*.json` (for example `app/modules/tasks/fixtures/
+tasks.json`); there is no repo-root fixtures directory. Each file carries an
+`anchor_date`; when `FIXTURE_RELATIVE_DATES=true` (the default) the loader
+shifts every date and datetime in the file by `today - anchor_date` whole
+days, so the demo always looks current. Clock times are never changed, only
+the day.
 
 Set `FIXTURE_RELATIVE_DATES=false` in `.env` to read the literal dates in
 the files.
@@ -448,9 +451,10 @@ draws an invented line.
 
 ### Fixture
 
-Setting the device section's source to `fixture` falls back to
-`fixtures/device.json` (24 hours at 5 minute spacing) **only while the
-store is empty**, so the page can be designed before the device is flashed.
+Setting the device section's source to `fixture` falls back to the system
+module's own `app/modules/system/fixtures/device.json` (24 hours at 5
+minute spacing) **only while the store is empty**, so the page can be
+designed before the device is flashed.
 The first real sample retires the fixture. Sample times in that file are
 `offset_minutes` relative to now rather than absolute stamps, because a
 rolling 24 hour window only means anything against the current clock.

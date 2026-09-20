@@ -28,7 +28,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import geocode
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.geocode import GEOCODING_URL, MAX_QUERY_LENGTH, RESULT_COUNT, SEARCH_FAILED
 from app.hub_config import COOKIE_NAME, ClaimedSecrets
 from app.main import create_app
@@ -38,8 +38,6 @@ from app.settings import SECTIONS, HubSettings
 from app.settings_pages import WIZARD_STEPS
 from app.view import build_context
 from tests.conftest import make_state
-
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 #: The general section as a browser submits it, unchanged.
 GENERAL_FORM = {"timezone": "Asia/Bangkok", "units": "metric", "action": "save"}
@@ -60,7 +58,6 @@ def env_for(data_dir: Path) -> Env:
     return Env(
         _env_file=None,
         DATA_DIR=data_dir,
-        FIXTURES_DIR=FIXTURES_DIR,
         LOG_LEVEL="WARNING",
     )
 

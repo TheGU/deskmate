@@ -139,7 +139,8 @@ Undecided:
 
 ## Evidence on Hand
 
-- Demo data: fixtures/*.json for every adapter and the device.
+- Demo data: each built-in module's own `app/modules/<id>/fixtures/*.json`
+  for every adapter and the device.
 - Real device telemetry accumulating in data/deskmate.sqlite from the
   physical E1002 (battery, temperature, humidity, Wi-Fi, power state).
 - Rendered example PNGs in output/ (gitignored, regenerate with

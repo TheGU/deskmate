@@ -52,8 +52,8 @@ uv run python ../scripts/render-all.py
 ```
 
 This renders every page to `../output/` with every source pinned to
-`fixture` (the fixture files under `fixtures/`, unaffected by anything on
-`/settings`).
+`fixture` (each built-in module's own `app/modules/<id>/fixtures/` files,
+unaffected by anything on `/settings`).
 
 Then open <http://127.0.0.1:8080/preview> to flip through the pages: the raw
 HTML by default, with a toggle to switch to the simulated panel PNG. A fresh,
@@ -149,8 +149,7 @@ interactive Swagger UI.
 
 | Path | Purpose |
 | --- | --- |
-| `dashboard/` | The dashboard-hub server, its Dockerfile and tests |
-| `fixtures/` | Demo data, used when no integration is enabled |
+| `dashboard/` | The dashboard-hub server, its Dockerfile and tests. Each built-in module carries its own demo data under `app/modules/<id>/fixtures/` |
 | `data/` | The hub's own database, `deskmate.sqlite` (identity, settings, pushed datasets, telemetry). Gitignored |
 | `output/` | Generated example PNGs. Gitignored |
 | `docs/` | Architecture, data sources, deploy, settings, hooks, flashing, factory restore |

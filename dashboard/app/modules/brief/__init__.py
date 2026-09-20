@@ -7,14 +7,19 @@ the bearer-token dependency already applied.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app import __version__
 from app.adapters.ai_brief import build_brief_adapter
-from app.config import APP_DIR
 from app.models import BriefBlock
 from app.modules import DatasetSpec, Module, PageSpec
+from app.modules.brief.page import brief_context, brief_flag
 from app.modules.brief.routes import build_router
 from app.modules.brief.settings import SECTION, BriefSettings
-from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, brief_context, brief_flag
+from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
+
+#: The demo data this module falls back to on ``source: fixture``.
+FIXTURE: Path = Path(__file__).parent / "fixtures" / "brief.json"
 
 MODULE = Module(
     id="brief",
@@ -30,14 +35,15 @@ MODULE = Module(
             value_field="brief",
             section=SECTION,
             build_adapter=lambda brief, general, context: build_brief_adapter(
-                brief, general, context.env
+                brief, general, context.env, FIXTURE
             ),
             ttl_seconds=lambda brief: brief.ttl_seconds,
+            fixture=FIXTURE,
         ),
     ),
     page=PageSpec(
         title=PAGE_TITLES["brief"],
-        templates_dir=APP_DIR / "templates",
+        templates_dir=Path(__file__).parent / "templates",
         template="brief.html",
         context=brief_context,
         render_ttl_seconds=300.0,
@@ -49,4 +55,4 @@ MODULE = Module(
     default_order=40,
 )
 
-__all__ = ["MODULE"]
+__all__ = ["FIXTURE", "MODULE"]

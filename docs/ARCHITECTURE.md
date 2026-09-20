@@ -25,9 +25,8 @@ reTerminal E1002 running ESPHome
 
 | Path | Purpose |
 | --- | --- |
-| `dashboard/` | dashboard-hub server (own `pyproject.toml`, Dockerfile, tests) |
+| `dashboard/` | dashboard-hub server (own `pyproject.toml`, Dockerfile, tests). Each built-in module carries its own demo data under `app/modules/<id>/fixtures/` |
 | `firmware/` | ESPHome YAML for the E1002 and secrets example |
-| `fixtures/` | Demo data used when no integration is enabled |
 | `data/` | The hub's own database, `deskmate.sqlite` (identity, settings, pushed datasets, telemetry). Gitignored |
 | `docs/` | Architecture, flashing, restore, data sources |
 | `scripts/` | Backup, verify, render helpers |

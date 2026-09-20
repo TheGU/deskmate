@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.db import (
     DB_SCHEMA_VERSION,
     VERSION_KEY,
@@ -26,8 +26,6 @@ from app.main import create_app
 from app.models import AlertRequest
 from app.modules.device.settings import DeviceSettings
 from app.modules.general.settings import GeneralSettings
-
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 TABLES = ("meta", "hub", "settings", "datasets", "telemetry")
 
@@ -42,7 +40,6 @@ def database(tmp_path: Path) -> Iterator[Database]:
 def make_env(tmp_path: Path) -> Env:
     return Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=tmp_path,
         LOG_LEVEL="WARNING",
     )

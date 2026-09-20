@@ -25,7 +25,6 @@ from app.main import create_app
 from app.renderer.palette import DISPLAY_SIZE
 from app.settings import HubSettings
 
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 EXAMPLE_HELLO = REPO_ROOT / "examples" / "modules" / "hello"
 
 
@@ -44,7 +43,6 @@ def hello_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def hello_client(hello_data_dir: Path) -> Iterator[TestClient]:
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=hello_data_dir,
         LOG_LEVEL="WARNING",
     )

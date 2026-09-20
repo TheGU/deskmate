@@ -26,7 +26,7 @@ from typing import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.datasets import read_dataset
 from app.db import get_database
 from app.main import create_app
@@ -34,8 +34,6 @@ from app.modules.ai_usage.settings import AIUsageSettings
 from app.modules.brief.settings import BriefSettings
 from app.modules.tasks.settings import TasksSettings
 from app.settings import HubSettings
-
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 
 def auth(token: str) -> dict[str, str]:
@@ -59,7 +57,6 @@ def data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def push_client(data_dir: Path) -> Iterator[TestClient]:
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )
@@ -299,7 +296,6 @@ def test_push_warns_when_the_selector_is_fixture(tmp_path_factory: pytest.TempPa
     data_dir = tmp_path_factory.mktemp("push-fixture-only")
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )
@@ -339,7 +335,6 @@ def test_push_tasks_warns_and_reports_obsidian_when_that_is_the_selector(
     data_dir = tmp_path_factory.mktemp("push-obsidian")
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=data_dir,
         LOG_LEVEL="WARNING",
     )

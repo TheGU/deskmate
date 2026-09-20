@@ -9,6 +9,7 @@ entities the map names but Home Assistant does not know show as "unknown".
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Final
 
 import httpx
@@ -67,17 +68,18 @@ MISSING_STATES: Final[frozenset[str]] = frozenset({"unknown", "unavailable", "no
 
 
 class FixtureHomeAdapter:
-    """Home and system status from ``fixtures/home.json``."""
+    """Home and system status from the system module's own ``fixtures/home.json``."""
 
     name = "home"
     source = "fixture"
 
-    def __init__(self, home: HomeSettings, env: Env) -> None:
+    def __init__(self, home: HomeSettings, env: Env, fixture: Path) -> None:
         self._home = home
         self._env = env
+        self._fixture = fixture
 
     async def fetch(self) -> HomeState:
-        payload = load_fixture(self._env.fixtures_dir / "home.json")
+        payload = load_fixture(self._fixture)
         raw: Any = payload.get("home", {})
         return HomeState.model_validate(raw)
 
@@ -186,7 +188,9 @@ def build_home_state(
     return HomeState(sensors=sensors, services=services)
 
 
-def build_home_adapter(home: HomeSettings, env: Env) -> FixtureHomeAdapter | RestHomeAdapter:
+def build_home_adapter(
+    home: HomeSettings, env: Env, fixture: Path
+) -> FixtureHomeAdapter | RestHomeAdapter:
     if home.source == "rest":
         return RestHomeAdapter(home, env)
-    return FixtureHomeAdapter(home, env)
+    return FixtureHomeAdapter(home, env, fixture)

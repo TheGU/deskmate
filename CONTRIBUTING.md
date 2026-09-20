@@ -13,10 +13,9 @@ plan that spans more than one commit.
 
 | Path | Purpose |
 | --- | --- |
-| `dashboard/` | The dashboard-hub server: its own `pyproject.toml`, Dockerfile and tests |
+| `dashboard/` | The dashboard-hub server: its own `pyproject.toml`, Dockerfile and tests. Each built-in module carries its own demo data under `app/modules/<id>/fixtures/` |
 | `examples/` | Copyable examples for extending the hub, e.g. `examples/modules/hello/`, a minimal third-party module (see [docs/MODULES.md](docs/MODULES.md)) |
 | `firmware/` | ESPHome YAML for the E1002, secrets example, its own venv |
-| `fixtures/` | Demo data used when no integration is enabled. Moving into per-module fixtures in phase 2 (see docs/plan/) |
 | `docs/` | Architecture, data sources, deploy, hooks, flashing, factory restore |
 | `scripts/` | Backup, verify, render and check helpers |
 | `skills/` | `deskmate/SKILL.md`, how a remote agent pushes data to the hub |
@@ -142,11 +141,10 @@ Panel pages and the datasets behind them are moving to a module system
 (see docs/plan/2026-09-19-settings-modules-provisioning.md, phase 2): a
 module is a package that brings its own settings, adapter, template and
 fixture. [docs/MODULES.md](docs/MODULES.md) is the module authoring
-guide, with a complete minimal example at `examples/modules/hello/`. The
-Modules section on `/settings` and the third-party settings accessor are
-shipped; moving each built-in's own template and fixture into its own
-package (phase 2's 2.2) is the one piece still in progress, called out in
-that doc where it matters.
+guide, with a complete minimal example at `examples/modules/hello/`. Every
+built-in page is itself a module under `dashboard/app/modules/<id>/`, with
+its own settings, fixture, template, context builder and tests, so the
+built-ins double as worked examples.
 
 ## License
 

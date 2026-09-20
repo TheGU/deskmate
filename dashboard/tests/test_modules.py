@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
-from app.config import REPO_ROOT, Env
+from app.config import Env
 from app.forms import parse_section, render_section
 from app.main import create_app
 from app.models import TasksBlock
@@ -43,8 +43,6 @@ from app.settings_pages import TESTABLE_SECTIONS
 from tests.conftest import make_state
 from tests.test_forms import submission
 from tests.test_settings_page import AdminHub
-
-FIXTURES_DIR = REPO_ROOT / "fixtures"
 
 #: A whole module in one file, written into ``DATA_DIR/modules/hello/``. It
 #: brings a page with its own template directory and one dataset whose
@@ -482,7 +480,6 @@ def hello_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def hello_client(hello_data_dir: Path) -> Iterator[TestClient]:
     env = Env(
         _env_file=None,
-        FIXTURES_DIR=FIXTURES_DIR,
         DATA_DIR=hello_data_dir,
         LOG_LEVEL="WARNING",
     )

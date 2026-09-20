@@ -17,7 +17,6 @@ ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     # Kept at runtime too: the launcher looks for the headless shell here.
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-    FIXTURES_DIR=/app/fixtures \
     DATA_DIR=/data
 
 WORKDIR /app/dashboard
@@ -27,7 +26,6 @@ COPY dashboard/pyproject.toml dashboard/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY dashboard/app ./app
-COPY fixtures /app/fixtures
 ENV PATH=/app/dashboard/.venv/bin:$PATH
 
 # --only-shell installs just the headless Chromium shell (no full Chrome UI

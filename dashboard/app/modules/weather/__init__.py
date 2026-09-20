@@ -8,13 +8,18 @@ something an agent forgot to send.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app import __version__
 from app.adapters.weather import build_weather_adapter
-from app.config import APP_DIR
 from app.models import WeatherBlock
 from app.modules import DatasetSpec, Module, PageSpec
+from app.modules.weather.page import weather_context, weather_flag
 from app.modules.weather.settings import SECTION, WeatherSettings
-from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES, weather_context, weather_flag
+from app.view import PAGE_NAMES, PAGE_PUSH_DATASETS, PAGE_TITLES
+
+#: The demo data this module falls back to on ``source: fixture``.
+FIXTURE: Path = Path(__file__).parent / "fixtures" / "weather.json"
 
 MODULE = Module(
     id="weather",
@@ -30,14 +35,15 @@ MODULE = Module(
             value_field="weather",
             section=SECTION,
             build_adapter=lambda weather, general, context: build_weather_adapter(
-                weather, general, context.env
+                weather, general, context.env, FIXTURE
             ),
             ttl_seconds=lambda weather: weather.ttl_seconds,
+            fixture=FIXTURE,
         ),
     ),
     page=PageSpec(
         title=PAGE_TITLES["weather"],
-        templates_dir=APP_DIR / "templates",
+        templates_dir=Path(__file__).parent / "templates",
         template="weather.html",
         context=weather_context,
         render_ttl_seconds=3600.0,
@@ -48,4 +54,4 @@ MODULE = Module(
     default_order=30,
 )
 
-__all__ = ["MODULE"]
+__all__ = ["FIXTURE", "MODULE"]

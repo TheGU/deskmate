@@ -36,20 +36,23 @@ MAX_OCCURRENCES = 50
 
 
 class FixtureCalendarAdapter:
-    """Events from ``fixtures/calendar.json``."""
+    """Events from the agenda module's own ``fixtures/calendar.json``."""
 
     name = "calendar"
     source = "fixture"
 
-    def __init__(self, calendar: CalendarSettings, general: GeneralSettings, env: Env) -> None:
+    def __init__(
+        self, calendar: CalendarSettings, general: GeneralSettings, env: Env, fixture: Path
+    ) -> None:
         self._calendar = calendar
         self._general = general
         self._env = env
+        self._fixture = fixture
 
     async def fetch(self) -> list[Event]:
         env = self._env
         timezone_name = self._general.timezone
-        payload = load_fixture(env.fixtures_dir / "calendar.json")
+        payload = load_fixture(self._fixture)
         delta = day_delta(
             payload, today_local(timezone_name), enabled=env.fixture_relative_dates
         )
@@ -252,8 +255,8 @@ def _expand(
 
 
 def build_calendar_adapter(
-    calendar: CalendarSettings, general: GeneralSettings, env: Env
+    calendar: CalendarSettings, general: GeneralSettings, env: Env, fixture: Path
 ) -> FixtureCalendarAdapter | IcsCalendarAdapter:
     if calendar.source == "ics":
         return IcsCalendarAdapter(calendar, general, env)
-    return FixtureCalendarAdapter(calendar, general, env)
+    return FixtureCalendarAdapter(calendar, general, env, fixture)

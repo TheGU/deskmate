@@ -20,7 +20,7 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-#: Repository root, i.e. the directory that holds ``fixtures/`` and ``data/``.
+#: Repository root, i.e. the directory that holds ``data/``.
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 APP_DIR: Path = Path(__file__).resolve().parent
 
@@ -65,8 +65,6 @@ class Env(BaseSettings):
     http_timeout_seconds: float = Field(default=10.0, alias="HTTP_TIMEOUT_SECONDS")
     #: Shift fixture dates so the demo always looks like "today".
     fixture_relative_dates: bool = Field(default=True, alias="FIXTURE_RELATIVE_DATES")
-    #: Phase 1 only: phase 2 moves fixtures into each module's own directory.
-    fixtures_dir: Path = Field(default=REPO_ROOT / "fixtures", alias="FIXTURES_DIR")
 
     @property
     def templates_dir(self) -> Path:
