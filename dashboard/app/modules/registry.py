@@ -49,7 +49,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.logging_setup import log
-from app.modules import DatasetSpec, Module, ModuleError, validate_module
+from app.modules import MODULE_ID_RE, DatasetSpec, Module, ModuleError, validate_module
 
 logger = logging.getLogger("app.modules")
 
@@ -100,7 +100,17 @@ _DIRECTORY_MODULE_ROOTS: dict[str, Path] = {}
 class ModuleToggle(BaseModel):
     """One module's row in the ``modules`` settings section."""
 
-    id: str = Field(description="The module's id, as its package reports it.")
+    # Bounded and pattern-matched the same as a real module id
+    # (app/modules/__init__.py:MODULE_ID_RE): this field is what a hand-made
+    # POST /settings/modules lands in before anything else ever looks at it,
+    # so an id like "../x" or a multi-kilobyte string has to be a plain
+    # pydantic field error here, never something later code (a template
+    # id="...", a filesystem path, a dict key) has to defend itself against.
+    id: str = Field(
+        max_length=64,
+        pattern=MODULE_ID_RE.pattern,
+        description="The module's id, as its package reports it.",
+    )
     enabled: bool = Field(default=True, description="Draw this module's page and fetch its data.")
     order: int | None = Field(
         default=None,

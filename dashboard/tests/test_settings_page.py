@@ -836,6 +836,30 @@ def test_an_id_that_is_not_installed_is_kept_and_warned_about(admin: AdminHub) -
     assert 'value="ghost"' in page.text
 
 
+def test_a_module_toggle_id_outside_the_pattern_is_a_field_error(admin: AdminHub) -> None:
+    """``ModuleToggle.id`` used to be a plain unbounded ``str``: nothing
+    between a hand-made POST and whatever later reads the id as a template
+    fragment, a dict key or a filesystem-adjacent name. A path-shaped value
+    like ``"../x"`` has to be refused as a field error, the same as any
+    other id would be, with nothing stored."""
+    before = admin.hub.settings_store.load("modules")
+
+    response = admin.client.post(
+        "/settings/modules",
+        headers=admin.auth,
+        data={
+            "items-0-id": "../x",
+            "items-0-enabled": ["0", "1"],
+            "items-0-order": "",
+            "action": "save",
+        },
+    )
+
+    assert response.status_code == 422
+    assert '<p class="field-error">String should match pattern' in response.text
+    assert admin.hub.settings_store.load("modules") == before
+
+
 def test_settings_warns_when_no_page_is_enabled(admin: AdminHub) -> None:
     """The settings page's own form save always refuses to leave no page
     enabled (see ``test_disabling_every_page_is_refused_with_a_field_error``
