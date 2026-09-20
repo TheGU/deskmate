@@ -822,6 +822,56 @@ def test_post_telemetry_is_accepted_and_stored(device_client: _DeviceKeyClient) 
     assert latest["summary"]["retention_days"] == 30
 
 
+def test_post_telemetry_answers_with_the_window_list(device_client: _DeviceKeyClient) -> None:
+    """firmware/e1002.yaml parses these two fields out of every response and
+    builds its /display/{n}.png URLs from them, so they are a contract."""
+    body = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD).json()
+    registry = device_client.app.state.hub.registry
+    assert body["pages"] == list(registry.page_ids())
+    assert body["page_count"] == len(registry.page_ids())
+    assert "alert" not in body["pages"]
+
+
+def test_post_telemetry_resolves_page_index_when_page_is_absent(
+    device_client: _DeviceKeyClient,
+) -> None:
+    """A session that has not had a response yet knows its slot, not the id."""
+    payload = dict(DEVICE_PAYLOAD, page=None, page_index=2)
+    assert device_client.post("/api/device/telemetry", json=payload).status_code == 202
+
+    registry = device_client.app.state.hub.registry
+    latest = device_client.get("/api/device/telemetry").json()["latest"]
+    assert latest["page"] == registry.page_ids()[2]
+    # Never echoed back: no column holds it.
+    assert "page_index" not in latest
+
+
+def test_post_telemetry_prefers_page_over_page_index(device_client: _DeviceKeyClient) -> None:
+    """``page`` is authoritative: "alert" is what the device is showing even
+    though page_index still names the page underneath."""
+    payload = dict(DEVICE_PAYLOAD, page="alert", page_index=0)
+    assert device_client.post("/api/device/telemetry", json=payload).status_code == 202
+    assert device_client.get("/api/device/telemetry").json()["latest"]["page"] == "alert"
+
+
+def test_post_telemetry_stores_no_page_for_an_index_past_the_end(
+    device_client: _DeviceKeyClient,
+) -> None:
+    """A stale page count must not invent an id for the System page to draw."""
+    payload = dict(DEVICE_PAYLOAD, page=None, page_index=99)
+    assert device_client.post("/api/device/telemetry", json=payload).status_code == 202
+    assert device_client.get("/api/device/telemetry").json()["latest"]["page"] is None
+
+
+def test_post_telemetry_without_page_index_is_still_accepted(
+    device_client: _DeviceKeyClient,
+) -> None:
+    """Older firmware sends neither field; the page stays whatever it sent."""
+    payload = dict(DEVICE_PAYLOAD, page=None)
+    assert device_client.post("/api/device/telemetry", json=payload).status_code == 202
+    assert device_client.get("/api/device/telemetry").json()["latest"]["page"] is None
+
+
 def test_post_telemetry_stores_and_returns_the_power_fields(device_client: _DeviceKeyClient) -> None:
     response = device_client.post("/api/device/telemetry", json=DEVICE_PAYLOAD_WITH_POWER)
     assert response.status_code == 202

@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -85,7 +86,7 @@ from app.models import (
 from app.modules import Module, ModuleContext
 from app.modules.registry import Registry, load_registry
 from app.renderer.render import Renderer
-from app.settings import SECTIONS, HubSettings, SettingsStore
+from app.settings import HubSettings, SettingsStore, sections_for
 from app.settings_pages import register as register_settings_pages
 from app.state import StateService, state_fingerprint
 from app.telemetry import TelemetryStore, TelemetrySummary, utc_now
@@ -102,6 +103,55 @@ DEFAULT_PORT = 8080
 #: or a "https://host:port" base URL, short enough that a hostile Host
 #: header cannot grow the row without bound.
 TELEMETRY_ORIGIN_MAX_LEN = 200
+
+#: What ``/display/{page}.png`` reads as a page index rather than a page id.
+#: ASCII digits only (``str.isdigit`` would also accept Arabic-Indic digits,
+#: which ``int()`` parses and no page id could ever be), and bounded so a
+#: pathological segment never reaches ``int()`` at all. A module id can never
+#: collide with this: ``MODULE_ID_RE`` demands a leading letter and
+#: ``validate_module`` refuses an all-digit id besides.
+PAGE_INDEX_RE = re.compile(r"^[0-9]{1,9}$")
+
+
+def resolve_page(registry: Registry, segment: str, known: bool) -> str | None:
+    """The module id ``segment`` names, or ``None`` when nothing serves it.
+
+    The device walks the pages by number, so ``/display/2.png`` is the third
+    enabled page. Resolving here, before the render cache is consulted,
+    is what keeps the cache key and the ``X-Deskmate-Page`` header the page's
+    id: two devices sitting on different indices of the same page must share
+    one cached PNG, and the telemetry the device posts back names the page it
+    was told it is showing.
+
+    ``known`` is the caller's own "this hub serves that id" answer
+    (``Hub.has_page``), which covers ``alert`` as well as the module pages.
+    ``alert`` is never an index: it is not in the registry's page list, and
+    it is not digits.
+    """
+    if PAGE_INDEX_RE.match(segment):
+        module = registry.page_by_index(int(segment))
+        return None if module is None else module.id
+    return segment if known else None
+
+
+def resolve_telemetry_page(telemetry: DeviceTelemetry, registry: Registry) -> DeviceTelemetry:
+    """``telemetry`` with ``page`` filled in from ``page_index`` if it has to.
+
+    ``page`` is authoritative: the device sends the id it was told, and
+    ``alert`` while an alert is showing. It is ``null`` only in a session
+    that has not had a telemetry response yet, so the device knows which
+    slot it is on but not what that slot is called; that is what
+    ``page_index`` is for. An index the registry cannot resolve (the module
+    was disabled since, or this is a device with a stale page count) stores
+    ``null`` rather than a guess: the ``page`` column is what the System page
+    draws, and a wrong id there would be invented data.
+    """
+    if telemetry.page is not None or telemetry.page_index is None:
+        return telemetry
+    module = registry.page_by_index(telemetry.page_index)
+    if module is None:
+        return telemetry
+    return telemetry.model_copy(update={"page": module.id})
 
 
 @dataclass(slots=True)
@@ -144,10 +194,16 @@ def _seed_missing_sections(store: SettingsStore, seed: HubSettings) -> None:
     environment: both of those ran first (``Hub.__init__`` calls this after
     ``import_legacy``), so a section either of them touched already has a
     row here and is left alone.
+
+    Which sections these are is the store's own map, so seeding through the
+    bootstrap store writes the built-ins and seeding through the real one
+    adds whatever an installed module brought. A seed with nothing to say
+    about a module's section writes that section's defaults, exactly as it
+    does for a built-in it left alone.
     """
-    for section in SECTIONS:
+    for section, model in store.sections.items():
         if store.updated_at(section) is None:
-            store.save(section, getattr(seed, section))
+            store.save(section, seed.section(section, model))
 
 
 class Hub:
@@ -173,15 +229,10 @@ class Hub:
         # or that file's sources would win over the seed on a fresh DATA_DIR.
         legacy_env = LegacyEnv(_env_file=None) if hub_settings is not None else LegacyEnv()
         import_legacy(self.db, legacy_env, env.data_dir)
-        self.settings_store = SettingsStore(self.db)
-        if hub_settings is not None:
-            _seed_missing_sections(self.settings_store, hub_settings)
-        self.hub_settings = self.settings_store.snapshot()
-        # The registry is built from the snapshot, so the ``modules`` section
-        # (which module is enabled, in what order) is what decides which
-        # pages this hub serves and which adapters it runs. It is rebuilt on
-        # every reload, which is how a settings save takes effect.
-        self.registry = self._build_registry()
+        # Registry, section map, settings store and snapshot, in that order
+        # and for that reason (see :meth:`_rebuild`). Every one of them is
+        # rebuilt on reload, which is how a settings save takes effect.
+        self._rebuild(hub_settings)
         self.alerts = AlertStore(self.db, self.hub_settings.general.timezone)
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
         self.state_service = StateService(
@@ -225,14 +276,13 @@ class Hub:
         identity = await run_in_threadpool(HubIdentity, self.db)
         self.identity = identity
         await run_in_threadpool(self.alerts.load)
-        self.hub_settings = await run_in_threadpool(self.settings_store.snapshot)
+        await run_in_threadpool(self._rebuild)
         self.alerts.set_timezone(self.hub_settings.general.timezone)
         # TelemetryStore owns no connection of its own (see __init__), but it
         # does carry retention_days as a plain attribute read by the
         # /api/device/telemetry summary: without rebuilding it here, a saved
         # device.retention_days would never reach that response.
         self.telemetry = TelemetryStore(self.db, self.hub_settings.device.retention_days)
-        self.registry = await run_in_threadpool(self._build_registry)
         self.state_service = StateService(
             self.hub_settings, self.env, self.alerts, self.registry, self.db
         )
@@ -242,15 +292,42 @@ class Hub:
             self._cache.clear()
         log(logger, logging.INFO, "hub reloaded", configured=self.identity.configured)
 
-    def _build_registry(self) -> Registry:
-        """Every module this hub can see, with the ``modules`` section applied.
+    def _rebuild(self, seed: HubSettings | None = None) -> None:
+        """Re-read the registry, the section map, the store and the snapshot.
 
-        Built-ins, then ``deskmate.modules`` entry points, then the packages
-        under ``DATA_DIR/modules/``. A duplicate or invalid id refuses to
-        load rather than being dropped, so a hub either serves what the
-        settings page says it serves or does not come up.
+        The order is forced and looks circular until you follow it: the
+        registry decides which settings sections exist, and the ``modules``
+        section decides which modules the registry has. ``modules`` is a
+        *core* section, so a store over the built-in map can always read it
+        even on a hub whose real section map is not known yet. That is step
+        one; everything else follows from the registry it builds.
+
+        1. a bootstrap store over the built-ins, which is enough to read
+           ``modules`` (and, for a caller that handed one in, to seed the
+           built-in sections before that read, so a seeded ``modules``
+           section is the one this registry is built from);
+        2. the registry: built-ins, then ``deskmate.modules`` entry points,
+           then the packages under ``DATA_DIR/modules/``. A duplicate or
+           invalid id refuses to load rather than being dropped, so a hub
+           either serves what the settings page says it serves or does not
+           come up;
+        3. the section map, which is every installed module's own section
+           (enabled or not) plus the core ones;
+        4. the real store over that map, seeded again for whatever the
+           bootstrap store had no section for, and its snapshot.
+
+        Plain synchronous I/O throughout, like the store itself:
+        :meth:`reload` calls it in a threadpool.
         """
-        return load_registry(self.hub_settings.modules, self.env.data_dir)
+        bootstrap = SettingsStore(self.db)
+        if seed is not None:
+            _seed_missing_sections(bootstrap, seed)
+        self.registry = load_registry(bootstrap.modules(), self.env.data_dir)
+        self.sections = sections_for(self.registry)
+        self.settings_store = SettingsStore(self.db, self.sections)
+        if seed is not None:
+            _seed_missing_sections(self.settings_store, seed)
+        self.hub_settings = self.settings_store.snapshot()
 
     def module_context(self, module: Module) -> ModuleContext:
         """What this hub hands ``module`` when it builds a router."""
@@ -329,7 +406,11 @@ def _stamp(value: datetime | None, timezone_name: str) -> str | None:
 
 
 def _sample_json(sample: DeviceSample, timezone_name: str) -> dict[str, Any]:
-    payload = sample.model_dump(mode="json")
+    # page_index is a request-only field: the hub resolves it to an id on the
+    # way in (:func:`resolve_telemetry_page`) and the telemetry table has no
+    # column for it, so echoing a permanent null back on every read would only
+    # invite a client to believe it.
+    payload = sample.model_dump(mode="json", exclude={"page_index"})
     payload["received_at"] = _stamp(sample.received_at, timezone_name)
     return payload
 
@@ -593,6 +674,7 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
                 status_code=400,
             )
 
+        telemetry = resolve_telemetry_page(telemetry, hub.registry)
         remote_addr, hub_host = _telemetry_origin(request)
         received_at = await run_in_threadpool(
             hub.telemetry.insert,
@@ -601,11 +683,23 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
             hub_host=hub_host,
         )
         # The next page render must see this sample, not the cached one.
-        hub.state_service.adapters["device"].invalidate()
+        # ``get``, not ``[]``: the device dataset belongs to the system
+        # module, and a hub with that module disabled still takes telemetry.
+        device_adapter = hub.state_service.adapters.get("device")
+        if device_adapter is not None:
+            device_adapter.invalidate()
+        # page_count and pages are what firmware/e1002.yaml learns the window
+        # list from (it parses this very response, see the on_response lambda
+        # by its http_request.post): the device holds no page list of its own,
+        # so enabling, disabling or reordering a module here reaches it on its
+        # next post with no reflash. ``alert`` is never in the list.
+        page_ids = hub.registry.page_ids()
         return JSONResponse(
             {
                 "accepted": True,
                 "received_at": to_local(received_at, hub.hub_settings.general.timezone).isoformat(),
+                "page_count": len(page_ids),
+                "pages": list(page_ids),
             },
             status_code=202,
         )
@@ -655,12 +749,18 @@ def create_app(env: Env | None = None, hub_settings: HubSettings | None = None) 
     # -- display ---------------------------------------------------------
     @app.get("/display/{page}.png", dependencies=[Depends(require_reader)])
     async def display(page: str, request: Request) -> Response:
+        """One page as a PNG, by id (``today``) or by index (``0``).
+
+        The index is resolved to the id first (:func:`resolve_page`), so
+        everything past this line - the render cache key, the ETag, the
+        ``X-Deskmate-Page`` header and the log line - is the id, whichever
+        form the device asked with.
+        """
         hub: Hub = app.state.hub
-        # 2.1b adds /display/{n}.png, which resolves an integer n to the
-        # n-th enabled page's id (registry.page_by_index) before the render
-        # cache, so the cache key and the X-Deskmate-Page header stay the id.
-        if not hub.has_page(page):
+        resolved = resolve_page(hub.registry, page, hub.has_page(page))
+        if resolved is None:
             return JSONResponse({"error": f"unknown page {page}"}, status_code=404)
+        page = resolved
         force = "t" in request.query_params
         state = await hub.state(force=force)
         entry = await hub.png(page, state, force=force)

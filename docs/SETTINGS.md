@@ -158,11 +158,42 @@ E1002 posts its first sample; this is the honest production setting, since
 | --- | --- | --- |
 | Default duration seconds | `90` | Used when `POST /api/alert` does not specify its own `duration_seconds`. |
 
-**Modules and pages, and every other setting** (the `general.timezone`
-onward): live entirely on `/settings`. There is no `fixture` default
-anywhere: a fresh hub with nothing configured shows every block's honest
-empty state, never demo data, on every page. `fixture` is always available
-as an explicit choice for development or a live demo.
+**Modules** (`modules`)
+
+One row per installed module, whether it ships with the hub, was installed
+as a package, or was dropped into `DATA_DIR/modules/`.
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| ID | (the module's own) | The id its package reports. Also the `/display/<id>.png` segment. |
+| Enabled | the module's manifest default | Unticked: its page leaves the window list and `/display/<id>.png` answers 404, and its datasets stop being fetched. |
+| Order | the module's manifest default | Where it sits in the window list, which is also what `/display/<n>.png` counts. |
+
+A module with no row yet shows its manifest defaults, so installing one is
+enough to see it here. Saving the section reloads the hub: the window list,
+the index URLs, the telemetry response's `page_count` and `pages`, and the
+render cache all follow immediately, with no restart. Disabling a module
+never touches its own settings section: that section stays on this page,
+with its stored values, so the module comes back as it was.
+
+Disabling a module that provides a *dataset* rather than a page leaves the
+pages that draw it rendering, with that block saying `unavailable`. Never a
+guess, and never a blank page.
+
+Two rules the form enforces:
+
+- At least one module with a page has to stay enabled, `today` included.
+  Disabling the last one is refused with the reason next to the rows: a
+  panel asking for `/display/0.png` on a hub with no page would get a 404
+  and keep its last image forever.
+- A row naming a module that is not installed here is kept, not dropped,
+  and the section says so in a warning: an id in the database is the
+  owner's intent, and a module can come back after an upgrade.
+
+There is no `fixture` default anywhere on this page: a fresh hub with
+nothing configured shows every block's honest empty state, never demo data.
+`fixture` is always available as an explicit choice for development or a
+live demo.
 
 ### Save and test
 

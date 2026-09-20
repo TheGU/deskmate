@@ -343,6 +343,7 @@ Content-Type: application/json
   "wifi_rssi": -28,
   "uptime_s": 425,
   "page": "brief",
+  "page_index": 3,
   "battery_mode": false,
   "usb_present": true,
   "charge_state": "charged"
@@ -358,7 +359,8 @@ Content-Type: application/json
 | `humidity` | float or null | Percent relative humidity. |
 | `wifi_rssi` | float or null | dBm, negative. |
 | `uptime_s` | float or null | Seconds since boot. |
-| `page` | string or null, up to 32 chars | Page the device is showing. |
+| `page` | string or null, up to 32 chars | Page the device is showing. Authoritative when present. |
+| `page_index` | int or null | Which slot of the window list the device is on, 0-based. Read only when `page` is null or missing, and resolved to that slot's page id; an index past the last enabled page stores null. Optional; older firmware never sends it. |
 | `battery_mode` | bool or null | Whether the gauge is running on battery. Optional; older firmware never sends it. |
 | `usb_present` | bool or null | Whether USB power is plugged in. Optional; older firmware never sends it. |
 | `charge_state` | string or null | One of `charging`, `charged`, `pre_charge`, `not_charging`, `unknown`. Optional; older firmware never sends it. |
@@ -376,9 +378,19 @@ Every numeric field may be `null`: on a cold boot the sensors are not ready
 yet, and the firmware reports the hole rather than a made up reading. A hole is
 stored as `NULL` and becomes a gap in the chart, never an interpolated point.
 
-Responses: `202` with `{"accepted": true, "received_at": "<local ISO>"}`, or
-`400` with `{"accepted": false, "error": ..., "detail": [...]}` when the body is
-not JSON or fails validation.
+Responses: `202` with `{"accepted": true, "received_at": "<local ISO>",
+"page_count": 5, "pages": ["today", "agenda", "weather", "brief", "system"]}`,
+or `400` with `{"accepted": false, "error": ..., "detail": [...]}` when the body
+is not JSON or fails validation.
+
+`page_count` is how many pages are enabled right now and `pages` is their ids
+in window-list order; `alert` is never in the list. The device holds no page
+list of its own: `firmware/e1002.yaml` parses these two fields out of every
+telemetry response into restorable globals and builds its `/display/{n}.png`
+URLs from them, so enabling, disabling or reordering a module on `/settings`
+reaches the panel on its next post, with no reflash. Until a session has had
+one response the device knows its index but not the id, which is why `page`
+may be null and `page_index` is there to resolve it.
 
 ### Reading it back
 
@@ -391,7 +403,10 @@ Both answer `503` before the hub is set up, and need the bearer token, the
 device key, or a `/login` session cookie once it is.
 
 `GET /api/device/telemetry` returns the newest sample, its `age_seconds` and a
-summary (`sample_count`, `oldest`, `newest`, `retention_days`).
+summary (`sample_count`, `oldest`, `newest`, `retention_days`). The stored
+sample's `page` is always a page id, never an index: `page_index` is a request
+field the hub resolves on the way in and no column holds it, so it is not part
+of what comes back.
 `GET /api/device/history?hours=24` returns the samples in that window, folded
 into at most 300 evenly sized means (`downsampled` says whether that happened).
 `hours` must be greater than 0 and at most 8760.

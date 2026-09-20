@@ -90,6 +90,7 @@
   <h2>{{ form.title }}</h2>
   {% if form.saved %}<div class="notice">Saved.</div>{% endif %}
   {% if form.error %}<div class="error">{{ form.error }}</div>{% endif %}
+  {% for warning in form.warnings %}<div class="warning">{{ warning }}</div>{% endfor %}
   {% if form.test_status %}
   <div class="{% if form.test_error %}error{% else %}notice{% endif %}">
     Test: {{ form.test_status }}{% if form.test_error %} - {{ form.test_error }}{% endif %}
