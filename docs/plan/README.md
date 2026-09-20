@@ -7,7 +7,7 @@ current so a reader can tell what is built and what is not.
 | Plan | Status |
 | --- | --- |
 | [2026-09-19 SQLite settings, page modules, HA dashboard, firmware provisioning](2026-09-19-settings-modules-provisioning.md) | done |
-| [2026-09-20 Owner feedback round](2026-09-20-owner-feedback-round.md) | in progress |
+| [2026-09-20 Owner feedback round](2026-09-20-owner-feedback-round.md) | done |
 
 ## Writing one
 

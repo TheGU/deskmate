@@ -63,4 +63,4 @@ Sequencing: R.1, R.2 and F.2 in parallel worktrees; R.3 after R.1; R.4 last.
 | R.2 | done | obsidian source, adapter, tests, /vault mount and OBSIDIAN_VAULT_PATH removed; a stored or legacy obsidian source upgrades to push with a warning; PROPOSAL.md kept as the historical brief |
 | R.3 | done | year line; HeaderSpec with <id>_header.html partials; general.header_widget default plus a per-page override in the Modules section; widgets for weather, agenda (next event), system, ai_usage and the hello example; gate refrozen; 806 tests |
 | F.2 | done | wake hours may name any of the 24 hours (the owner wakes hourly 06 to 18); refresh_minutes, telemetry_minutes, wake_hours in the device section and the telemetry response; firmware restorable globals with a 24-bit hour mask, poller restart, independent clamps; compiled on ESPHome 2026.8.2, not flashed; 775 tests |
-| R.4 | planned | |
+| R.4 | done | docs/images/<page>.png from render-all.py, linked from README; senior review of the round: six findings fixed (wake_hours max_length, core-side widget clamp, e2e forms, hidden-cell save, forms docstring, README telemetry row); e2e 76 checks ok; 810 tests |
