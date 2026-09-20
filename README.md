@@ -6,6 +6,17 @@ reference firmware, built for the Seeed Studio reTerminal E1002 (ESP32-S3).
 Other display sizes are not supported today: every page template is laid
 out in fixed pixel budgets (see DESIGN.md).
 
+## Screenshots
+
+| | |
+| --- | --- |
+| ![Today page](docs/images/today.png) Today | ![Agenda page](docs/images/agenda.png) Agenda |
+| ![Weather page](docs/images/weather.png) Weather | ![Brief page](docs/images/brief.png) Brief |
+| ![System page](docs/images/system.png) System | ![Alert page](docs/images/alert.png) Alert |
+
+These are the demo fixture renders at the panel's 800x480 six-ink output;
+open `/preview` on a running hub for a live view.
+
 All the logic lives in a small server called **dashboard-hub**: it fetches
 calendar, weather and Home Assistant state itself, accepts AI quota, an
 AI-written brief and open tasks pushed over HTTP by a remote agent (see
@@ -27,7 +38,9 @@ setting, and backup, restore and rotate are a web page (`/setup`,
 database (identity, settings, pushed datasets, telemetry). Every panel page
 is a module: the settings page's Modules section enables, disables and
 orders them, and a third-party module can be dropped in without touching
-the hub's own code (see docs/MODULES.md). The built-in modules serve the
+the hub's own code (see docs/MODULES.md). The General section also picks the
+header widget shown in every page's header (weather by default), and the
+Modules section can override it per page. The built-in modules serve the
 Today, Agenda, Weather, Brief and System pages plus alerts, each pulling
 from its configured source or, honestly, reporting unavailable; an optional
 Home Assistant dashboard module screenshots a Lovelace view straight to the
@@ -35,7 +48,9 @@ panel instead (off by default, see docs/HA-DASHBOARD.md). Firmware
 provisioning - Wi-Fi, the hub URL and the device key set at runtime rather
 than baked into the firmware - is compiled and validated against ESPHome
 2026.8.2; the owner flashes it onto the E1002 themselves (see
-docs/FLASHING.md).
+docs/FLASHING.md). The Device section on `/settings` also sets the device's
+refresh schedule (refresh and telemetry intervals, wake hours), which the
+device picks up at its next telemetry check-in without a reflash.
 
 ## Quick start
 
