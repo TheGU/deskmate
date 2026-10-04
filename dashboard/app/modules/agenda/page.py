@@ -39,7 +39,7 @@ def agenda_flag(state: DashboardState, settings: "HubSettings") -> bool:
 AGENDA_LEFT_BODY_HEIGHT_PX: float = 372.0
 #: "TODAY" plus the long date, one baseline-aligned row.
 AGENDA_HEAD_HEIGHT_PX: float = 24.0
-AGENDA_HEAD_GAP_PX: float = 8.0
+AGENDA_HEAD_GAP_PX: float = 0.0
 
 #: The "rough answer" strip's own span: 06:00 to 22:00, not the full day.
 NEXT7_START_MIN: int = 6 * 60
@@ -75,18 +75,17 @@ def _event_end_minutes_same_day(event: Event) -> float:
 #: which packs the most rows into the fixed 372 px body, matching the owner's
 #: "until it fills the screen".
 AGENDA_LIST_ROW_HEIGHT_PX: float = 28.0
-#: How many list rows the body has room for below the head: 372 - (24 + 8)
-#: leaves 340 px, and 340 // 28 is 12 whole rows (336 px used, 4 px spare;
-#: never a thirteenth partial row).
+#: Keep a conservative row budget even though the shorter day dividers
+#: leave some spare room: a list of events alone must also fit.
 AGENDA_LIST_ROW_LIMIT: int = int(
     (AGENDA_LEFT_BODY_HEIGHT_PX - AGENDA_HEAD_HEIGHT_PX - AGENDA_HEAD_GAP_PX)
     // AGENDA_LIST_ROW_HEIGHT_PX
 )
 #: The time column's own fixed width: wide enough for "ALL DAY" (the widest
-#: label this column ever prints, measured at 65.9 px against the real
+#: label this column ever prints, measured at 80.4 px against the real
 #: render, this row's own weight 700 20 px Google Sans; a plain "HH:MM" is
 #: narrower at 43.2 px), with a couple of pixels of margin.
-AGENDA_LIST_TIME_PX: float = 68.0
+AGENDA_LIST_TIME_PX: float = 84.0
 #: Gap between the time column and the title, matching the agenda row's own
 #: convention on Today's left column (`.agenda-row` in today.html).
 AGENDA_LIST_GAP_PX: float = 12.0
@@ -171,31 +170,40 @@ def agenda_list_rows(
 
 
 def month_grid(state: DashboardState, colors: dict[str, str], today: date) -> dict[str, Any]:
-    """The current month as a Monday-first grid: blanks outside the month,
-    today inverted, a dot under any day with at least one event (black when
-    more than one calendar has an event that day)."""
+    """Show the whole month and at least the weeks before and after today.
+
+    Real neighboring dates keep week context at month boundaries. A date's
+    event border uses its calendar color, or black for multiple calendars.
+    """
     first = today.replace(day=1)
     next_first = (
         first.replace(year=first.year + 1, month=1)
         if first.month == 12
         else first.replace(month=first.month + 1)
     )
-    days_in_month = (next_first - first).days
+    last = next_first - timedelta(days=1)
+    current_monday = today - timedelta(days=today.weekday())
+    grid_start = min(first - timedelta(days=first.weekday()), current_monday - timedelta(days=7))
+    grid_end = max(last + timedelta(days=6 - last.weekday()), current_monday + timedelta(days=13))
 
-    day_colors: dict[int, set[str]] = {}
+    day_colors: dict[date, set[str]] = {}
     if state.block("calendar", CalendarBlock).usable:
         for event in state.block("calendar", CalendarBlock).items:
             day = event.start.date()
-            if day.year == today.year and day.month == today.month:
-                day_colors.setdefault(day.day, set()).add(event_color(event, colors))
+            day_colors.setdefault(day, set()).add(event_color(event, colors))
 
-    cells: list[dict[str, Any] | None] = [None] * first.weekday()  # Monday first
-    for day_num in range(1, days_in_month + 1):
-        present = day_colors.get(day_num, set())
-        dot = "black" if len(present) > 1 else (next(iter(present)) if present else None)
-        cells.append({"number": day_num, "is_today": day_num == today.day, "dot": dot})
-    while len(cells) % 7 != 0:
-        cells.append(None)
+    cells: list[dict[str, Any]] = []
+    for offset in range((grid_end - grid_start).days + 1):
+        day = grid_start + timedelta(days=offset)
+        present = day_colors.get(day, set())
+        color = "black" if len(present) > 1 else (next(iter(present)) if present else None)
+        cells.append({
+            "date": day,
+            "number": day.day,
+            "is_today": day == today,
+            "in_month": day.month == today.month and day.year == today.year,
+            "color": color,
+        })
 
     return {
         "name": today.strftime("%B").upper(),
@@ -207,27 +215,37 @@ def _next7_position(minutes: float) -> float:
     return max(0.0, min(100.0, (minutes - NEXT7_START_MIN) / NEXT7_SPAN_MIN * 100.0))
 
 
-def next_seven_days(state: DashboardState, today: date) -> list[dict[str, Any]]:
-    """The "rough answer" strip: one busy bar per day, 06:00-22:00, all-day
-    events filling the whole bar; the event count blank at zero."""
+def next_seven_days(
+    state: DashboardState, today: date, colors: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
+    """Keep all-day calendar marks beside the timed 06:00-22:00 tracks.
+
+    Separating them avoids an all-day reminder hiding the day's timed slots.
+    """
+    colors = colors or {}
     events = state.block("calendar", CalendarBlock).items if state.block("calendar", CalendarBlock).usable else []
     rows: list[dict[str, Any]] = []
     for offset in range(1, 8):
         day = today + timedelta(days=offset)
         day_events = [event for event in events if event.start.date() == day]
-        segments: list[dict[str, float]] = []
+        segments: list[dict[str, Any]] = []
+        all_day_colors: set[str] = set()
         for event in day_events:
             if event.all_day:
-                segments.append({"left": 0.0, "width": 100.0})
+                all_day_colors.add(event_color(event, colors))
                 continue
             start_pct = _next7_position(_minutes_since_midnight(event.start))
             end_pct = _next7_position(_event_end_minutes_same_day(event))
             if end_pct > start_pct:
-                segments.append({"left": round(start_pct, 2), "width": round(end_pct - start_pct, 2)})
+                segments.append({
+                    "left": round(start_pct, 2), "width": round(end_pct - start_pct, 2),
+                    "color": event_color(event, colors),
+                })
         rows.append(
             {
-                "label": f"{day.strftime('%a').upper()} {day.strftime('%d')}",
+                "label": f"{day.strftime('%a')[0].upper()} {day.strftime('%d')}",
                 "segments": segments,
+                "all_day_colors": sorted(all_day_colors),
                 "count": len(day_events) or None,
             }
         )
@@ -309,7 +327,11 @@ def agenda_context(state: DashboardState, settings: "HubSettings") -> dict[str, 
     context["agenda_list"] = agenda_list_rows(state, colors, today)
     context["calendar_note"] = block_note(state.block("calendar", CalendarBlock).status, "calendar")
     context["month"] = month_grid(state, colors, today)
-    context["next7"] = next_seven_days(state, today)
+    context["next7"] = next_seven_days(state, today, colors)
+    context["next7_ticks"] = [
+        {"label": f"{hour:02d}", "left": _next7_position(hour * 60)}
+        for hour in (8, 12, 18)
+    ]
     return context
 
 

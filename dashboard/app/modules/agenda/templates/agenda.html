@@ -3,43 +3,55 @@
 {% block style %}
 .ag-left, .ag-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ag-left  { flex: 0 0 456px; padding-right: 16px; }
-.ag-right { flex: 1 1 auto; padding-left: 16px; gap: 8px; }
+.ag-right { flex: 1 1 auto; padding-left: 16px; gap: 2px; }
+.ag-right > * { flex-shrink: 0; }
 
-.ag-head { display: flex; align-items: baseline; gap: 12px; height: 24px; margin-bottom: 8px; }
+.ag-head { display: flex; align-items: baseline; gap: 12px; height: 24px; flex: 0 0 24px; }
 .ag-date { font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
 
 /* The plain list: one fixed-height row per event (time in the calendar
    color, title in black) or, where a later day is reached, a divider row
    naming it. Row count and title clipping are both decided once in
-   app/view.py (agenda_list_rows); the template only draws what it is given. */
+   agenda/page.py (agenda_list_rows); the template only draws what it is given. */
 .ag-list { display: flex; flex-direction: column; }
 .ag-row {
   display: flex; align-items: center; gap: 12px;
   height: 28px; flex: 0 0 28px; font-size: 20px; font-weight: 500;
 }
-.ag-time { flex: 0 0 68px; font-weight: 700; }
+.ag-time { flex: 0 0 84px; font-weight: 700; white-space: nowrap; }
 .ag-title { flex: 1 1 auto; min-width: 0; }
 .ag-more { font-size: 20px; font-weight: 500; }
-.ag-divider { display: flex; align-items: center; gap: 8px; height: 28px; flex: 0 0 28px; }
+.ag-divider { display: flex; align-items: center; gap: 8px; height: 20px; flex: 0 0 20px; }
 .ag-divider-rule { flex: 1 1 auto; height: 2px; background: #000000; }
 
-/* Month grid: today inverted, a dot under any day with an event. */
+/* Event dates carry a calendar-colored outline; today keeps its inversion. */
 .month-weekdays { display: flex; }
 .month-weekdays span { width: 40px; text-align: center; font-size: 14px; font-weight: 700; text-transform: uppercase; }
 .month-row { display: flex; }
 .month-cell {
-  width: 40px; height: 22px; display: flex; flex-direction: column; align-items: center;
+  width: 40px; height: 20px; display: flex; justify-content: center; align-items: center;
   font-size: 16px; font-weight: 500; line-height: 16px; font-variant-numeric: tabular-nums;
 }
+.month-day { width: 32px; height: 20px; border: 2px solid transparent; display: flex; justify-content: center; align-items: center; }
+.month-event { border-color: currentColor; }
+.month-number { width: 22px; text-align: center; color: #000000; }
+.month-outside .month-number { font-size: 14px; font-weight: 400; }
 .month-today { background: #000000; color: #FFFFFF; }
-.month-dot { width: 6px; height: 6px; border-radius: 50%; }
 
-/* NEXT 7 DAYS: a fixed 06:00-22:00 busy bar per day, black is busy. */
+/* NEXT 7 DAYS: all-day marks have their own lane beside the timed tracks. */
 .next7-list { display: flex; flex-direction: column; }
-.next7-row { display: flex; align-items: center; gap: 8px; height: 24px; }
-.next7-label { flex: 0 0 64px; font-size: 16px; font-weight: 700; text-transform: uppercase; }
+.next7-row, .next7-axis { display: flex; align-items: center; gap: 4px; }
+.next7-row { height: 20px; }
+.next7-label { flex: 0 0 40px; font-size: 16px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.next7-all-day { flex: 0 0 24px; height: 14px; display: flex; gap: 1px; }
+.next7-all-day-mark { flex: 1 1 0; max-width: 14px; border: 1px solid #000000; }
 .next7-bar { position: relative; flex: 1 1 auto; height: 14px; border: 2px solid #000000; background: #FFFFFF; }
-.next7-seg { position: absolute; top: 0; bottom: 0; background: #000000; }
+.next7-seg { position: absolute; top: 0; bottom: 0; }
+.next7-tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #000000; }
+.next7-axis { height: 14px; font-size: 14px; font-weight: 700; line-height: 14px; }
+.next7-axis-track { position: relative; flex: 1 1 auto; height: 14px; margin: 0 2px; }
+.next7-axis-label { position: absolute; transform: translateX(-50%); }
+.next7-axis .next7-all-day { font-size: 14px; justify-content: center; }
 .next7-count { flex: 0 0 20px; font-size: 16px; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
 {% endblock %}
 
@@ -82,14 +94,11 @@
     {% for week in month.weeks %}
     <div class="month-row">
       {% for cell in week %}
-      {% if cell %}
-      <div class="month-cell{% if cell.is_today %} month-today{% endif %}">
-        <span class="num">{{ cell.number }}</span>
-        {% if cell.dot %}<span class="month-dot bar-{{ cell.dot }}"></span>{% endif %}
+      <div class="month-cell{% if not cell.in_month %} month-outside{% endif %}" data-date="{{ cell.date }}">
+        <span class="month-day{% if cell.color %} month-event t-{{ cell.color }}{% endif %}">
+          <span class="month-number num{% if cell.is_today %} month-today{% endif %}">{{ cell.number }}</span>
+        </span>
       </div>
-      {% else %}
-      <div class="month-cell"></div>
-      {% endif %}
       {% endfor %}
     </div>
     {% endfor %}
@@ -98,13 +107,31 @@
   <div class="rule-h"></div>
 
   <div class="label">NEXT 7 DAYS</div>
+  <div class="next7-axis">
+    <span class="next7-label"></span>
+    <span class="next7-all-day">AD</span>
+    <span class="next7-axis-track">
+      {% for tick in next7_ticks %}
+      <span class="next7-axis-label" style="left: {{ tick.left }}%;">{{ tick.label }}</span>
+      {% endfor %}
+    </span>
+    <span class="next7-count"></span>
+  </div>
   <div class="next7-list">
     {% for row in next7 %}
     <div class="next7-row">
       <span class="next7-label">{{ row.label }}</span>
+      <span class="next7-all-day">
+        {% for color in row.all_day_colors %}
+        <span class="next7-all-day-mark bar-{{ color }}"></span>
+        {% endfor %}
+      </span>
       <div class="next7-bar">
         {% for seg in row.segments %}
-        <div class="next7-seg" style="left: {{ seg.left }}%; width: {{ seg.width }}%;"></div>
+        <div class="next7-seg bar-{{ seg.color }}" style="left: {{ seg.left }}%; width: {{ seg.width }}%;"></div>
+        {% endfor %}
+        {% for tick in next7_ticks %}
+        <span class="next7-tick" style="left: {{ tick.left }}%;"></span>
         {% endfor %}
       </div>
       <span class="next7-count num">{{ row.count or '' }}</span>

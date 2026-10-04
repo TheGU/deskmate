@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import date, datetime, timedelta
 
+import pytest
 
 from app.settings import HubSettings
 from app.models import (
@@ -211,14 +213,15 @@ def test_month_grid_starts_monday_and_marks_today() -> None:
     grid = month_grid(state, {}, today)
     assert grid["name"] == "SEPTEMBER"
     first_week = grid["weeks"][0]
-    assert first_week[0] is None
-    assert first_week[1]["number"] == 1
+    assert first_week[0]["date"] == date(2026, 8, 24)
+    assert first_week[0]["in_month"] is False
+    assert grid["weeks"][1][1]["number"] == 1
     flat = [cell for week in grid["weeks"] for cell in week if cell]
     today_cells = [cell for cell in flat if cell["is_today"]]
     assert [cell["number"] for cell in today_cells] == [5]
 
 
-def test_month_grid_dots_use_calendar_color_and_black_for_multiple() -> None:
+def test_month_grid_borders_use_calendar_color_and_black_for_multiple() -> None:
     tz = zone("Asia/Bangkok")
     today = date(2026, 9, 5)
     events = CalendarBlock(
@@ -233,10 +236,10 @@ def test_month_grid_dots_use_calendar_color_and_black_for_multiple() -> None:
         generated_at=datetime(2026, 9, 5, 8, 0, tzinfo=tz), timezone="Asia/Bangkok", calendar=events
     )
     grid = month_grid(state, {"work": "blue", "personal": "green"}, today)
-    flat = {cell["number"]: cell for week in grid["weeks"] for cell in week if cell}
-    assert flat[10]["dot"] == "blue"
-    assert flat[12]["dot"] == "black"
-    assert flat[11]["dot"] is None
+    flat = {cell["number"]: cell for week in grid["weeks"] for cell in week if cell["in_month"]}
+    assert flat[10]["color"] == "blue"
+    assert flat[12]["color"] == "black"
+    assert flat[11]["color"] is None
 
 
 def test_next_seven_days_clamp_busy_bars_and_blank_count() -> None:
@@ -260,12 +263,67 @@ def test_next_seven_days_clamp_busy_bars_and_blank_count() -> None:
     rows = next_seven_days(state, today)
     assert len(rows) == 7
     tomorrow = rows[0]
-    assert tomorrow["segments"] == [{"left": 0.0, "width": 100.0}]
+    assert tomorrow["segments"] == [{"left": 0.0, "width": 100.0, "color": "black"}]
     assert tomorrow["count"] == 1
     # A day with nothing on it prints no count at all, not a zero.
     empty_day = rows[1]
     assert empty_day["segments"] == []
     assert empty_day["count"] is None
+
+
+@pytest.mark.parametrize("today", [
+    date(2026, 8, 1), date(2026, 5, 31), date(2027, 1, 1),
+    date(2026, 12, 31), date(2028, 2, 29), date(2026, 10, 3),
+])
+def test_month_grid_contains_whole_month_and_three_weeks_of_context(today: date) -> None:
+    state = make_state(generated_at=datetime.combine(today, datetime.min.time(), zone("Asia/Bangkok")))
+    grid = month_grid(state, {}, today)
+    days = [cell["date"] for week in grid["weeks"] for cell in week]
+    monday = today - timedelta(days=today.weekday())
+    assert days[0].weekday() == 0
+    assert days[-1].weekday() == 6
+    assert days[0] <= monday - timedelta(days=7)
+    assert days[-1] >= monday + timedelta(days=13)
+    assert all(right - left == timedelta(days=1) for left, right in zip(days, days[1:]))
+    assert [cell["number"] for week in grid["weeks"] for cell in week if cell["is_today"]] == [today.day]
+    assert {cell["date"].month for week in grid["weeks"] for cell in week if cell["in_month"]} == {today.month}
+    assert [day.day for day in days if day.year == today.year and day.month == today.month] == list(
+        range(1, monthrange(today.year, today.month)[1] + 1)
+    )
+    assert 4 <= len(grid["weeks"]) <= 7
+
+
+def test_adjacent_month_events_keep_their_color() -> None:
+    tz = zone("Asia/Bangkok")
+    state = make_state(
+        generated_at=datetime(2027, 1, 1, 8, tzinfo=tz),
+        calendar=CalendarBlock(status=AdapterStatus.OK, items=[
+            Event(id="previous", title="Review", calendar="work", start=datetime(2026, 12, 31, 9, tzinfo=tz)),
+        ]),
+    )
+    cells = [cell for week in month_grid(state, {"work": "red"}, date(2027, 1, 1))["weeks"] for cell in week]
+    previous = next(cell for cell in cells if cell["date"] == date(2026, 12, 31))
+    assert previous["in_month"] is False
+    assert previous["color"] == "red"
+
+
+def test_next_seven_days_separates_all_day_marks_from_colored_timed_slots() -> None:
+    tz = zone("Asia/Bangkok")
+    state = make_state(
+        generated_at=datetime(2026, 10, 3, 8, tzinfo=tz),
+        calendar=CalendarBlock(status=AdapterStatus.OK, items=[
+            Event(id="all-day", title="Offsite", calendar="work", all_day=True,
+                  start=datetime(2026, 10, 4, tzinfo=tz), end=datetime(2026, 10, 5, tzinfo=tz)),
+            Event(id="timed", title="Review", calendar="personal",
+                  start=datetime(2026, 10, 4, 8, tzinfo=tz), end=datetime(2026, 10, 4, 12, tzinfo=tz)),
+        ]),
+    )
+    rows = next_seven_days(state, date(2026, 10, 3), {"work": "blue", "personal": "red"})
+    assert rows[0] == {
+        "label": "S 04", "count": 2, "all_day_colors": ["blue"],
+        "segments": [{"left": 12.5, "width": 25.0, "color": "red"}],
+    }
+    assert rows[1]["all_day_colors"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -278,3 +336,63 @@ def test_agenda_has_no_element_overflowing_the_800x480_box(
 ) -> None:
     overflow = run(renderer.probe("agenda", _widest_header_state(state), _VIEWPORT_OVERFLOW))
     assert overflow == [], overflow
+
+
+def _agenda_preview_state(state: DashboardState, today: date) -> DashboardState:
+    """Dense bilingual events exercise both month-edge layout and slot colors."""
+    reference = datetime.combine(today, datetime.min.time(), zone("Asia/Bangkok")) + timedelta(hours=8)
+    blocks = {name: block.model_copy(update={"updated_at": reference}) for name, block in state.blocks.items()}
+    events = []
+    for offset in range(-7, 22):
+        day = reference.replace(hour=0) + timedelta(days=offset)
+        events.append(Event(
+            id=f"timed-{offset}", title="Project review and weekly planning", calendar="work",
+            start=day + timedelta(hours=9), end=day + timedelta(hours=10),
+        ))
+        if offset % 2 == 0:
+            events.append(Event(
+                id=f"evening-{offset}", title="ประชุมทีมและติดตามงานประจำสัปดาห์", calendar="personal",
+                start=day + timedelta(hours=18), end=day + timedelta(hours=20),
+            ))
+        if offset % 3 == 1:
+            events.append(Event(
+                id=f"all-day-{offset}", title="นัดหมายแพทย์และตรวจสุขภาพ", calendar="personal",
+                start=day, end=day + timedelta(days=1), all_day=True,
+            ))
+    blocks["calendar"] = CalendarBlock(status=AdapterStatus.OK, updated_at=reference, items=events)
+    return state.model_copy(update={"generated_at": reference, "blocks": blocks})
+
+
+@pytest.mark.parametrize("today", [date(2026, 8, 1), date(2026, 5, 31), date(2026, 10, 3)])
+def test_agenda_month_edges_and_all_day_labels_fit(
+    renderer: Renderer, state: DashboardState, today: date,
+) -> None:
+    dense = _agenda_preview_state(_widest_header_state(state), today)
+    assert run(renderer.probe("agenda", dense, _VIEWPORT_OVERFLOW)) == []
+    measurements = run(renderer.probe("agenda", dense, """() => {
+      const body = document.querySelector('.body').getBoundingClientRect();
+      const right = document.querySelector('.ag-right');
+      const times = [...document.querySelectorAll('.ag-time')].filter(e => e.textContent.trim() === 'ALL DAY');
+      return {
+        timeBoxes: times.map(e => ({width:e.clientWidth, contentWidth:e.scrollWidth,
+          height:e.clientHeight, lineCount:(() => {const r=document.createRange();r.selectNodeContents(e);return r.getClientRects().length;})()})),
+        rightBottom: Math.max(...[...right.children].map(e => e.getBoundingClientRect().bottom)),
+        bodyBottom: body.bottom,
+        headMargin:getComputedStyle(document.querySelector('.ag-head')).marginBottom,
+        dividerHeight:document.querySelector('.ag-divider').getBoundingClientRect().height,
+        tickCount:document.querySelectorAll('.next7-tick').length,
+        tickLabels:[...document.querySelectorAll('.next7-axis-label')].map(e=>e.textContent.trim()),
+        allDayMarks:document.querySelectorAll('.next7-all-day-mark').length,
+        segmentColors:[...document.querySelectorAll('.next7-seg')].map(e=>getComputedStyle(e).backgroundColor)
+      };
+    }"""))
+    assert measurements["timeBoxes"]
+    assert all(box["contentWidth"] <= box["width"] and box["lineCount"] == 1 for box in measurements["timeBoxes"])
+    assert measurements["rightBottom"] <= measurements["bodyBottom"]
+    assert measurements["headMargin"] == "0px"
+    assert measurements["dividerHeight"] == 20
+    assert measurements["tickCount"] == 21
+    assert measurements["tickLabels"] == ["08", "12", "18"]
+    assert measurements["allDayMarks"] > 0
+    assert "rgb(0, 0, 255)" in measurements["segmentColors"]
+    assert "rgb(0, 255, 0)" in measurements["segmentColors"]

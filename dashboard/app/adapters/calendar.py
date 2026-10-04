@@ -126,7 +126,14 @@ class IcsCalendarAdapter:
                     calendar_name=self._calendar.feed_name(index),
                 )
             )
-        events.sort(key=lambda item: (item.start, item.title))
+        # One meeting may appear in several feeds with different UIDs. Match
+        # its normalized time and exact title, keeping the first feed's label
+        # and colour rather than making each page deduplicate independently.
+        unique: dict[tuple[str, datetime, datetime | None, bool], Event] = {}
+        for event in events:
+            key = (event.title, event.start, event.end, event.all_day)
+            unique.setdefault(key, event)
+        events = sorted(unique.values(), key=lambda item: (item.start, item.title))
         log(logger, logging.INFO, "ics parsed", sources=len(sources), events=len(events))
         return events
 
@@ -178,7 +185,11 @@ def parse_ics(
     window_end: datetime,
     calendar_name: str | None = None,
 ) -> list[Event]:
-    """Parse one ICS document into normalized events inside the window."""
+    """Parse one ICS document into normalized events inside the window.
+
+    Invitations do not require an RSVP: tentative status and an attendee's
+    NEEDS-ACTION response still describe time the calendar should show.
+    """
     document = ICalendar.from_ical(text)
     label = hashlib.sha256(reference.encode("utf-8")).hexdigest()[:8]
     events: list[Event] = []
