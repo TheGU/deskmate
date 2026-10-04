@@ -1,0 +1,54 @@
+name: Publish development image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+jobs:
+  ci:
+    if: >-
+      gitea.event_name == 'push' ||
+      (contains(gitea.event.pull_request.labels.*.name, 'run-ci') &&
+      ((gitea.event.action != 'labeled' && gitea.event.action != 'label_updated') ||
+      gitea.event.label.name == 'run-ci' ||
+      contains(gitea.event.changes.added_labels.*.name, 'run-ci')) &&
+      gitea.event.pull_request.head.repo.full_name == gitea.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout selected source
+        uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          github-server-url: ${{ gitea.server_url }}
+          token: ${{ secrets.GITEA_TOKEN }}
+          persist-credentials: false
+      - name: Verify release image
+        env:
+          CI_REVISION: ${{ gitea.sha }}
+        run: sh scripts/check-release.sh
+  publish:
+    if: gitea.event_name == 'push' && startsWith(gitea.ref, 'refs/tags/v')
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tagged source
+        uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          github-server-url: ${{ gitea.server_url }}
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITEA_TOKEN }}
+          persist-credentials: false
+      - name: Build and publish to Gitea registry
+        env:
+          FORGE_SERVER_URL: ${{ gitea.server_url }}
+          FORGE_REPOSITORY: ${{ gitea.repository }}
+          RELEASE_TAG: ${{ gitea.ref_name }}
+          RELEASE_REVISION: ${{ gitea.sha }}
+          CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY }}
+          CONTAINER_IMAGE: ${{ vars.CONTAINER_IMAGE }}
+          REGISTRY_USERNAME: ${{ vars.DOCKER_REGISTRY_USERNAME || gitea.repository_owner }}
+          REGISTRY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+        run: python3 scripts/publish-image.py

@@ -28,6 +28,9 @@ homelab's own DNS actually serves, never a `.local` name.
 
 ## Compose
 
+To publish or run a versioned registry image from Gitea or GHCR, see
+[RELEASE.md](RELEASE.md). The Compose default below continues to build locally.
+
 The repository root ships `docker-compose.yml` and `.env.example`. The
 compose file uses the `env_file: [{path, required}]` form, which needs
 Docker Compose 2.24 or newer (`docker compose version`). On an older Compose,

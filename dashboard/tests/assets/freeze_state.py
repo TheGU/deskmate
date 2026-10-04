@@ -16,9 +16,15 @@ This writes two files next to this script:
     to one fixed moment, so nothing in the frozen state depends on when this
     script happens to run.
 
-``frozen-hashes.json``
+``frozen-hashes.json`` (Windows) or ``frozen-hashes-linux.json`` (Linux)
     Maps each page in ``app.renderer.render.PAGES`` to the sha256 of its
     rendered PNG bytes, rendered from the frozen state above.
+
+The PNG gate selects this platform's reviewed baseline: text rasterization
+differs between Windows and Linux even with identical Chromium and fonts.
+Pass ``--hashes-only`` to render the already committed shared frozen state
+and update only this platform's hashes. Use it on both platforms after an
+intentional render change; it never refreshes adapters or changes the state.
 
 ``dashboard/tests/test_render_gate.py`` re-renders every page from
 ``frozen-state.json`` and asserts its hash still matches ``frozen-hashes.json``.
@@ -97,11 +103,10 @@ from app.modules.weather.settings import WeatherSettings  # noqa: E402
 from app.renderer.render import PAGES, Renderer  # noqa: E402
 from app.settings import HubSettings  # noqa: E402
 from app.state import StateService  # noqa: E402
-from tests.test_render_gate import load_frozen_state  # noqa: E402
+from tests.test_render_gate import HASHES_PATH, load_frozen_state  # noqa: E402
 
 ASSETS_DIR = Path(__file__).resolve().parent
 STATE_PATH = ASSETS_DIR / "frozen-state.json"
-HASHES_PATH = ASSETS_DIR / "frozen-hashes.json"
 
 #: The one moment every block's ``updated_at`` and the state's ``generated_at``
 #: are pinned to. Chosen as a plain, readable Asia/Bangkok morning; the exact
@@ -243,7 +248,7 @@ async def _check() -> int:
             )
             ok = False
         else:
-            print(f"{page}: matches frozen-hashes.json")
+            print(f"{page}: matches {HASHES_PATH.name}")
 
     if ok:
         print("freeze_state.py --check: still builds a matching state and PNGs")
@@ -257,21 +262,44 @@ async def _write() -> int:
 
     STATE_PATH.write_text(payload, encoding="utf-8")
     HASHES_PATH.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(
+        f"Updated shared state and {HASHES_PATH.name}; review and regenerate "
+        "the other platform's hashes with --hashes-only too.", file=sys.stderr,
+    )
     for page in PAGES:
         print(f"{page}: {hashes[page]}")
     return 0
 
 
+async def _write_hashes_only() -> int:
+    """Review another platform without replacing the shared frozen state."""
+    state = load_frozen_state(STATE_PATH.read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory() as tmp:
+        hashes = await _render_hashes(_env(Path(tmp)), _hub_settings(), state)
+    HASHES_PATH.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Updated {HASHES_PATH.name} from the committed frozen-state.json")
+    for page, digest in hashes.items():
+        print(f"{page}: {digest}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--check",
         action="store_true",
         help="render and compare against the committed frozen assets instead of writing them",
     )
+    mode.add_argument(
+        "--hashes-only", action="store_true",
+        help="update only this platform's hashes from the committed frozen state",
+    )
     args = parser.parse_args()
     if args.check:
         return asyncio.run(_check())
+    if args.hashes_only:
+        return asyncio.run(_write_hashes_only())
     return asyncio.run(_write())
 
 

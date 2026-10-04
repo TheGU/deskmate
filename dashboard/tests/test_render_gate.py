@@ -5,7 +5,7 @@ must stay byte-identical across the settings/modules/provisioning refactors
 The frozen state and its expected hashes are produced by
 ``tests/assets/freeze_state.py``. If a page's hash changes here and the change
 to the rendered pixels is intended, rerun that script to refresh
-``tests/assets/frozen-hashes.json`` (and, if the fixture data or the state
+the platform's ``tests/assets/frozen-hashes*.json`` (and, if fixture data or state
 shape changed, ``tests/assets/frozen-state.json`` too); if it was not
 intended, this failure names the regression to fix.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,21 @@ from tests.conftest import run
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 STATE_PATH = ASSETS_DIR / "frozen-state.json"
-HASHES_PATH = ASSETS_DIR / "frozen-hashes.json"
+
+
+def hashes_path(platform: str) -> Path:
+    """Keep exact gates for each reviewed Chromium rasterization platform.
+
+    Matching browser and bundled fonts still rasterize text differently on
+    Windows and Linux. Never silently fall back to another platform's gate.
+    """
+    filenames = {"win32": "frozen-hashes.json", "linux": "frozen-hashes-linux.json"}
+    if platform not in filenames:
+        raise ValueError(f"no reviewed render hashes for platform {platform!r}")
+    return ASSETS_DIR / filenames[platform]
+
+
+HASHES_PATH = hashes_path(sys.platform)
 
 #: The seven typed block fields ``DashboardState`` carried at the top level
 #: until 2.1a turned them into the ``blocks`` mapping. The committed frozen
@@ -84,6 +99,18 @@ def frozen_hashes() -> dict[str, str]:
     return json.loads(HASHES_PATH.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("platform,filename", [
+    ("win32", "frozen-hashes.json"), ("linux", "frozen-hashes-linux.json"),
+])
+def test_hashes_are_selected_for_the_actual_rendering_platform(platform: str, filename: str) -> None:
+    assert hashes_path(platform) == ASSETS_DIR / filename
+
+
+def test_unknown_rendering_platform_has_no_fallback_baseline() -> None:
+    with pytest.raises(ValueError, match="no reviewed render hashes"):
+        hashes_path("unreviewed")
+
+
 @pytest.mark.parametrize("page", PAGES)
 def test_page_png_matches_frozen_hash(
     renderer: Renderer,
@@ -97,6 +124,31 @@ def test_page_png_matches_frozen_hash(
     assert digest == expected, (
         f"{page!r} page PNG no longer matches its frozen hash "
         f"(got {digest}, expected {expected}). Rerun "
-        "tests/assets/freeze_state.py only if this change to the pixels is "
+        "tests/assets/freeze_state.py --hashes-only only if this pixel change is "
         "intended; otherwise this is a rendering regression."
     )
+
+
+def test_hashes_only_regeneration_preserves_shared_state_and_other_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.assets import freeze_state as freezer
+
+    payload = STATE_PATH.read_bytes()
+    shared_state = tmp_path / "frozen-state.json"
+    shared_state.write_bytes(payload)
+    other_hashes = tmp_path / "other-platform.json"
+    other_hashes.write_text("other platform must remain unchanged", encoding="utf-8")
+    target = tmp_path / "this-platform.json"
+    monkeypatch.setattr(freezer, "STATE_PATH", shared_state)
+    monkeypatch.setattr(freezer, "HASHES_PATH", target)
+
+    async def render(env: object, settings: object, state: DashboardState) -> dict[str, str]:
+        assert state == load_frozen_state(payload.decode("utf-8"))
+        return {page: "reviewed digest" for page in PAGES}
+
+    monkeypatch.setattr(freezer, "_render_hashes", render)
+    assert run(freezer._write_hashes_only()) == 0
+    assert shared_state.read_bytes() == payload
+    assert other_hashes.read_text(encoding="utf-8") == "other platform must remain unchanged"
+    assert json.loads(target.read_text(encoding="utf-8")) == {page: "reviewed digest" for page in PAGES}

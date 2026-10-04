@@ -62,7 +62,10 @@ uv run ruff check .
 `dashboard/tests/test_render_gate.py` is a PNG sha256 gate: it renders the
 six panel pages from a frozen fixture state
 (`dashboard/tests/assets/frozen-state.json`) and asserts each PNG's hash
-still matches `dashboard/tests/assets/frozen-hashes.json`. A failure here
+still matches the reviewed platform baseline: `frozen-hashes.json` on Windows
+or `frozen-hashes-linux.json` on Linux. Chromium text rasterization differs
+between these platforms even with identical browser and bundled font versions.
+A failure here
 means a change to the rendering pipeline changed pixels. Only regenerate
 the frozen files with `uv run python tests/assets/freeze_state.py` when
 that pixel change is intentional; run the same script with `--check`
@@ -70,6 +73,25 @@ first to confirm it still reproduces the currently committed hashes
 without writing anything. Any intentional pixel change must be reviewed
 against the frozen renders (`scripts/render-all.py` output is useful for
 that), not just against the gate turning green.
+
+For an intentional render change with unchanged fixture data, use
+`uv run python tests/assets/freeze_state.py --hashes-only` on both supported
+platforms after inspecting their renders. This renders the committed shared
+state and updates only that platform's hashes. The default command replaces
+the shared state too; if that change is intended, regenerate the other
+platform's hashes from that same state before proposing it.
+
+To regenerate the Linux baseline from Windows, build the runtime image and
+run the helper in Linux from the repository root (PowerShell):
+
+```powershell
+docker build -f dashboard/Dockerfile -t deskmate/render-gate:check .
+docker run --rm --user 0 --volume "${PWD}:/workspace" --workdir /workspace/dashboard deskmate/render-gate:check sh -eu -c 'uv sync --frozen --group dev --no-install-project; uv run python tests/assets/freeze_state.py --hashes-only'
+```
+
+Review both platforms' hash diffs. Preserve `frozen-state.json` unless fixture
+data actually changed. Unsupported platforms fail explicitly instead of using
+another platform's baseline.
 
 From the repository root, check plain-ASCII punctuation:
 
