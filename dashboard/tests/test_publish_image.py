@@ -61,7 +61,10 @@ def test_invalid_input_fails_before_docker(name: str, value: str, monkeypatch: p
     assert publisher.main() == 1
 
 
-def test_publish_builds_labeled_image_then_logs_in_and_pushes(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("registry", ["gitea.example.com", "ghcr.io"])
+def test_publish_builds_labeled_image_then_logs_in_and_pushes(
+    registry: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = []
     config_paths = []
 
@@ -76,9 +79,9 @@ def test_publish_builds_labeled_image_then_logs_in_and_pushes(monkeypatch: pytes
             (config / "config.json").write_text("test authentication", encoding="utf-8")
 
     monkeypatch.setattr(publisher.subprocess, "run", docker)
-    publication = publisher.configuration(_environment())
+    publication = publisher.configuration({**_environment(), "CONTAINER_REGISTRY": registry})
     publisher.publish(publication)
-    build, login, push = calls
+    build, login, push, tag, latest_push = calls
     assert build[0][:6] == ["docker", "build", "--platform", "linux/amd64", "--file", "dashboard/Dockerfile"]
     assert "org.opencontainers.image.version=v1.2.3-rc.1" in build[0]
     assert "org.opencontainers.image.revision=" + "a" * 40 in build[0]
@@ -88,11 +91,16 @@ def test_publish_builds_labeled_image_then_logs_in_and_pushes(monkeypatch: pytes
     assert login[1]["input"] == "test-token\n"
     assert all("test-token" not in argument for arguments, _ in calls for argument in arguments)
     assert push[0] == ["docker", "push", publication.reference]
+    latest = f"{registry}/owner/deskmate:latest"
+    assert tag[0] == ["docker", "tag", publication.reference, latest]
+    assert latest_push[0] == ["docker", "push", latest]
     assert all(not path.exists() for path in config_paths)
 
 
-@pytest.mark.parametrize("failure", ["build", "login", "push"])
-def test_docker_failure_stops_pipeline_and_removes_auth(failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("failure_index", range(5))
+def test_docker_failure_stops_pipeline_and_removes_auth(
+    failure_index: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = []
     config_paths = []
 
@@ -101,11 +109,11 @@ def test_docker_failure_stops_pipeline_and_removes_auth(failure: str, monkeypatc
         config = Path(options["env"]["DOCKER_CONFIG"])
         config_paths.append(config)
         (config / "config.json").write_text("test authentication", encoding="utf-8")
-        if arguments[1] == failure:
+        if len(calls) == failure_index + 1:
             raise subprocess.CalledProcessError(1, arguments)
 
     monkeypatch.setattr(publisher.subprocess, "run", docker)
     with pytest.raises(subprocess.CalledProcessError):
         publisher.publish(publisher.configuration(_environment()))
-    assert calls == ["build", "login", "push"][:["build", "login", "push"].index(failure) + 1]
+    assert calls == ["build", "login", "push", "tag", "push"][:failure_index + 1]
     assert all(not path.exists() for path in config_paths)

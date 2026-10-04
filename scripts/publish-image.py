@@ -86,6 +86,10 @@ def publish(publication: Publication) -> None:
                "--password-stdin", password=publication.password + "\n")
         docker("push", publication.reference)
         print(f"Published {publication.reference}")
+        latest = f"{publication.registry}/{publication.image}:latest"
+        docker("tag", publication.reference, latest)
+        docker("push", latest)
+        print(f"Published {latest}")
 
 
 def main() -> int:

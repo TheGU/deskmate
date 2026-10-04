@@ -2,7 +2,7 @@
 
 Push a `v*` tag to Gitea for a local development image or to GitHub for the
 public release image. Each workflow builds `dashboard/Dockerfile` from the
-repository root and pushes one exact version tag for `linux/amd64`.
+repository root and pushes the exact version tag and `latest` for `linux/amd64`.
 The image carries OCI version, commit revision and source labels.
 
 CI runs before publishing a tag. For pull requests, add the `run-ci` label
@@ -17,7 +17,14 @@ a disposable Linux container, and check tracked files' ASCII punctuation.
 | `origin` (Gitea) | `gitea.local/admin/deskmate:v1.2.3` | `.gitea/workflows/release-image.yml` |
 | `github` | `ghcr.io/thegu/deskmate:v1.2.3` | `.github/workflows/release-image.yml` |
 
-No `latest` tag is published. A tag must start with lowercase `v`, use only
+The version image is pushed first, then that same image is tagged and pushed
+as `latest`. Every successful `v*` publication updates `latest`, including
+development and prerelease tags. The Gitea development server can pull
+`gitea.local/admin/deskmate:latest`; public releases use the separate GHCR
+`latest`. If updating `latest` fails, the version image remains published and
+the workflow fails; rerun it to complete publication.
+
+A tag must start with lowercase `v`, use only
 letters, digits, underscores, dots or hyphens, and contain 1 to 128 characters.
 Use distinct development tags such as `v1.2.3-dev.1`. Gitea treats container
 tags case-insensitively, so never create tags differing only in letter case.
